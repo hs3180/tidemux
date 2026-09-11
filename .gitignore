@@ -24,3 +24,5 @@
 *.key
 *.pem
 /coverage*
+
+__pycache__/

@@ -1,0 +1,18 @@
+{
+  "listen_addr": "127.0.0.1:8787",
+  "protocol": "anthropic",
+  "base_url": "https://api.anthropic.com/v1",
+  "model": "replace-with-your-model-id",
+  "upstream_id": "anthropic-primary",
+  "upstream_keychain": {
+    "service": "com.tidemux.anthropic",
+    "account": "default"
+  },
+  "access_token_keychain": {
+    "service": "com.tidemux.gateway",
+    "account": "default"
+  },
+  "max_in_flight": 1,
+  "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db",
+  "anthropic_version": "2023-06-01"
+}

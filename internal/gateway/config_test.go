@@ -11,48 +11,36 @@ import (
 
 type testSecrets map[string]string
 
-func (s testSecrets) Lookup(_ context.Context, ref KeychainReference) (string, error) {
-	return s[ref.Service+"/"+ref.Account], nil
+func (s testSecrets) Lookup(_ context.Context, r KeychainReference) (string, error) {
+	return s[r.Service], nil
 }
-
-func TestLoadConfigRejectsLegacyPlaintextSecret(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"listen_addr":"127.0.0.1:8787","deepseek_api_key":"do-not-allow"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("plaintext key was not rejected: %v", err)
-	}
-}
-
-func TestConfigUsesOnlyKeychainReferencesOnDisk(t *testing.T) {
-	config := Config{
-		ListenAddr:          "127.0.0.1:8080",
-		DeepSeekKeychain:    KeychainReference{Service: "com.example.tidemux.deepseek", Account: "default"},
-		AccessTokenKeychain: KeychainReference{Service: "com.example.tidemux.gateway", Account: "default"},
-		MaxInFlight:         1, LedgerPath: "ledger.db",
-	}
-	resolved, err := config.ResolveCredentials(context.Background(), testSecrets{
-		"com.example.tidemux.deepseek/default": "provider-secret",
-		"com.example.tidemux.gateway/default":  "gateway-secret",
-	})
+func TestConfigCredentialsAndValidation(t *testing.T) {
+	c := testConfig("l.db", "https://example.com/prefix/v1")
+	resolved, err := c.ResolveCredentials(context.Background(), testSecrets{"test.provider": "provider-private", "test.gateway": "local-private"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.DeepSeekAPIKey != "provider-secret" || resolved.AccessToken != "gateway-secret" {
-		t.Fatal("credentials not resolved")
+	data, _ := json.Marshal(resolved)
+	if strings.Contains(string(data), "private") {
+		t.Fatal("serialized secret")
 	}
-	encoded := string(mustJSON(t, resolved))
-	if strings.Contains(encoded, "provider-secret") || strings.Contains(encoded, "gateway-secret") || strings.Contains(encoded, "deepseek_api_key") {
-		t.Fatalf("secret persisted in JSON: %s", encoded)
+	for _, url := range []string{"http://example.com/v1", "https://user:pass@example.com/v1", "https://example.com/v1?key=x", "file:///tmp/x"} {
+		bad := c
+		bad.BaseURL = url
+		if bad.Validate() == nil {
+			t.Errorf("accepted %s", url)
+		}
 	}
-}
-
-func mustJSON(t *testing.T, value Config) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
+	bad := c
+	bad.ListenAddr = "0.0.0.0:8787"
+	if bad.Validate() == nil {
+		t.Fatal("non-loopback accepted")
 	}
-	return data
+	for _, body := range []string{`{"deepseek_api_key":"secret"}`, `{} {}`, `{"protocol":"openai","protocol":"anthropic"}`} {
+		p := filepath.Join(t.TempDir(), "config.json")
+		os.WriteFile(p, []byte(body), 0600)
+		if _, err := LoadConfig(p); err == nil {
+			t.Fatal("bad config accepted")
+		}
+	}
 }

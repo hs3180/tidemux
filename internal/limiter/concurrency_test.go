@@ -52,3 +52,19 @@ func TestConcurrencyGateHonorsCancellation(t *testing.T) {
 	}
 	gate.Release()
 }
+
+func TestAlreadyCanceledNeverAdmitted(t *testing.T) {
+	gate, _ := NewConcurrencyGate(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 100; i++ {
+		if _, err := gate.Acquire(ctx); err == nil {
+			gate.Release()
+			t.Fatal("canceled context admitted")
+		}
+	}
+	if _, err := gate.Acquire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	gate.Release()
+}

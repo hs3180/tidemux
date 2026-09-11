@@ -1,0 +1,29 @@
+name: Candidate verification
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.1'
+          cache: true
+      - name: Format, test, vet and race
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          CGO_ENABLED=0 go test ./...
+          CGO_ENABLED=0 go vet ./...
+          go test -race ./...
+      - name: Build candidate
+        run: python3 scripts/release.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-darwin-arm64
+          path: dist/
+          if-no-files-found: error

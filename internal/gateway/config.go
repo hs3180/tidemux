@@ -1,18 +1,17 @@
-// Package gateway implements TideMux's loopback-only OpenAI-compatible edge.
 package gateway
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
+	"errors"
 	"net"
+	"net/url"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/hs3180/tidemux/internal/adapter"
 )
 
-// KeychainReference identifies a secret stored in the user's macOS Keychain.
-// It intentionally contains no secret value and is safe to put in config.
 type KeychainReference struct {
 	Service string `json:"service"`
 	Account string `json:"account"`
@@ -20,93 +19,113 @@ type KeychainReference struct {
 
 func (r KeychainReference) Validate(name string) error {
 	if strings.TrimSpace(r.Service) == "" || strings.TrimSpace(r.Account) == "" {
-		return fmt.Errorf("%s must include keychain service and account", name)
+		return errors.New(name + " requires service and account")
 	}
 	return nil
 }
 
-// SecretLookup is the narrow runtime boundary for retrieving secrets. A
-// lookup implementation must not log secret values.
 type SecretLookup interface {
 	Lookup(context.Context, KeychainReference) (string, error)
 }
-
-// Config is deliberately explicit and local. Its JSON form stores only
-// Keychain references; resolved credentials are runtime-only fields.
 type Config struct {
-	ListenAddr          string            `json:"listen_addr"`
-	DeepSeekKeychain    KeychainReference `json:"deepseek_keychain"`
-	AccessTokenKeychain KeychainReference `json:"access_token_keychain"`
-	DeepSeekBaseURL     string            `json:"deepseek_base_url,omitempty"`
-	MaxInFlight         int               `json:"max_in_flight"`
-	LedgerPath          string            `json:"ledger_path"`
-	DeepSeekAPIKey      string            `json:"-"`
-	AccessToken         string            `json:"-"`
+	ListenAddr          string                   `json:"listen_addr"`
+	Protocol            string                   `json:"protocol"`
+	BaseURL             string                   `json:"base_url"`
+	Model               string                   `json:"model"`
+	UpstreamID          string                   `json:"upstream_id"`
+	APIVersion          string                   `json:"anthropic_version,omitempty"`
+	UpstreamKeychain    KeychainReference        `json:"upstream_keychain"`
+	AccessTokenKeychain KeychainReference        `json:"access_token_keychain"`
+	MaxInFlight         int                      `json:"max_in_flight"`
+	LedgerPath          string                   `json:"ledger_path"`
+	Prices              map[string]adapter.Price `json:"prices,omitempty"`
+	APIKey              string                   `json:"-"`
+	AccessToken         string                   `json:"-"`
 }
 
-// LoadConfig reads and validates the local gateway configuration.
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("read gateway config: %w", err)
+		return Config{}, errors.New("cannot read config")
 	}
-	var config Config
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&config); err != nil {
-		return Config{}, fmt.Errorf("decode gateway config: %w", err)
+	var c Config
+	if adapter.StrictJSON(data, &c) != nil {
+		return c, errors.New("invalid config: use the current example; plaintext and legacy DeepSeek fields are not supported")
 	}
-	if err := config.Validate(); err != nil {
-		return Config{}, err
-	}
-	return config, nil
+	return c, c.Validate()
 }
-
-// ResolveCredentials retrieves the two runtime credentials after validating
-// their references. Returned Config never serializes those values.
-func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Config, error) {
-	if err := c.Validate(); err != nil {
-		return Config{}, err
-	}
-	if lookup == nil {
-		return Config{}, fmt.Errorf("keychain lookup is required")
-	}
-	deepSeekKey, err := lookup.Lookup(ctx, c.DeepSeekKeychain)
-	if err != nil {
-		return Config{}, fmt.Errorf("read DeepSeek key from Keychain: %w", err)
-	}
-	accessToken, err := lookup.Lookup(ctx, c.AccessTokenKeychain)
-	if err != nil {
-		return Config{}, fmt.Errorf("read gateway access token from Keychain: %w", err)
-	}
-	if strings.TrimSpace(deepSeekKey) == "" || strings.TrimSpace(accessToken) == "" {
-		return Config{}, fmt.Errorf("Keychain returned an empty credential")
-	}
-	c.DeepSeekAPIKey, c.AccessToken = deepSeekKey, accessToken
-	return c, nil
-}
-
-// Validate rejects non-loopback listeners before a server can be created.
 func (c Config) Validate() error {
 	host, port, err := net.SplitHostPort(c.ListenAddr)
-	if err != nil || port == "" {
-		return fmt.Errorf("listen_addr must be host:port: %q", c.ListenAddr)
+	if err != nil || port == "" || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		return errors.New("listen_addr must use a loopback IP and port")
 	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("listen_addr must use a loopback IP: %q", c.ListenAddr)
+	if c.Protocol != "openai" && c.Protocol != "anthropic" {
+		return errors.New("protocol must be openai or anthropic")
 	}
-	if err := c.DeepSeekKeychain.Validate("deepseek_keychain"); err != nil {
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return errors.New("base_url must be an API root without credentials, query or fragment")
+	}
+	if u.Scheme != "https" {
+		ip := net.ParseIP(u.Hostname())
+		if u.Scheme != "http" || ip == nil || !ip.IsLoopback() {
+			return errors.New("base_url requires HTTPS, except loopback HTTP")
+		}
+	}
+	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
+		return errors.New("model and upstream_id are required")
+	}
+	if len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n") {
+		return errors.New("upstream_id must be a short non-secret label")
+	}
+	if c.Protocol == "anthropic" {
+		if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
+			return errors.New("anthropic_version must be YYYY-MM-DD")
+		}
+	}
+	if c.MaxInFlight < 1 || c.MaxInFlight > 1024 {
+		return errors.New("max_in_flight must be 1..1024")
+	}
+	if strings.TrimSpace(c.LedgerPath) == "" {
+		return errors.New("ledger_path is required")
+	}
+	if err := c.UpstreamKeychain.Validate("upstream_keychain"); err != nil {
 		return err
 	}
 	if err := c.AccessTokenKeychain.Validate("access_token_keychain"); err != nil {
 		return err
 	}
-	if c.MaxInFlight < 1 {
-		return fmt.Errorf("max_in_flight must be at least 1")
-	}
-	if strings.TrimSpace(c.LedgerPath) == "" {
-		return fmt.Errorf("ledger_path is required")
+	for model, p := range c.Prices {
+		if strings.TrimSpace(model) == "" {
+			return errors.New("empty pricing model")
+		}
+		if err := p.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Config, error) {
+	if err := c.Validate(); err != nil {
+		return c, err
+	}
+	if lookup == nil {
+		return c, errors.New("Keychain lookup required")
+	}
+	var err error
+	c.APIKey, err = lookup.Lookup(ctx, c.UpstreamKeychain)
+	if err != nil {
+		return Config{}, errors.New("upstream Keychain item unavailable")
+	}
+	c.AccessToken, err = lookup.Lookup(ctx, c.AccessTokenKeychain)
+	if err != nil {
+		return Config{}, errors.New("gateway Keychain item unavailable")
+	}
+	if strings.TrimSpace(c.APIKey) == "" || strings.TrimSpace(c.AccessToken) == "" || strings.ContainsAny(c.APIKey+c.AccessToken, "\r\n") {
+		return Config{}, errors.New("invalid Keychain credential")
+	}
+	if c.APIKey == c.AccessToken {
+		return Config{}, errors.New("use separate upstream and gateway credentials")
+	}
+	return c, nil
 }

@@ -1,80 +1,117 @@
-# Demo
+# Local demo
 
-This example applies to the current DeepSeek-only source candidate. The 0.1.0
-release requires configurable OpenAI and Anthropic examples after those adapters
-are implemented; the configuration below does not yet support that selection.
+Requires macOS, Keychain Access and a non-streaming text-capable OpenAI or
+Anthropic compatible endpoint. The source candidate is `0.1.0-rc.2`.
 
-This is the executable local-MVP path. TideMux supports one non-streaming
-DeepSeek chat route and listens only on a loopback address.
+## Build or extract
 
-## 1. Build and create a local state directory
+From the source root with Go 1.27 or later:
 
-```bash
-# From the source repository root
+```sh
 CGO_ENABLED=0 go build -o tidemux ./cmd/tidemux
+./tidemux version
 mkdir -p "$HOME/Library/Application Support/TideMux"
 ```
 
-## 2. Add the two secrets in Keychain Access
+Alternatively extract the candidate archive and run its `tidemux` binary.
+The arm64 candidate has been tested on macOS 15.7.4; other OS versions are not
+verified. No public download or Homebrew installation is claimed yet.
 
-In **Keychain Access**, add two generic-password items. Do not put either
-secret in the JSON file, shell history, logs, or SQLite database.
+## Credentials and configuration
+
+In Keychain Access create two generic-password items:
 
 | Service | Account | Password |
 | --- | --- | --- |
-| `com.tidemux.deepseek` | `default` | Your DeepSeek API key |
-| `com.tidemux.gateway` | `default` | A locally generated Bearer token for clients of this gateway |
+| `com.tidemux.openai` (or `com.tidemux.anthropic`) | `default` | Your upstream API key |
+| `com.tidemux.gateway` | `default` | A different locally generated secret for gateway clients |
 
-Create `tidemux.json`, replacing only the ledger path with your actual home
-directory (the JSON parser does not expand `~`):
+Copy [OpenAI config](../examples/openai.json) or
+[Anthropic config](../examples/anthropic.json) to `tidemux.json`. Set:
 
-```json
-{
-  "listen_addr": "127.0.0.1:8787",
-  "deepseek_keychain": {"service": "com.tidemux.deepseek", "account": "default"},
-  "access_token_keychain": {"service": "com.tidemux.gateway", "account": "default"},
-  "max_in_flight": 1,
-  "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db"
-}
-```
+- `base_url`: the exact API root **including its version/prefix**, for example
+  `https://your-endpoint.example/api/v1`. TideMux appends `/chat/completions` or
+  `/messages` exactly once. Trailing slashes are ignored. HTTPS is required
+  except for numeric loopback HTTP. URLs cannot contain credentials/query/fragment.
+- `model`: your actual model ID, used when a request omits model.
+- `upstream_id`: a short non-secret label for ledger records.
+- `ledger_path`: an absolute path in an existing writable directory; `~` is not expanded.
+- `max_in_flight`: 1–1024. Start with 1; this caps simultaneous upstream calls.
+- `anthropic_version`: explicit protocol version for Anthropic, example `2023-06-01`.
 
-## 3. Verify and serve
+Do not put credentials in JSON, terminal history, logs, or source control.
+Old `deepseek_*` configs are rejected; migrate to the generic example explicitly.
 
-```bash
+```sh
 ./tidemux doctor --config ./tidemux.json
 ./tidemux serve --config ./tidemux.json
 ```
 
-`doctor` validates loopback configuration, verifies both Keychain items without
-printing them, and checks that the ledger directory is writable. `serve` prints
-its loopback URL and stops cleanly on Control-C.
+`doctor` checks local config, Keychain retrieval and ledger-directory write
+access. It does not contact the upstream. `serve` stays in the foreground;
+Control-C stops it. There is one configured upstream per process, no fallback.
 
-## 4. Make one non-streaming OpenAI-compatible request
+## Request and inspect
 
-Use the local Bearer token you stored in Keychain:
+Configure your HTTP client with the local gateway token (not the upstream key):
 
-```bash
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Authorization: Bearer <your-local-gateway-token>" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Say hello in one sentence."}]}'
+- OpenAI: `POST http://127.0.0.1:8787/v1/chat/completions`, Bearer authentication,
+  body `{"model":"your-model","messages":[{"role":"user","content":"Hi"}]}`.
+- Anthropic: `POST http://127.0.0.1:8787/v1/messages`, Bearer or `x-api-key`
+  authentication with the **local token**, body
+  `{"model":"your-model","max_tokens":16,"messages":[{"role":"user","content":"Hi"}]}`.
+
+See [protocol support](protocols.md) for accepted fields. The response keeps
+upstream JSON and adds `X-TideMux-Request-ID` for audit correlation.
+
+```sh
+./tidemux ledger --config ./tidemux.json
 ```
 
-Successful and upstream HTTP-failed requests are appended to the local SQLite
-ledger. The current candidate can miss transport/read failures or misclassify
-malformed responses; pricing is not yet wired into the gateway. See
-[acceptance status](mvp-acceptance.md). Invalid authentication, streaming requests, cancellation, and upstream
-errors return a stable JSON error envelope without echoing secrets, prompts, or
-provider response details.
+This prints the 100 most recent audit records as JSON without retrieving keys.
+`null` token/count/cost means unknown. Cancellation is not evidence of zero
+upstream billing. If the gateway reports `audit_failed_do_not_retry_blindly`,
+the provider may already have executed the call; inspect storage and upstream
+usage before retrying. TideMux does not automatically retry any call.
 
-## Reproducible no-key smoke test
+## Optional pricing
 
-No real API key is needed for the build and CLI smoke test:
+Add a `prices` object keyed by exact request model ID. Rates are **per million
+tokens**, in an explicit three-letter currency, with your verified source and
+version. The following numbers are synthetic and must not be used as real rates:
 
-```bash
-CGO_ENABLED=0 go test ./...
+```json
+{"prices":{"your-model":{
+  "currency":"USD","source":"synthetic-example-only","version":"example-1",
+  "input_per_million":2,"output_per_million":4,
+  "cache_read_per_million":1,"cache_write_per_million":3
+}}}
 ```
 
-The `cmd/tidemux` smoke test builds a fresh binary, uses a temporary Keychain
-test double, and runs `tidemux doctor` against a temporary config and ledger
-directory. It does not contact DeepSeek or persist a credential.
+Missing prices produce unknown cost. Positive cached usage requires the
+corresponding price. Unknown cache breakdown with differential rates also produces
+unknown cost. Estimates are token arithmetic, not provider invoices; request fees,
+service-tier adjustments, tool fees and taxes are outside this model.
+
+## Live verification
+
+With `serve` running, a verified price entry configured, and authorization to make
+one minimal request, run from the source root:
+
+```sh
+python3 scripts/verify_live.py --config ./tidemux.json --output /tmp/tidemux-live-openai.json
+```
+
+Use a separate Anthropic config/evidence file for the other protocol. The helper
+reads the local token into memory, makes one request, and checks response usage
+against the persisted record and recomputes cost. It does not print/save the
+prompt, response content or key. Review sanitized evidence before sharing it.
+
+## Persistence and removal
+
+New records are in `request_audit` and `audit_events`, committed together.
+Legacy `ledger_requests`/`ledger_events` tables are preserved, not reinterpreted;
+`ledger` shows only the new audit format. Back up the database while the service
+is stopped before switching versions. Removing the binary does not delete the
+configured database, JSON file, or Keychain entries. Remove those separately only
+when you intentionally want to erase your local state.

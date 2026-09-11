@@ -22,8 +22,9 @@ func TestDoctorSmokeFromCleanDirectory(t *testing.T) {
 	}
 	configPath := filepath.Join(temp, "config.json")
 	config := map[string]any{
+		"protocol": "openai", "base_url": "https://example.com/v1", "model": "m", "upstream_id": "test",
 		"listen_addr":           "127.0.0.1:8787",
-		"deepseek_keychain":     map[string]string{"service": "test.deepseek", "account": "default"},
+		"upstream_keychain":     map[string]string{"service": "test.deepseek", "account": "default"},
 		"access_token_keychain": map[string]string{"service": "test.gateway", "account": "default"},
 		"max_in_flight":         1, "ledger_path": filepath.Join(temp, "ledger.db"),
 	}
@@ -39,7 +40,7 @@ func TestDoctorSmokeFromCleanDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	security := filepath.Join(fakeBin, "security")
-	if err := os.WriteFile(security, []byte("#!/bin/sh\nprintf 'test-secret\\n'\n"), 0o755); err != nil {
+	if err := os.WriteFile(security, []byte("#!/bin/sh\ncase \"$*\" in *test.gateway*) printf 'local-secret\\n';; *) printf 'provider-secret\\n';; esac\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	command := exec.Command(binary, "doctor", "--config", configPath)

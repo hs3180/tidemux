@@ -1,78 +1,59 @@
 # TideMux
 
-A local API gateway for macOS: explicit concurrency control, a SQLite usage
-ledger, and structured errors. The 0.1.0 target supports a user-configured
-OpenAI-compatible or Anthropic-compatible upstream, with no provider-brand lock-in.
+A macOS local gateway for user-configured **OpenAI-compatible or
+Anthropic-compatible APIs**. Explicit concurrency, a SQLite audit ledger,
+Keychain credentials, and safe errors in one Go binary.
 
-**Source candidate: 0.1.0-rc.1.** No public binary or Homebrew tap has been
-released. The current implementation is still DeepSeek-specific. Generic
-OpenAI and Anthropic adapters are planned, not implemented; local tests do not
-establish support for both protocols.
+**Current source candidate: 0.1.0-rc.2.** Both protocol implementations pass local
+mock and process tests. Live-provider reconciliation and public GitHub/Homebrew
+installation have not been verified; this is not a released 0.1.0.
 
-## 0.1.0 target
+## Try locally
 
-One configured upstream per running instance, with a selectable protocol,
-base URL, model, and Keychain credential reference. OpenAI Chat Completions
-and Anthropic Messages will each support a documented non-streaming text
-subset, matching local and upstream protocols. Cross-protocol conversion,
-multi-upstream routing, and fallback are outside this release.
-
-“Compatible” means conforming to that supported subset, not every endpoint or
-vendor extension. Both protocol paths must pass separate tests and live usage
-reconciliation before release.
-
-## Supported today (DeepSeek source baseline)
-
-- Minimal non-streaming `POST /v1/chat/completions` with text messages.
-- Loopback listener and an independent local Bearer token.
-- macOS Keychain references for credentials; no plaintext credential config.
-- Explicit maximum in-flight requests and cancelable waiting.
-- Local request / event records and internal aggregate queries.
-- `tidemux serve`, `tidemux doctor`, and `tidemux version`.
-
-This candidate has known ledger and pricing limitations; read the
-[acceptance status](docs/mvp-acceptance.md) before relying on its records.
-It does not yet implement generic OpenAI or Anthropic support. Concurrent
-multi-upstream routing, fallback, streaming, tool calls,
-a GUI, automatic tuning, and full API/client compatibility remain outside the
-release scope. It makes no
-verified cost-saving or latency-improvement claim.
-
-## Build and try
-
-Use macOS and a Go toolchain satisfying [go.mod](go.mod). From this source root:
+With Go 1.27+ from this source root:
 
 ```sh
 CGO_ENABLED=0 go build -o tidemux ./cmd/tidemux
 ./tidemux version
 ```
 
-Follow the [demo](docs/demo.md) to create the local state directory, store
-both credentials in Keychain, and configure `doctor` / `serve`. `doctor`
-checks local readiness; it does not test the upstream provider.
+Follow the [demo](docs/demo.md) for Keychain setup, configuration and your first
+request. Choose [OpenAI](examples/openai.json) or
+[Anthropic](examples/anthropic.json), supplying your API root and model.
+The built arm64 candidate is tested on macOS 15.7.4; other platforms are unverified.
 
-## Verify
+## What it does
+
+- Non-streaming text Chat Completions or Messages, with configurable API root.
+- Loopback listener, independent local authentication, macOS Keychain references.
+- Explicit in-flight concurrency cap and cancelable waiting; no automatic retries.
+- Atomic terminal request/event records, including failures and cancellation.
+- Nullable usage/cost, explicit per-model pricing snapshots and currency.
+- `serve`, `doctor`, `ledger` (recent records), and `version` commands.
+
+See the [exact protocol subset](docs/protocols.md). Multi-upstream routing,
+fallback, protocol conversion, streaming, tools, UI and automatic tuning are out
+of scope. No measured cost saving or latency benefit is claimed.
+
+## Verify and package
 
 ```sh
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go vet ./...
+go test -race ./...
 ```
 
-Tests use mock upstreams and a temporary Keychain double, not a real API key.
+The process test builds a binary, uses a temporary Keychain double, calls both
+mock upstream protocols, verifies stored usage/cost and stops the process.
+See [acceptance](docs/mvp-acceptance.md) and [release procedure](docs/releasing.md).
 
-## Source map
+## Source and policies
 
-`cmd/tidemux` provides the CLI. `internal/gateway`, `adapter`, `limiter`, and
-`ledger` implement the HTTP boundary, DeepSeek call, concurrency gate, and
-SQLite records respectively.
+`cmd/tidemux` provides the CLI; `internal/gateway`, `adapter`, `limiter`, and
+`ledger` handle protocol boundaries, upstream calls, concurrency and audit storage.
 
-## Privacy, license, and contribution
-
-Credentials stay in Keychain; requests are sent to the configured upstream.
-No telemetry or full prompt/response persistence is implemented. See
-[Privacy](PRIVACY.md) and [Security](SECURITY.md).
-
-Source is [Apache-2.0](LICENSE); brand rights are reserved in [NOTICE](NOTICE).
-Dependency materials are tracked in [Third-party notices](THIRD_PARTY_NOTICES.md)
-and [SBOM](SBOM.md). For changes, see [Contributing](CONTRIBUTING.md),
-[Code of conduct](CODE_OF_CONDUCT.md), and [Changelog](CHANGELOG.md).
+[Apache-2.0](LICENSE) source; [brand reservation](NOTICE);
+[third-party notices](THIRD_PARTY_NOTICES.md); [SBOM](SBOM.md);
+[privacy](PRIVACY.md); [security](SECURITY.md);
+[contribution guide](CONTRIBUTING.md); [conduct](CODE_OF_CONDUCT.md);
+[changelog](CHANGELOG.md).

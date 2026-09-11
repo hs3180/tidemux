@@ -13,154 +13,185 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
-func testConfig(ledgerPath, baseURL string) Config {
-	return Config{
-		ListenAddr: "127.0.0.1:0", DeepSeekAPIKey: "test-key", AccessToken: "gateway-test-token",
-		DeepSeekKeychain:    KeychainReference{Service: "test.deepseek", Account: "default"},
-		AccessTokenKeychain: KeychainReference{Service: "test.gateway", Account: "default"},
-		DeepSeekBaseURL:     baseURL, MaxInFlight: 1, LedgerPath: ledgerPath,
-	}
+func testConfig(path, url string) Config {
+	return Config{ListenAddr: "127.0.0.1:0", Protocol: "openai", BaseURL: url, Model: "custom-model", UpstreamID: "test", APIKey: "provider-secret", AccessToken: "local-secret", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "default"}, AccessTokenKeychain: KeychainReference{Service: "test.gateway", Account: "default"}, MaxInFlight: 1, LedgerPath: path, APIVersion: "2023-06-01"}
 }
-
-func TestHandlerForwardsMinimalChatCompletionAndWritesLedger(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer test-key" {
-			t.Fatalf("unexpected upstream request: %s authorization=%q", r.URL.Path, r.Header.Get("Authorization"))
-		}
-		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"model":"deepseek-chat"`) {
-			t.Fatalf("model missing from forwarded request: %s", body)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"upstream-1","model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`))
-	}))
-	defer upstream.Close()
-
-	config := testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL)
-	h, closeLedger, err := NewHandler(config, upstream.Client())
-	if err != nil {
-		t.Fatal(err)
+func requestBody(protocol string) string {
+	if protocol == "anthropic" {
+		return `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`
 	}
-	defer closeLedger()
-
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`))
-	request.Header.Set("Authorization", "Bearer gateway-test-token")
-	response := httptest.NewRecorder()
-	h.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), `"content":"hello"`) || !strings.Contains(response.Body.String(), `"object":"chat.completion"`) {
-		t.Fatalf("unexpected response: %s", response.Body.String())
-	}
-	store, err := ledger.Open(config.LedgerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	var count int
-	if err := store.QueryRow(request.Context(), "SELECT count(*) FROM ledger_requests").Scan(&count); err != nil || count != 1 {
-		t.Fatalf("ledger requests=%d err=%v", count, err)
-	}
+	return `{"model":"custom-model","messages":[{"role":"user","content":"hello"}]}`
 }
-
-func TestOpenBindsLoopbackGateway(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
-	}))
-	defer upstream.Close()
-	listener, server, closeGateway, err := Open(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL), upstream.Client())
-	if err != nil {
-		t.Fatal(err)
+func responseBody(protocol string) string {
+	if protocol == "anthropic" {
+		return `{"id":"msg1","type":"message","role":"assistant","model":"custom-model","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`
 	}
-	defer closeGateway()
-	go server.Serve(listener)
-	request, err := http.NewRequest(http.MethodPost, "http://"+listener.Addr().String()+"/v1/chat/completions", strings.NewReader(`{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Authorization", "Bearer gateway-test-token")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("status=%d", response.StatusCode)
-	}
+	return `{"id":"chat1","object":"chat.completion","model":"custom-model","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`
 }
-
-func TestConfigRejectsNonLoopbackListener(t *testing.T) {
-	config := testConfig("ledger.db", "")
-	config.ListenAddr = "0.0.0.0:8080"
-	if err := config.Validate(); err == nil {
-		t.Fatal("expected non-loopback listener to be rejected")
+func endpoint(protocol string) string {
+	if protocol == "anthropic" {
+		return "/v1/messages"
 	}
+	return "/v1/chat/completions"
 }
-
-func TestHandlerReturnsSafeStructuredErrors(t *testing.T) {
-	tests := []struct {
-		name          string
-		body          string
-		authorization string
-		upstreamCode  int
-		cancel        bool
-		wantStatus    int
-		wantType      string
-		wantCode      string
-	}{
-		{name: "missing credentials", body: `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`, wantStatus: http.StatusUnauthorized, wantType: "authentication_error", wantCode: "invalid_api_key"},
-		{name: "invalid request", authorization: "Bearer gateway-test-token", body: `{"model":"","messages":[]}`, wantStatus: http.StatusBadRequest, wantType: "invalid_request_error", wantCode: "model"},
-		{name: "stream unsupported", authorization: "Bearer gateway-test-token", body: `{"model":"deepseek-chat","stream":true,"messages":[{"role":"user","content":"hi"}]}`, wantStatus: http.StatusBadRequest, wantType: "invalid_request_error", wantCode: "stream"},
-		{name: "upstream rate limited", authorization: "Bearer gateway-test-token", body: `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`, upstreamCode: http.StatusTooManyRequests, wantStatus: http.StatusTooManyRequests, wantType: "rate_limit_error", wantCode: "upstream_rate_limited"},
-		{name: "upstream failure", authorization: "Bearer gateway-test-token", body: `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`, upstreamCode: http.StatusInternalServerError, wantStatus: http.StatusBadGateway, wantType: "api_error", wantCode: "upstream_error"},
-		{name: "canceled request", authorization: "Bearer gateway-test-token", body: `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`, cancel: true, wantStatus: http.StatusRequestTimeout, wantType: "request_canceled", wantCode: "request_canceled"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if test.cancel {
-					<-r.Context().Done()
-					return
+func TestBothProtocolsAndFailureAudit(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		for _, scenario := range []string{"success", "429", "500", "malformed", "missing-content", "missing-usage", "canceled", "transport", "read-failure"} {
+			t.Run(protocol+"/"+scenario, func(t *testing.T) {
+				calls := 0
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					want := "/custom/v1/chat/completions"
+					if protocol == "anthropic" {
+						want = "/custom/v1/messages"
+					}
+					if r.URL.Path != want {
+						t.Errorf("path %s", r.URL.Path)
+					}
+					if protocol == "anthropic" {
+						if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != "2023-06-01" || r.Header.Get("Authorization") != "" {
+							t.Error("wrong Anthropic authentication")
+						}
+					} else if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("x-api-key") != "" {
+						t.Error("wrong OpenAI authentication")
+					}
+					body, _ := io.ReadAll(r.Body)
+					if !strings.Contains(string(body), "custom-model") {
+						t.Error("model lost")
+					}
+					switch scenario {
+					case "429":
+						w.WriteHeader(429)
+						io.WriteString(w, `{"error":"provider-secret private detail"}`)
+					case "500":
+						w.WriteHeader(500)
+					case "malformed":
+						io.WriteString(w, "invalid")
+					case "missing-content":
+						io.WriteString(w, `{"usage":{}}`)
+					case "missing-usage":
+						var payload map[string]any
+						json.Unmarshal([]byte(responseBody(protocol)), &payload)
+						delete(payload, "usage")
+						json.NewEncoder(w).Encode(payload)
+					case "read-failure":
+						w.Header().Set("Content-Length", "10000")
+						io.WriteString(w, "short")
+					default:
+						io.WriteString(w, responseBody(protocol))
+					}
+				}))
+				defer up.Close()
+				c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/custom/v1/")
+				c.Protocol = protocol
+				if scenario == "transport" {
+					up.Close()
 				}
-				w.WriteHeader(test.upstreamCode)
-				_, _ = w.Write([]byte(`{"error":{"message":"provider secret detail"}}`))
-			}))
-			defer upstream.Close()
-			config := testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL)
-			config.DeepSeekAPIKey = "provider-secret"
-			h, closeLedger, err := NewHandler(config, upstream.Client())
+				h, closeDB, err := NewHandler(c, up.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer closeDB()
+				req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(requestBody(protocol)))
+				req.Header.Set("Authorization", "Bearer local-secret")
+				if scenario == "canceled" {
+					ctx, cancel := context.WithCancel(req.Context())
+					cancel()
+					req = req.WithContext(ctx)
+				}
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				want := 502
+				status := "error"
+				if scenario == "success" || scenario == "missing-usage" {
+					want = 200
+					status = "ok"
+				}
+				if scenario == "429" {
+					want = 429
+				}
+				if scenario == "canceled" {
+					want = 408
+					status = "canceled"
+					if calls != 0 {
+						t.Error("canceled request reached upstream")
+					}
+				}
+				if out.Code != want {
+					t.Fatalf("code=%d want %d body=%s", out.Code, want, out.Body.String())
+				}
+				if strings.Contains(out.Body.String(), "provider-secret") {
+					t.Error("secret leaked")
+				}
+				l, err := ledger.Open(c.LedgerPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				rows, err := l.Recent(context.Background(), 10)
+				if err != nil || len(rows) != 1 {
+					t.Fatalf("audit count=%d err=%v", len(rows), err)
+				}
+				a := rows[0]
+				if a.Status != status || a.Protocol != protocol || a.ID != out.Header().Get("X-TideMux-Request-ID") {
+					t.Fatalf("audit %+v", a)
+				}
+				if a.EstimatedCost != nil {
+					t.Error("unconfigured price produced cost")
+				}
+				if scenario != "success" && a.InputTokens != nil {
+					t.Error("unknown usage presented as zero")
+				}
+			})
+		}
+	}
+}
+func TestValidationNeverCallsUpstream(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("invalid request forwarded") }))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "l.db"), up.URL)
+			c.Protocol = protocol
+			h, closeDB, err := NewHandler(c, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer closeLedger()
-			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(test.body))
-			request.Header.Set("Authorization", test.authorization)
-			if test.cancel {
-				ctx, cancel := context.WithCancel(request.Context())
-				cancel()
-				request = request.WithContext(ctx)
+			defer closeDB()
+			for _, body := range []string{`{}`, `{} {}`, `null`, `{"model":"m","model":"n"}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`, strings.Repeat("x", (1<<20)+1)} {
+				req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer local-secret")
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				if out.Code != 400 && out.Code != 413 {
+					t.Fatalf("invalid body accepted %d", out.Code)
+				}
 			}
-			response := httptest.NewRecorder()
-			h.ServeHTTP(response, request)
-			if response.Code != test.wantStatus {
-				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-			}
-			var payload struct {
-				Error struct {
-					Type string `json:"type"`
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-				t.Fatal(err)
-			}
-			if payload.Error.Type != test.wantType || payload.Error.Code != test.wantCode {
-				t.Fatalf("error=%+v", payload.Error)
-			}
-			if strings.Contains(response.Body.String(), "provider-secret") || strings.Contains(response.Body.String(), "provider secret detail") {
-				t.Fatalf("secret leaked: %s", response.Body.String())
+			req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(requestBody(protocol)))
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != 401 {
+				t.Fatal("unauthorized")
 			}
 		})
+	}
+}
+func TestRedirectDoesNotLeakCredentials(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("redirect followed") }))
+	defer target.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, 307) }))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "l.db"), up.URL)
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != 502 {
+		t.Fatal(out.Code)
 	}
 }

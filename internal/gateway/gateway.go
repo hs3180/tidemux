@@ -1,13 +1,13 @@
 package gateway
 
 import (
-	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
@@ -15,131 +15,104 @@ import (
 	"github.com/hs3180/tidemux/internal/limiter"
 )
 
-// NewHandler wires the configured DeepSeek provider, local ledger, and
-// concurrency gate into the smallest supported OpenAI-compatible route.
-func NewHandler(config Config, client *http.Client) (http.Handler, func() error, error) {
-	if err := config.Validate(); err != nil {
+func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, error) {
+	if err := c.Validate(); err != nil {
 		return nil, nil, err
 	}
-	store, err := ledger.Open(config.LedgerPath)
+	if c.APIKey == "" || c.AccessToken == "" || c.APIKey == c.AccessToken {
+		return nil, nil, errors.New("distinct resolved credentials are required")
+	}
+	l, err := ledger.Open(c.LedgerPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.New("cannot open ledger")
 	}
-	gate, err := limiter.NewConcurrencyGate(config.MaxInFlight)
-	if err != nil {
-		_ = store.Close()
-		return nil, nil, err
-	}
-	provider, err := adapter.NewDeepSeekClient(adapter.DeepSeekConfig{
-		APIKey: config.DeepSeekAPIKey, BaseURL: config.DeepSeekBaseURL, HTTPClient: client,
-		Ledger: store, Limiter: gate,
-	})
-	if err != nil {
-		_ = store.Close()
-		return nil, nil, err
-	}
-	return &handler{provider: provider, accessToken: config.AccessToken}, store.Close, nil
+	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
+	return &handler{config: c, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
 }
-
-// Open binds a validated loopback listener and returns the server for the
-// caller to run. Keeping Serve under the caller makes shutdown explicit.
-func Open(config Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
-	h, closeLedger, err := NewHandler(config, client)
+func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
+	h, closeLedger, err := NewHandler(c, client)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	listener, err := net.Listen("tcp", config.ListenAddr)
+	listener, err := net.Listen("tcp", c.ListenAddr)
 	if err != nil {
-		_ = closeLedger()
-		return nil, nil, nil, fmt.Errorf("listen on TideMux loopback address: %w", err)
+		closeLedger()
+		return nil, nil, nil, errors.New("cannot bind loopback listener")
 	}
-	return listener, &http.Server{Handler: h}, func() error {
-		listener.Close()
-		return closeLedger()
-	}, nil
+	return listener, &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}, func() error { listener.Close(); return closeLedger() }, nil
 }
 
 type handler struct {
-	provider    *adapter.DeepSeekClient
-	accessToken string
+	config Config
+	client *adapter.Client
 }
 
-type errorEnvelope struct {
-	Error apiError `json:"error"`
-}
-
-type apiError struct {
-	Message string  `json:"message"`
-	Type    string  `json:"type"`
-	Param   *string `json:"param"`
-	Code    string  `json:"code"`
-}
-
-func writeError(w http.ResponseWriter, status int, message, kind, code string) {
+func (h *handler) fail(w http.ResponseWriter, status int, code string) {
+	kind := "api_error"
+	switch status {
+	case 400, 413:
+		kind = "invalid_request_error"
+	case 401:
+		kind = "authentication_error"
+	case 404:
+		kind = "not_found_error"
+	case 429:
+		kind = "rate_limit_error"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(errorEnvelope{Error: apiError{Message: message, Type: kind, Code: code}})
+	if h.config.Protocol == "anthropic" {
+		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": code}})
+	} else {
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": code, "type": kind, "code": code, "param": nil}})
+	}
 }
-
-func validChatRequest(request adapter.ChatRequest) (string, bool) {
-	if strings.TrimSpace(request.Model) == "" {
-		return "model", false
-	}
-	if request.Stream {
-		return "stream", false
-	}
-	if len(request.Messages) == 0 {
-		return "messages", false
-	}
-	for _, message := range request.Messages {
-		if strings.TrimSpace(message.Role) == "" || message.Content == "" {
-			return "messages", false
-		}
-	}
-	return "", true
-}
-
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
-		http.NotFound(w, r)
+	a := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+	b := sha256.Sum256([]byte("Bearer " + h.config.AccessToken))
+	valid := subtle.ConstantTimeCompare(a[:], b[:]) == 1
+	if h.config.Protocol == "anthropic" {
+		a = sha256.Sum256([]byte(r.Header.Get("x-api-key")))
+		b = sha256.Sum256([]byte(h.config.AccessToken))
+		valid = valid || subtle.ConstantTimeCompare(a[:], b[:]) == 1
+	}
+	if !valid {
+		h.fail(w, 401, "invalid_api_key")
 		return
 	}
-	if r.Header.Get("Authorization") != "Bearer "+h.accessToken {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeError(w, http.StatusUnauthorized, "invalid gateway credentials", "authentication_error", "invalid_api_key")
+	path := "/v1/chat/completions"
+	if h.config.Protocol == "anthropic" {
+		path = "/v1/messages"
+	}
+	if r.URL.Path != path || r.Method != "POST" {
+		h.fail(w, 404, "unsupported_endpoint")
 		return
 	}
 	defer r.Body.Close()
-	var request adapter.ChatRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid chat completion request", "invalid_request_error", "invalid_request")
-		return
-	}
-	if param, ok := validChatRequest(request); !ok {
-		writeError(w, http.StatusBadRequest, "invalid chat completion request", "invalid_request_error", param)
-		return
-	}
-	choice, err := h.provider.Chat(r.Context(), request)
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
-		var upstream *adapter.UpstreamError
-		switch {
-		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			writeError(w, http.StatusRequestTimeout, "request canceled before completion", "request_canceled", "request_canceled")
-		case errors.As(err, &upstream) && upstream.StatusCode == http.StatusTooManyRequests:
-			writeError(w, http.StatusTooManyRequests, "upstream provider is rate limited; retry later", "rate_limit_error", "upstream_rate_limited")
-		default:
-			writeError(w, http.StatusBadGateway, "upstream chat completion failed", "api_error", "upstream_error")
+		h.fail(w, 413, "request_too_large")
+		return
+	}
+	body, model, err := adapter.Request(h.config.Protocol, data, h.config.Model)
+	if err != nil {
+		h.fail(w, 400, err.Error())
+		return
+	}
+	response, id, err := h.client.Call(r.Context(), body, model)
+	if id != "" {
+		w.Header().Set("X-TideMux-Request-ID", id)
+	}
+	if err != nil {
+		var ce *adapter.CallError
+		if errors.As(err, &ce) {
+			h.fail(w, ce.Status, ce.Code)
+		} else {
+			h.fail(w, 500, "internal_error")
 		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(struct {
-		ID      string               `json:"id"`
-		Object  string               `json:"object"`
-		Created int64                `json:"created"`
-		Model   string               `json:"model"`
-		Choices []adapter.ChatChoice `json:"choices"`
-	}{ID: fmt.Sprintf("tidemux-%d", time.Now().UnixNano()), Object: "chat.completion", Created: time.Now().Unix(), Model: request.Model, Choices: []adapter.ChatChoice{choice}})
+	w.WriteHeader(200)
+	w.Write(response)
 }

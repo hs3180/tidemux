@@ -57,8 +57,13 @@ func Open(path string) (*Ledger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open ledger: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 	l := &Ledger{db: db}
 	if err := l.migrate(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := l.initAudit(context.Background()); err != nil {
 		db.Close()
 		return nil, err
 	}

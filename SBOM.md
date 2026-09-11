@@ -1,13 +1,14 @@
 # Software bill of materials
 
-No release SBOM has been generated or published yet. The source dependency
-versions are pinned in [go.mod](go.mod) and [go.sum](go.sum).
+`scripts/release.py` emits `sbom.spdx.json` (SPDX 2.3) for the actual darwin/arm64
+build, including the binary SHA256, source commit, Go runtime and compiled Go
+module versions / sums. `BUILD.txt` records the toolchain and Go build metadata.
 
-Before publishing a binary, generate an SPDX JSON SBOM from the actual build
-and attach it with the release. Record the source commit, exact Go toolchain,
-target platform, module versions, licenses, and checksums. Verify that the SBOM
-matches the distributed asset and include the required license texts.
+Original dependency licenses and nested notices are bundled in `licenses/`.
+See [third-party notices](THIRD_PARTY_NOTICES.md). Module license conclusions
+remain `NOASSERTION` in SPDX where an aggregate legal conclusion is not made;
+primary license declarations and full texts are supplied. The SBOM does not
+claim that each dependency source file was individually analyzed.
 
-This document is a release requirement, not evidence of a generated SBOM,
-hermetic build, or reproducible-build guarantee. See
-[third-party notices](THIRD_PARTY_NOTICES.md) for the current declaration status.
+No hosted release is claimed by this document. Local artifacts are generated
+from a clean committed tree and never overwritten for the same version.

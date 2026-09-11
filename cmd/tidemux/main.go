@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,11 +16,12 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/gateway"
+	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 const (
-	version = "0.1.0-rc.1"
-	usage   = "usage: tidemux <serve|doctor> --config <path>\n       tidemux version\n"
+	version = "0.1.0-rc.2"
+	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux version\n"
 )
 
 func main() {
@@ -41,6 +43,9 @@ func run(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, version)
 		return nil
 	}
+	if command != "serve" && command != "doctor" && command != "ledger" {
+		return errors.New(usage)
+	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "path to JSON config containing Keychain references")
@@ -53,6 +58,18 @@ func run(args []string, stdout, stderr *os.File) error {
 	config, err := gateway.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if command == "ledger" {
+		store, err := ledger.Open(config.LedgerPath)
+		if err != nil {
+			return errors.New("cannot open ledger")
+		}
+		defer store.Close()
+		rows, err := store.Recent(context.Background(), 100)
+		if err != nil {
+			return errors.New("cannot read ledger")
+		}
+		return json.NewEncoder(stdout).Encode(rows)
 	}
 	resolved, err := config.ResolveCredentials(context.Background(), gateway.MacOSKeychain{})
 	if err != nil {
@@ -112,6 +129,7 @@ func serve(config gateway.Config, stdout *os.File) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
+			server.Close()
 			return fmt.Errorf("shutdown after %s: %w", signal, err)
 		}
 		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {

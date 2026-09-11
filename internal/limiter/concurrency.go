@@ -32,17 +32,28 @@ func (g *ConcurrencyGate) Acquire(ctx context.Context) (Admission, error) {
 	if g == nil {
 		return Admission{}, errors.New("concurrency gate is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return Admission{}, err
+	}
 	select {
 	case g.slots <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			g.Release()
+			return Admission{}, err
+		}
 		return Admission{}, nil
 	default:
 	}
 	started := time.Now()
 	select {
 	case g.slots <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			g.Release()
+			return Admission{}, err
+		}
 		return Admission{Queued: true, QueueWait: time.Since(started)}, nil
 	case <-ctx.Done():
-		return Admission{}, ctx.Err()
+		return Admission{Queued: true, QueueWait: time.Since(started)}, ctx.Err()
 	}
 }
 

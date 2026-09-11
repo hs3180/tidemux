@@ -16,7 +16,7 @@ or vulnerability details in public issues.
 - Requests are sent to the configured upstream. No telemetry or diagnostic
   upload feature is implemented.
 
-The candidate has known correctness gaps documented in
+The candidate scope and pending live verification are documented in
 [acceptance status](docs/mvp-acceptance.md). There are no published binaries,
 verified Homebrew assets, or promised response-time guarantees yet.
 
