@@ -4,7 +4,7 @@ A macOS local gateway for user-configured **OpenAI-compatible or
 Anthropic-compatible APIs**. Explicit concurrency, a SQLite audit ledger,
 Keychain credentials, and safe errors in one Go binary.
 
-**Current source candidate: 0.1.0-rc.2.** Both protocol implementations pass local
+**Current source candidate: 0.1.0-rc.3.** Both protocol implementations pass local
 mock and process tests. Live-provider reconciliation and public GitHub/Homebrew
 installation have not been verified; this is not a released 0.1.0.
 
@@ -17,7 +17,11 @@ CGO_ENABLED=0 go build -o tidemux ./cmd/tidemux
 ./tidemux version
 ```
 
-Follow the [demo](docs/demo.md) for Keychain setup, configuration and your first
+For DeepSeek Flash, run `./tidemux configure --preset deepseek`, paste your API
+key at the hidden prompt, then run `./tidemux serve`. No manual Keychain work is
+needed. See the [configuration guide](docs/configure.md).
+
+Follow the [demo](docs/demo.md) for configuration and your first
 request. Choose [OpenAI](examples/openai.json) or
 [Anthropic](examples/anthropic.json), supplying your API root and model.
 The built arm64 candidate is tested on macOS 15.7.4; other platforms are unverified.
@@ -29,7 +33,8 @@ The built arm64 candidate is tested on macOS 15.7.4; other platforms are unverif
 - Explicit in-flight concurrency cap and cancelable waiting; no automatic retries.
 - Atomic terminal request/event records, including failures and cancellation.
 - Nullable usage/cost, explicit per-model pricing snapshots and currency.
-- `serve`, `doctor`, `ledger` (recent records), and `version` commands.
+- `configure` (hidden key input and automatic Keychain setup), `serve`, `doctor`,
+  `ledger` (recent records), and `version` commands.
 
 See the [exact protocol subset](docs/protocols.md). Multi-upstream routing,
 fallback, protocol conversion, streaming, tools, UI and automatic tuning are out

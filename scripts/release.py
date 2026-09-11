@@ -21,6 +21,7 @@ def main():
         for name in ['LICENSE','NOTICE','README.md','PRIVACY.md','SECURITY.md','THIRD_PARTY_NOTICES.md','CHANGELOG.md','SBOM.md','tidemux.example.json']:
             shutil.copyfile(ROOT/name,stage/name)
         for name in ['docs','examples','licenses']:shutil.copytree(ROOT/name,stage/name)
+        (stage/'scripts').mkdir();shutil.copyfile(ROOT/'scripts/verify_live.py',stage/'scripts/verify_live.py')
         info=run('go','version','-m',str(binary));(stage/'BUILD.txt').write_text(f'commit: {commit}\n'+info+'\n')
         timestamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         rootid='SPDXRef-TideMux'
@@ -50,7 +51,7 @@ def main():
 
   def install
     bin.install "tidemux"
-    pkgshare.install "tidemux.example.json", "examples", "docs", "licenses", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
+    pkgshare.install "tidemux.example.json", "examples", "docs", "licenses", "scripts", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
   end
 
   test do

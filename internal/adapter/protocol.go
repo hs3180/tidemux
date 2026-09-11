@@ -70,7 +70,12 @@ type Message struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
 }
+type Thinking struct {
+	Type string `json:"type"`
+}
+
 type Input struct {
+	Thinking            *Thinking       `json:"thinking,omitempty"`
 	Model               string          `json:"model"`
 	Messages            []Message       `json:"messages"`
 	Stream              bool            `json:"stream,omitempty"`
@@ -112,6 +117,9 @@ func Request(protocol string, data []byte, defaultModel string) ([]byte, string,
 	}
 	if strings.TrimSpace(in.Model) == "" {
 		return nil, "", errors.New("model")
+	}
+	if in.Thinking != nil && in.Thinking.Type != "disabled" {
+		return nil, "", errors.New("thinking")
 	}
 	if in.Stream {
 		return nil, "", errors.New("stream")

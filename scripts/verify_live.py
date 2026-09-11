@@ -5,7 +5,7 @@ Never prints/saves credentials or prompt/response bodies. Writes sanitized evide
 import argparse, datetime, json, pathlib, sqlite3, subprocess, urllib.request
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--config',required=True);ap.add_argument('--output',required=True);ap.add_argument('--openai-token-limit-field',choices=['max_tokens','max_completion_tokens'],default='max_tokens');args=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--config',required=True);ap.add_argument('--disable-thinking',action='store_true');ap.add_argument('--output',required=True);ap.add_argument('--openai-token-limit-field',choices=['max_tokens','max_completion_tokens'],default='max_tokens');args=ap.parse_args()
     c=json.loads(pathlib.Path(args.config).read_text());protocol=c['protocol']
     if protocol not in ('openai','anthropic'):raise SystemExit('Unsupported protocol')
     ref=c['access_token_keychain']
@@ -15,6 +15,7 @@ def main():
     body={'model':c['model'],'messages':[{'role':'user','content':'Reply with OK.'}]}
     if protocol=='anthropic':body['max_tokens']=16
     else:body[args.openai_token_limit_field]=16
+    if args.disable_thinking:body['thinking']={'type':'disabled'}
     endpoint='/v1/messages' if protocol=='anthropic' else '/v1/chat/completions'
     request=urllib.request.Request('http://'+c['listen_addr']+endpoint,json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+token})
     try:

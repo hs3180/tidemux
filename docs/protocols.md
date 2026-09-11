@@ -1,4 +1,4 @@
-# Protocol support — 0.1.0-rc.2
+# Protocol support — 0.1.0-rc.3
 
 One configured API root per process. No provider/model whitelist or protocol
 conversion. This table defines the supported text subset, not all vendor APIs.
@@ -18,7 +18,11 @@ conversion. This table defines the supported text subset, not all vendor APIs.
 | Error output | OpenAI-style error object | Anthropic-style type=error envelope |
 | Usage | prompt/completion, cached detail or DeepSeek hit/miss | input/output plus cache read/creation |
 
-Text blocks have only `type: "text"` and `text`. Provider-specific fields,
+An optional `thinking: {"type":"disabled"}` is forwarded exactly when explicitly
+provided; this supports DeepSeek Flash and compatible Anthropic endpoints. It is
+not automatically added for official OpenAI endpoints. Enabled thinking is rejected.
+
+Text blocks have only `type: "text"` and `text`. Other provider-specific fields,
 images, tools, streaming, Responses API, batches and embeddings are rejected or
 unavailable. Models can impose stricter limits than this gateway; their errors
 return a safe upstream-error code without raw provider detail. No client brand
@@ -39,3 +43,8 @@ Implementation references, checked 2026-09-11:
 
 - [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 - [Anthropic Messages](https://platform.claude.com/docs/en/api/http/messages/create)
+
+DeepSeek-specific compatibility references:
+
+- [Anthropic format](https://api-docs.deepseek.com/guides/anthropic_api/)
+- [Thinking toggle](https://api-docs.deepseek.com/guides/thinking_mode/)

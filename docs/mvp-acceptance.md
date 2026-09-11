@@ -1,4 +1,4 @@
-# Candidate acceptance — 0.1.0-rc.2
+# Candidate acceptance — 0.1.0-rc.3
 
 ## Locally verified
 
@@ -12,6 +12,8 @@
   cancellation are not recorded as successful. Audit failure is surfaced safely.
 - Unknown usage and price remain null; cached-token arithmetic and explicit
   model pricing are tested without assuming a provider's current prices.
+- Interactive configure: PTY confirms hidden API key input and no plaintext config;
+  rollback is tested. Real isolated Keychain writes/read-back preserve existing items.
 - Built CLI process tests for both protocols, temporary Keychain double,
   HTTP request, ledger usage/cost query and clean shutdown.
 - `CGO_ENABLED=0 go test ./...`, `go vet ./...`, and `go test -race ./...` pass on

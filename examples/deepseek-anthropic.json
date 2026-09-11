@@ -1,0 +1,18 @@
+{
+  "listen_addr": "127.0.0.1:8787",
+  "protocol": "anthropic",
+  "base_url": "https://api.deepseek.com/anthropic/v1",
+  "model": "deepseek-flash",
+  "upstream_id": "deepseek-anthropic",
+  "upstream_keychain": {
+    "service": "com.tidemux.deepseek",
+    "account": "default"
+  },
+  "access_token_keychain": {
+    "service": "com.tidemux.gateway",
+    "account": "default"
+  },
+  "max_in_flight": 1,
+  "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db",
+  "anthropic_version": "2023-06-01"
+}

@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,22 @@ func TestStrictRequests(t *testing.T) {
 	for _, body := range []string{`{"model":"m","model":"x","messages":[]}`, `{} {}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[]}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`} {
 		if _, _, err := Request("openai", []byte(body), "m"); err == nil {
 			t.Fatalf("accepted %s", body)
+		}
+	}
+}
+
+func TestExplicitThinkingDisable(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		body := []byte(`{"model":"deepseek-flash","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"thinking":{"type":"disabled"}}`)
+		encoded, _, err := Request(protocol, body, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), `"thinking":{"type":"disabled"}`) {
+			t.Fatal("explicit setting lost")
+		}
+		if _, _, err = Request(protocol, []byte(strings.Replace(string(body), "disabled", "enabled", 1)), ""); err == nil {
+			t.Fatal("unsupported thinking accepted")
 		}
 	}
 }

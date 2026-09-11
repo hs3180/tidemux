@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-rc.3 — 2026-09-11
+
+- `configure` CLI with a DeepSeek Flash preset, generic endpoint/model options,
+  hidden terminal key entry, generated local credentials, Keychain verification,
+  private config files and rollback on setup failure. Default config path supports
+  `serve` / `doctor` / `ledger` without repeated flags.
+- Onboarding PTY tests and an opt-in real isolated Keychain test.
+
+- Accept explicit `thinking: {"type":"disabled"}` for non-thinking text
+  calls on compatible endpoints such as `deepseek-flash`; enabling thinking
+  remains outside this text-only subset. Added a live-helper flag and regression.
+- GitHub publication is deferred by the maintainer; candidates remain local
+  until real endpoint verification is available.
+
 ## 0.1.0-rc.2 — 2026-09-11
 
 Local candidate, not a public 0.1.0 release.

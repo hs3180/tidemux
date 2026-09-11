@@ -1,7 +1,7 @@
 # Local demo
 
 Requires macOS, Keychain Access and a non-streaming text-capable OpenAI or
-Anthropic compatible endpoint. The source candidate is `0.1.0-rc.2`.
+Anthropic compatible endpoint. The source candidate is `0.1.0-rc.3`.
 
 ## Build or extract
 
@@ -17,7 +17,21 @@ Alternatively extract the candidate archive and run its `tidemux` binary.
 The arm64 candidate has been tested on macOS 15.7.4; other OS versions are not
 verified. No public download or Homebrew installation is claimed yet.
 
-## Credentials and configuration
+## Recommended: configure with the CLI
+
+```sh
+./tidemux configure --preset deepseek
+./tidemux doctor
+./tidemux serve
+```
+
+Paste your DeepSeek API key at the hidden prompt and press Enter. The CLI creates
+the application directory, stores both secrets in Keychain, writes a private JSON
+config, and verifies local readiness. It does not send a billable request.
+See [configuration guide](configure.md) for other providers, Anthropic mode,
+reconfiguration and unlocking a locked login keychain.
+
+## Manual configuration (optional)
 
 In Keychain Access create two generic-password items:
 
@@ -102,6 +116,8 @@ one minimal request, run from the source root:
 python3 scripts/verify_live.py --config ./tidemux.json --output /tmp/tidemux-live-openai.json
 ```
 
+For `deepseek-flash`, add `--disable-thinking`. For models requiring
+`max_completion_tokens`, add `--openai-token-limit-field max_completion_tokens`.
 Use a separate Anthropic config/evidence file for the other protocol. The helper
 reads the local token into memory, makes one request, and checks response usage
 against the persisted record and recomputes cost. It does not print/save the

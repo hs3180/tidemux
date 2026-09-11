@@ -10,7 +10,8 @@ Exact versions are pinned by go.mod/go.sum. Original notices are included verbat
 | `github.com/mattn/go-isatty` | `v0.0.20` | MIT | [notices](licenses/github.com_mattn_go-isatty/) |
 | `github.com/ncruces/go-strftime` | `v1.0.0` | MIT | [notices](licenses/github.com_ncruces_go-strftime/) |
 | `github.com/remyoudompheng/bigfft` | `v0.0.0-20230129092748-24d4a6f8daec` | BSD-3-Clause | [notices](licenses/github.com_remyoudompheng_bigfft/) |
-| `golang.org/x/sys` | `v0.42.0` | BSD-3-Clause | [notices](licenses/golang.org_x_sys/) |
+| `golang.org/x/sys` | `v0.48.0` | BSD-3-Clause | [notices](licenses/golang.org_x_sys/) |
+| `golang.org/x/term` | `v0.46.0` | BSD-3-Clause | [notices](licenses/golang.org_x_term/) |
 | `modernc.org/libc` | `v1.70.0` | BSD-3-Clause | [notices](licenses/modernc.org_libc/) |
 | `modernc.org/mathutil` | `v1.7.1` | BSD-3-Clause | [notices](licenses/modernc.org_mathutil/) |
 | `modernc.org/memory` | `v1.11.0` | BSD-3-Clause | [notices](licenses/modernc.org_memory/) |

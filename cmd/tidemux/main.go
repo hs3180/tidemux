@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	version = "0.1.0-rc.2"
-	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux version\n"
+	version = "0.1.0-rc.3"
+	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux version\n"
 )
 
 func main() {
@@ -36,6 +36,9 @@ func run(args []string, stdout, stderr *os.File) error {
 		return errors.New(usage)
 	}
 	command := args[0]
+	if command == "configure" {
+		return configure(args[1:], stdout, stderr)
+	}
 	if command == "version" {
 		if len(args) != 1 {
 			return errors.New(usage)
@@ -48,7 +51,7 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	configPath := flags.String("config", "", "path to JSON config containing Keychain references")
+	configPath := flags.String("config", defaultConfigPath(), "path to JSON config containing Keychain references")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
