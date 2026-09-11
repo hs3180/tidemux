@@ -113,7 +113,7 @@ is `null`. The helper can report successful usage reconciliation but stop at
 unknown cost. See [pricing and live verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.
 
-## Request limits (development source)
+## Request limits (0.1.0)
 
 Existing 0.1.0 configurations remain valid. An optional `limits` object adjusts
 bounds for longer client sessions:
@@ -139,7 +139,7 @@ An upstream timeout before streaming returns 504 `upstream_timeout`; after
 streaming starts it emits a safe SSE error. The attempt is recorded as an error
 with unknown usage/cost, rather than a successful response or user cancellation.
 
-## Local rejection diagnostics (development source)
+## Local rejection diagnostics (0.1.0)
 
 ```sh
 ./tidemux ledger --diagnostics --config /path/to/config.json
@@ -158,7 +158,7 @@ writing a local diagnostic fails, the response is 500 `local_diagnostic_failed`
 with the generated ID; no upstream call was made. The new table is additive and
 does not modify existing 0.1.0 request records.
 
-## Declared model limits (development source)
+## Declared model limits (0.1.0)
 
 Use `configure --context-tokens <n> --output-tokens <n>` when you have verified
 these values with your provider, or set:

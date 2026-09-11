@@ -2,18 +2,17 @@
 
 ## Local repair status
 
-The source now includes dual-protocol streaming, tools, client launchers,
-configurable limits, model discovery and local diagnostics. Real file read/edit/
-test workflows pass for Claude, Kilo CLI, Kilo VS Code and Hermes, including
-launcher-based continuation. The IDE launcher also survives a full application
-restart. See [client acceptance](client-compatibility.md) for boundaries.
+The local 0.1.0 release includes dual-protocol streaming, tools, CLI launchers,
+configurable limits, model discovery and local diagnostics. Claude Code, Kilo CLI
+and Hermes passed installed file read/edit/test workflows and continuation in a
+new client process. See [client acceptance](client-compatibility.md) for tested
+versions and protocol boundaries. VS Code extension compatibility is out of scope.
 
-The original installed build and evidence below remain a historical baseline.
-The repair separately passed package checksums/SBOM, Homebrew install/rollback,
-and installed CLI read/edit/test/continuation plus usage/price reconciliation.
-Remaining IDE verification is temporarily deferred by the maintainer, so full
-IDE acceptance is not claimed. Repair assets retain version 0.1.0 and use a
-separate commit/build suffix and hash.
+Package checksums/SBOM, Homebrew install/rollback, configuration/data compatibility,
+and installed CLI usage/price reconciliation passed. Final documentation changes
+do not alter the tested runtime. Assets retain version 0.1.0 and use a commit/build
+suffix and hash; BUILD.txt identifies the exact source. The original text-only
+build remains archived as a historical baseline.
 
 ## Original installed baseline: locally verified
 
@@ -44,8 +43,9 @@ explicit USD price arithmetic reconciled. Real credentials stayed in Keychain;
 private evidence contains no full message bodies or keys.
 
 This establishes these two DeepSeek-compatible paths, not every provider or
-model. Version 0.1.0 changes only the version marker and release documentation
-relative to the live-tested runtime.
+model. That original text-only build changed only the version marker and release
+documentation relative to rc.4. The repaired CLI release has separate installed
+workflow evidence described above.
 
 ## Deferred public distribution
 

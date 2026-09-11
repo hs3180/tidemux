@@ -9,12 +9,10 @@ it from the original text-only local release.
 | Claude Code 2.1.263 | Passed | Passed | CLI verified |
 | Kilo CLI 7.6.2 | Passed | Passed | CLI verified |
 | Hermes Agent 0.21.1 | Passed | Passed | CLI verified |
-| Kilo VS Code extension 7.6.2 | Development build passed | Development window reload and full restart passed | Remaining verification deferred |
 
-The maintainer temporarily deferred further VS Code verification. Its installed
-workflow, fault and price checks remain unverified; this is not a claim of full
-IDE compatibility. The `connect kilo-ide` implementation and existing successful
-development evidence are retained for later acceptance.
+VS Code extension compatibility is outside the 0.1.0 release scope. Existing
+experimental code and historical development evidence are retained, without
+a pending IDE acceptance requirement.
 
 ## Verified CLI behavior
 

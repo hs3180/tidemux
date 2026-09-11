@@ -1,7 +1,7 @@
 # Protocol support — 0.1.0 repair
 
 The original 0.1.0 supported text/non-streaming requests. The locally installed
-repair extends that release as below. Remaining VS Code verification is deferred.
+repair extends that release as below. Release acceptance covers three CLIs.
 Each process uses one configured upstream protocol/root. No provider/model
 whitelist or cross-protocol conversion is applied.
 

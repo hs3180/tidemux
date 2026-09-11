@@ -1,20 +1,21 @@
 # Changelog
 
-## 0.1.0 local repair — 2026-09-11
+## 0.1.0 — 2026-09-12 (final local CLI release)
 
 - Dual-protocol SSE, tool calls/results, reasoning and cache fields; explicit
   parameter validation, safe upstream errors and selected Anthropic beta headers.
 - Authenticated model discovery and declared model limits, configurable request
   and streaming limits, separate local diagnostics and accurate unknown usage.
-- `connect claude|kilo|kilo-ide|hermes` with Keychain handoff, persistent isolated
-  profiles and Hermes Chat Completions routing; IDE restart and duplicate-launch
-  handling. `configure --replace` preserves a private original config backup.
-- Real DeepSeek agent workflows pass for all three CLIs and the Kilo VS Code
-  extension. Package/install/rollback and installed CLI acceptance passed. Remaining IDE
-  verification is temporarily deferred by the maintainer; full IDE compatibility
-  is not claimed. GitHub publication remains deferred.
-- Same-version repair builds use a commit/build suffix for immutable local
-  artifacts. The application version stays 0.1.0; previous assets are preserved.
+- `connect claude|kilo|hermes` with Keychain handoff, persistent isolated profiles
+  and Hermes Chat Completions routing. `configure --replace` preserves a private
+  original config backup.
+- All three CLIs passed installed DeepSeek read/edit/test/continuation and usage/
+  price checks. Package/install/rollback and protocol/fault regression passed.
+- VS Code compatibility is excluded from release scope; the experimental
+  `connect kilo-ide` implementation and historical evidence are retained.
+- Application version remains 0.1.0. Final assets use an immutable commit suffix;
+  the original unpublished tag is archived before the final local tag is assigned.
+  GitHub publication remains deferred.
 
 ## 0.1.0 — 2026-09-11 (local release)
 

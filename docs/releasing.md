@@ -2,8 +2,8 @@
 
 The local 0.1.0 release passed live-provider verification. Public distribution requires the [acceptance conditions](mvp-acceptance.md), including
 live validation of both protocols. Candidate artifacts do not imply those gates
-passed. Release and tap permissions are required; never replace an existing tag
-or version's assets.
+passed. Release and tap permissions are required; never replace a published tag
+or published version's assets.
 
 ## Prepare and build
 
@@ -25,8 +25,10 @@ application version and run `python3 scripts/release.py --build-id` to create
 `--build-id repair-N` is also supported. BUILD.txt records both commit and build
 ID; compare binary SHA256 rather than version text when installing a same-version
 repair. An existing output directory is refused, and failed builds do not publish
-a partial final directory. Original tags and assets remain untouched until the
-repair has completed all gates. Never replace already public assets.
+a partial final directory. For the final unpublished 0.1.0 freeze, preserve the original tag object under
+`archive/v0.1.0-text-only` before assigning `v0.1.0` to the final reviewed commit.
+Original asset directories remain unchanged. This local archival step does not
+authorize replacing any published tag or asset.
 
 The script packages but never publishes. CI uploads candidate workflow artifacts
 only, not GitHub Releases.

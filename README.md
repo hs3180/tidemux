@@ -7,26 +7,24 @@ Keychain credentials, and safe errors in one Go binary.
 **Local version: 0.1.0.** The repair is installed and verified with real
 DeepSeek `deepseek-flash` workflows in Claude Code, Kilo CLI and Hermes.
 Package checksums, SBOM, Homebrew install/rollback and CLI usage/price
-reconciliation passed. Remaining VS Code verification is temporarily deferred
-by the maintainer; full IDE compatibility is not claimed. GitHub publication
+reconciliation passed. Release acceptance covers the three CLIs; VS Code
+extension compatibility is outside the 0.1.0 scope. GitHub publication
 remains deferred. Other compatible services remain untested.
 
 ## Featured clients
 
-TideMux's client examples will focus on **Claude Code, Kilo Code, and Hermes
-Agent**, covering terminal coding, IDE workflows, and general agent automation.
+TideMux provides CLI examples for **Claude Code, Kilo CLI, and Hermes Agent**,
+covering terminal coding and agent automation.
 
 | Client | TideMux connection | Client documentation |
 | --- | --- | --- |
 | Claude Code | Anthropic-compatible Messages gateway | [LLM gateway configuration](https://code.claude.com/docs/en/llm-gateway) |
-| Kilo Code | OpenAI-compatible custom provider | [AI providers](https://kilo.ai/docs/ai-providers) |
+| Kilo CLI | OpenAI-compatible custom provider | [AI providers](https://kilo.ai/docs/ai-providers) |
 | Hermes Agent | OpenAI-compatible custom endpoint | [AI providers](https://hermes-agent.nousresearch.com/docs/integrations/providers/) |
 
 **Integration status:** all three CLI launchers passed Keychain handoff,
 model discovery, streaming, file reading/editing, test execution and persistent
-conversation checks through the installed repair. Kilo VS Code passed the
-normal workflow and restart checks in a development build; installed IDE,
-fault and pricing checks are deferred. See [client setup](docs/clients.md) and
+conversation checks through the installed release. See [client setup](docs/clients.md) and
 [compatibility](docs/client-compatibility.md). Each TideMux process uses one
 upstream protocol; it does not convert between OpenAI and Anthropic formats.
 
@@ -44,9 +42,9 @@ key at the hidden prompt, then run `./tidemux serve`. No manual Keychain work is
 needed. If locked, the system asks for your keychain password in the same
 terminal, then setup continues. See the [configuration guide](docs/configure.md).
 
-With the gateway running, use `./tidemux connect kilo-ide -- /path/to/project`
-for the Kilo VS Code extension, or `connect kilo` / `connect hermes` for their
-CLIs. Claude uses `connect claude` with a separate Anthropic profile. See
+With the gateway running, use `./tidemux connect kilo` or
+`./tidemux connect hermes`. Claude uses `./tidemux connect claude` with a
+separate Anthropic profile. See
 [client setup](docs/clients.md) for prerequisites and complete commands.
 
 Follow the [demo](docs/demo.md) for configuration and your first
@@ -56,14 +54,13 @@ The built arm64 candidate is tested on macOS 15.7.4; other platforms are unverif
 
 ## What it does
 
-- Chat Completions or Messages, including streaming and tool messages in the
-  development source, with a configurable API root.
+- Chat Completions or Messages, including streaming and tool messages, with a configurable API root.
 - Loopback listener, independent local authentication, macOS Keychain references.
 - Explicit in-flight concurrency cap and cancelable waiting; no automatic retries.
 - Atomic terminal request/event records, including failures and cancellation.
 - Nullable usage/cost, explicit per-model pricing snapshots and currency.
 - `configure` (hidden key input and automatic Keychain setup), `serve`, `doctor`,
-  `ledger` (upstream records or local diagnostics), `connect` (development client
+  `ledger` (upstream records or local diagnostics), `connect` (CLI client
   launcher), and `version` commands.
 
 See the [exact protocol subset](docs/protocols.md). Multi-upstream routing,

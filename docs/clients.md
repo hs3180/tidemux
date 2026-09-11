@@ -2,8 +2,8 @@
 
 The repaired local 0.1.0 includes `connect`; the original pre-repair binary does
 not. Check build/hash when distinguishing these same-version packages. CLI
-workflows have passed installed acceptance. Remaining VS Code verification is
-temporarily deferred by the maintainer.
+workflows have passed installed acceptance. VS Code extension compatibility is
+outside the 0.1.0 release scope.
 Each gateway process uses one protocol and one profile. Start `serve` before
 launching a client. `connect` checks authenticated model discovery, reads only the
 local gateway credential from Keychain, and passes it in the child environment.
@@ -72,44 +72,7 @@ TideMux does not read that password. Lookup is retried after the check; a missin
 credential still requires `configure`. Without a controlling terminal, the error
 explains how to retry interactively.
 
-## Kilo VS Code extension
-
-Install VS Code and the official `kilocode.kilo-code` extension first. With the
-OpenAI gateway running, launch the project using the development binary:
-
-```sh
-./tidemux connect kilo-ide -- /absolute/path/to/project
-```
-
-If `code` is not on PATH:
-
-```sh
-./tidemux connect kilo-ide \
-  --executable "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" \
-  -- /absolute/path/to/project
-```
-
-Use `--extensions-dir /path/to/installed/extensions` before `--` only for a
-nondefault extension installation. After `--`, supply one existing directory;
-omitting it opens the current directory. Open **Kilo Code: Open in Tab** in VS
-Code and verify the configured model. Complete Kilo's first-run workflow and
-choose your preferred tool approval behavior. A Kilo cloud login is not needed
-for this custom provider. Trust only the project you intend the extension to run.
-
-The launcher checks authenticated model discovery and passes only the local
-gateway credential in the child environment. It uses the same trusted Kilo
-configuration and permission preservation as the CLI. IDE state is stored in
-`~/.tidemux/ide/<config-path-hash>/`, including its own XDG directories and VS Code
-user data. This shorter location avoids long macOS IPC socket paths when the
-gateway configuration is deeply nested. It does not overwrite your ordinary VS
-Code profile; VS Code may still share its application-wide trust metadata.
-
-The terminal waits for the dedicated window to close. Before reconnecting with
-changed credentials or model settings, quit that dedicated VS Code instance:
-an existing process cannot acquire newly supplied environment variables. A
-concurrent launcher or still-running dedicated instance is rejected with a
-specific explanation. A normal window reload keeps the current connection and
-conversation. Do not put keys in workspace files or shell arguments.
+## Provider compatibility
 
 The tested DeepSeek Anthropic-compatible endpoint accepts Claude's system-role
 messages within the message list. TideMux preserves those messages and their
@@ -118,3 +81,8 @@ extension; standard Anthropic endpoints may reject it. TideMux does not silently
 change system messages into user messages or relocate them. Parameter acceptance
 alone does not establish that an upstream implements every thinking or context
 management behavior; those capabilities depend on the chosen provider/model.
+
+## Experimental implementation
+
+The existing `connect kilo-ide` command is retained as experimental code. VS Code
+extension compatibility is not part of 0.1.0 acceptance or a pending release gate.
