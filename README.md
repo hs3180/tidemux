@@ -4,9 +4,11 @@ A macOS local gateway for user-configured **OpenAI-compatible or
 Anthropic-compatible APIs**. Explicit concurrency, a SQLite audit ledger,
 Keychain credentials, and safe errors in one Go binary.
 
-**Current source candidate: 0.1.0-rc.4.** Both protocol implementations pass local
-mock and process tests. Live-provider reconciliation and public GitHub/Homebrew
-installation have not been verified; this is not a released 0.1.0.
+**Local release: 0.1.0.** OpenAI and Anthropic protocol calls were verified against
+DeepSeek `deepseek-flash`, including usage and estimated-cost reconciliation.
+Source, packaged binary, interactive unlock/configure and local Homebrew checks
+pass. GitHub publication is deferred; no public download or clean-machine
+installation is claimed. Other compatible services remain untested.
 
 ## Try locally
 

@@ -1,4 +1,4 @@
-# Candidate acceptance — 0.1.0-rc.4
+# Local release acceptance — 0.1.0
 
 ## Locally verified
 
@@ -20,15 +20,22 @@
 - `CGO_ENABLED=0 go test ./...`, `go vet ./...`, and `go test -race ./...` pass on
   Go 1.27.1 / macOS 15.7.4 arm64.
 
-## Still required for public 0.1.0
+## Live-provider verification
 
-- Real Keychain entries and one authorized live call for each protocol, with
-  usage and price arithmetic reconciled and sanitized evidence retained.
-- Authenticated GitHub repository and release publication; verified private
-  security/community report channel.
-- The generated artifact's Homebrew formula installed and exercised on a clean
-  macOS machine with a real configured endpoint. Local extraction/mock testing
-  does not establish this result.
+On 2026-09-11, the unchanged runtime code from rc.4 completed one authorized
+non-thinking request per protocol against DeepSeek `deepseek-flash`. Each returned
+8 input tokens and 1 output token; matching audit IDs, normalized usage and
+explicit USD price arithmetic reconciled. Real credentials stayed in Keychain;
+private evidence contains no full message bodies or keys.
 
-The source candidate is deliberately not relabeled 0.1.0 until these conditions
-are met. [Release procedure](releasing.md) specifies the remaining steps.
+This establishes these two DeepSeek-compatible paths, not every provider or
+model. Version 0.1.0 changes only the version marker and release documentation
+relative to the live-tested runtime.
+
+## Deferred public distribution
+
+GitHub publication is deferred by the maintainer. A verified private
+security/community reporting channel and clean-machine public tap installation
+remain prerequisites for public distribution. Local source builds, archive
+extraction and local-tap installation are verified on macOS 15.7.4 arm64.
+See the [release procedure](releasing.md).

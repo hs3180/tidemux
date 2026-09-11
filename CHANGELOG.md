@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0 — 2026-09-11 (local release)
+
+- Freeze the dual-protocol local MVP with interactive system Keychain unlock,
+  secure configure, concurrency control, atomic audit and explicit pricing.
+- Real `deepseek-flash` calls succeeded through both OpenAI and Anthropic paths;
+  response usage and ledger/cost arithmetic reconciled. Runtime code is unchanged
+  from the live-tested rc.4; only version and release documentation changed.
+- Local binary, checksums, SBOM and Homebrew assets prepared. GitHub publication
+  remains deferred; other providers and clean-machine public installation unverified.
+
 ## 0.1.0-rc.4 — 2026-09-11
 
 - `configure` automatically starts the system keychain unlock password prompt

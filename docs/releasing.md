@@ -1,6 +1,6 @@
 # Release procedure
 
-Public 0.1.0 requires the [acceptance conditions](mvp-acceptance.md), including
+The local 0.1.0 release passed live-provider verification. Public distribution requires the [acceptance conditions](mvp-acceptance.md), including
 live validation of both protocols. Candidate artifacts do not imply those gates
 passed. Release and tap permissions are required; never replace an existing tag
 or version's assets.

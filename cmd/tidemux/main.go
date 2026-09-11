@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	version = "0.1.0-rc.4"
+	version = "0.1.0"
 	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux version\n"
 )
 

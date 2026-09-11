@@ -1,7 +1,7 @@
 # Local demo
 
 Requires macOS, Keychain Access and a non-streaming text-capable OpenAI or
-Anthropic compatible endpoint. The source candidate is `0.1.0-rc.4`.
+Anthropic compatible endpoint. The local release is `0.1.0`.
 
 ## Build or extract
 
@@ -14,7 +14,7 @@ mkdir -p "$HOME/Library/Application Support/TideMux"
 ```
 
 Alternatively extract the candidate archive and run its `tidemux` binary.
-The arm64 candidate has been tested on macOS 15.7.4; other OS versions are not
+The arm64 local release has been tested on macOS 15.7.4; other OS versions are not
 verified. No public download or Homebrew installation is claimed yet.
 
 ## Recommended: configure with the CLI
