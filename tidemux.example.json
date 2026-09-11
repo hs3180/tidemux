@@ -1,0 +1,7 @@
+{
+  "listen_addr": "127.0.0.1:8787",
+  "deepseek_keychain": {"service": "com.tidemux.deepseek", "account": "default"},
+  "access_token_keychain": {"service": "com.tidemux.gateway", "account": "default"},
+  "max_in_flight": 1,
+  "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db"
+}

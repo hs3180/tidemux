@@ -1,0 +1,26 @@
+# Binaries / build
+/tidemux
+/dist/
+*.exe
+*.test
+
+# Go vendor
+/vendor/
+
+# Local runtime (keys never persisted here; ledger is in user data dir)
+*.db
+*.db-wal
+*.db-shm
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+# Credentials, local configuration and generated artifacts
+/tidemux.json
+/config*.json
+.env
+.env.*
+*.key
+*.pem
+/coverage*
