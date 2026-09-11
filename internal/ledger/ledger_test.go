@@ -29,7 +29,7 @@ func TestAppendRequestAndEvent(t *testing.T) {
 	if id != 1 {
 		t.Fatalf("request ID = %d, want 1", id)
 	}
-	if _, err := l.AppendEvent(context.Background(), Event{TimestampMS: 1757300000001, Type: "queue_wait", RequestID: &id, Reason: "并发上限，已排队"}); err != nil {
+	if _, err := l.AppendEvent(context.Background(), Event{TimestampMS: 1757300000001, Type: "queue_wait", RequestID: &id, Reason: "Concurrency limit reached; request queued"}); err != nil {
 		t.Fatal(err)
 	}
 

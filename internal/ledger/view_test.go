@@ -32,10 +32,10 @@ func TestSummarizeDerivesWindowMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.AppendEvent(context.Background(), Event{TimestampMS: 110, Type: "queue_wait", RequestID: &errorID, Reason: "并发上限"}); err != nil {
+	if _, err := l.AppendEvent(context.Background(), Event{TimestampMS: 110, Type: "queue_wait", RequestID: &errorID, Reason: "Concurrency limit reached"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.AppendEvent(context.Background(), Event{TimestampMS: 120, Type: "rate_limit_429", RequestID: &errorID, Reason: "上游限流"}); err != nil {
+	if _, err := l.AppendEvent(context.Background(), Event{TimestampMS: 120, Type: "rate_limit_429", RequestID: &errorID, Reason: "Upstream rate limit reached"}); err != nil {
 		t.Fatal(err)
 	}
 

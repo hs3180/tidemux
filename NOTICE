@@ -2,7 +2,7 @@
 
 TideMux
 
-**TideMux** is a local-first multi-provider coding-plan scheduler for macOS.
+**TideMux** is a local macOS gateway for OpenAI-compatible and Anthropic-compatible APIs.
 Copyright © 2026 TideMux contributors.
 
 This product includes software developed by the TideMux project
@@ -23,7 +23,7 @@ re-brand, re-sell, or pass off the assets as your own. See Section 6
 
 ## Privacy
 
-TideMux is Local first: no telemetry, no sign-up, no accounts. Keys are
+TideMux runs locally, with no telemetry, sign-up or hosted accounts. Keys are
 stored in the macOS Keychain. See PRIVACY.md for the full policy.
 
 ## Legal review note

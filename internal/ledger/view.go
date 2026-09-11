@@ -5,9 +5,9 @@ import (
 	"fmt"
 )
 
-// Summary is a read-only, derived view over the append-only ledger. Costs and
-// ratios are calculated from ledger_requests; no snapshot or second source of
-// truth is persisted.
+// Summary is a read-only view of the legacy ledger_requests table. It does not
+// include current request_audit traffic. Its fixed currency reflects historical
+// records; current audits carry an explicit currency and never assume a default.
 type Summary struct {
 	RequestCount           int64
 	SuccessfulRequestCount int64

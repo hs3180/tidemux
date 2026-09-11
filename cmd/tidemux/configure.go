@@ -237,7 +237,7 @@ func unlockKeychainIfNeeded(ctx context.Context, tty *os.File) error {
 	if _, err := exec.CommandContext(ctx, "security", "show-keychain-info").CombinedOutput(); err == nil {
 		return nil
 	}
-	fmt.Fprintln(tty, "登录钥匙串需要解锁。接下来由 macOS security 请求钥匙串密码（通常是 Mac 登录密码，不是 API key）；输入不会回显，按 Control-C 取消。")
+	fmt.Fprintln(tty, "Your login keychain is locked. macOS will ask for your keychain password (usually your Mac login password, not your API key). Input is hidden. Press Control-C to cancel.")
 	command := exec.CommandContext(ctx, "security", "unlock-keychain")
 	command.Stdin, command.Stdout, command.Stderr = tty, tty, tty
 	if err := command.Run(); err != nil {
@@ -246,6 +246,6 @@ func unlockKeychainIfNeeded(ctx context.Context, tty *os.File) error {
 	if _, err := exec.CommandContext(ctx, "security", "show-keychain-info").CombinedOutput(); err != nil {
 		return errors.New("keychain is still unavailable after unlock; no configuration was changed")
 	}
-	fmt.Fprintln(tty, "钥匙串已解锁，继续操作。")
+	fmt.Fprintln(tty, "Keychain unlocked. Continuing setup.")
 	return nil
 }

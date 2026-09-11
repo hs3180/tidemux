@@ -1,16 +1,26 @@
 # Contributing to TideMux
 
-Thanks for considering contributing. TideMux is built in the open, Local
-first, transparent, and explainable - please read the project's documented scope
-and privacy boundaries (README) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) first.
+Thank you for contributing to TideMux. Read the [project overview](README.md),
+privacy boundaries and [code of conduct](CODE_OF_CONDUCT.md) before you start.
+
+## Language and conventions
+
+English is the primary language for documentation, CLI output, code comments,
+tests, issue templates and pull requests. Write for an international audience:
+use plain English, explicit units and unambiguous dates such as `2026-09-12`.
+Store timestamps as Unix time and state the time zone when displaying dates.
+
+Keep providers and currencies configurable. Do not infer a user's region,
+currency or time zone from their provider or model. DeepSeek is a quick-start
+example, not a required provider. Preserve third-party names, license texts and
+historical database identifiers when needed for attribution or compatibility.
 
 ## What we look for
 
-- Bug reports and reproducible issues (over diagnoses without repro).
+- Bug reports with clear steps to reproduce the problem.
 - Focused improvements that keep the tool **simple by design** - we prefer
   solving a real, proven need over speculative features.
-- Respect for the privacy / Local-first boundary (no telemetry, no silent
-  collection).
+- Changes that respect user privacy, with no telemetry or undisclosed data collection.
 
 ## Get started
 
@@ -38,9 +48,9 @@ trade-offs.
   rather than ignoring it.
 - Be patient and kind - healthy collaboration is the goal.
 
-## Not on the table
+## Scope
 
-Per the project guardrails, TideMux does **not** pursue monetization, scale
-tactics that trade user trust, cloud control planes / multi-tenancy, or
-anything that breaks the documented privacy boundaries. Contributions should respect those
-boundaries.
+Keep contributions within the [documented product scope](README.md#compatibility).
+Cloud control planes, multi-tenancy and features that collect user data are
+outside the current release scope. Discuss substantial changes before opening
+a large pull request.

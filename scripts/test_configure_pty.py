@@ -53,6 +53,10 @@ else:sys.exit(2)
             if status is None:os.kill(pid,signal.SIGKILL);os.waitpid(pid,0);raise RuntimeError('configure timeout')
         finally:os.close(fd)
         assert secret not in captured and password not in captured, 'credential echoed'
+        if mode != 'unlocked':
+            assert b'Your login keychain is locked.' in captured, 'missing English unlock guidance'
+        if mode == 'success':
+            assert b'Keychain unlocked. Continuing setup.' in captured, 'missing English confirmation'
         if mode in ['failure','cancel']:
             assert status!=0 and not sent and not config.exists() and not db.exists(), 'failed unlock mutated configuration'
         else:

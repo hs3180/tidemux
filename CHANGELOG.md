@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0 English-language polish
+
+- Use English throughout CLI prompts and test fixtures; clarify international
+  contribution conventions and provider/currency neutrality.
+- Refresh project descriptions and distinguish the active currency-aware audit
+  ledger from historical database compatibility fields.
+
 ## 0.1.0 installation and CLI polish — 2026-09-12
 
 - Recommend Homebrew installation from `hs3180/tap`; provide a checksum-verifying

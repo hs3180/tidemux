@@ -11,9 +11,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Request is one completed request at the adapter boundary. It deliberately
-// stores the price used for that request so historical costs remain explainable
-// when a later calibration changes prices.
+// Request is the legacy request format, retained for database compatibility.
+// Its currency-specific fields describe historical data, not the active ledger.
+// New gateway requests use Audit with an explicit currency and price snapshot.
 type Request struct {
 	TimestampMS         int64
 	Kind                string
@@ -78,8 +78,8 @@ func Open(path string) (*Ledger, error) {
 func (l *Ledger) Close() error { return l.db.Close() }
 
 // QueryRow exposes read-only SQL access for derived views and diagnostics.
-// Callers must not mutate ledger tables; writes go through AppendRequest and
-// AppendEvent so validation remains centralized.
+// Callers must not mutate ledger tables. Current writes use AppendAudit or
+// AppendDiagnostic; AppendRequest and AppendEvent are legacy compatibility APIs.
 func (l *Ledger) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return l.db.QueryRowContext(ctx, query, args...)
 }

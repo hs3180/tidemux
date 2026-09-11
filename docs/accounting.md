@@ -51,6 +51,7 @@ cost = (ordinary_input × input_rate
 ```
 
 Rates are explicitly configured per model, with currency, source and version.
+There is no default currency or region-specific pricing behavior.
 The gateway's profile supplies the upstream context. Successful requests retain
 a copy of the configured price with their record, so later configuration changes
 do not rewrite history. There is no automatic price discovery, time-of-day rate
@@ -90,5 +91,6 @@ for resolving unmatched or unknown attempts. These are not implemented in 0.1.0.
 
 `ledger_requests`, `ledger_events` and their old `Summarize` view remain for
 historical compatibility. The active gateway writes `request_audit`/`audit_events`,
-and the CLI reads those newer records. Do not use the legacy CNY summary as an
-aggregate of current traffic. Existing data is retained during upgrades.
+and the CLI reads those newer records. Do not use the legacy fixed-currency summary as an
+aggregate of current traffic. Historical currency-specific database identifiers
+are preserved to avoid reinterpreting old amounts or breaking compatibility. Existing data is retained during upgrades.

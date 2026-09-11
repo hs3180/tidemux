@@ -5,7 +5,7 @@
 TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatible APIs**.
 
 - **Streaming and tools** — forward conversations and tool calls to your chosen provider.
-- **One-command launch** — inject gateway settings into your client with keys in Keychain and isolated profiles.
+- **Simple client setup** — run `tidemux claude`, `tidemux kilo` or `tidemux hermes` with secure credentials and separate profiles.
 - **Concurrency control** — limit active requests and queue the rest.
 - **Local usage ledger** — track outcomes, tokens and cost estimates without storing message bodies.
 
@@ -79,7 +79,7 @@ For separate profiles or simultaneous use of both protocols, see [client setup](
 
 **0.1.0** supports Chat Completions and Messages, one upstream and protocol per
 instance. The three CLIs have passed DeepSeek file read/edit/test and continued
-conversation workflows. Other compatible providers are configurable but unverified.
+conversation workflows. You can configure other compatible providers, though they have not been tested.
 
 Responses API, protocol conversion, images/audio and IDE extensions are outside
 this release's scope. See [tested clients](docs/client-compatibility.md) and
