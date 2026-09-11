@@ -49,9 +49,9 @@ The intended source repository is `hs3180/tidemux`, and the personal tap is
 An authenticated maintainer must:
 
 1. Push the reviewed commit and its annotated version tag.
-2. Enable and verify private vulnerability reporting and a private community
-   incident contact. Replace the pre-release placeholders in SECURITY / conduct
-   docs and ensure those changes are included in the candidate before release.
+2. Enable and verify private vulnerability reporting. Document the community
+   contact-request process in the code of conduct. Ensure the policy changes
+   are included in the candidate before release.
 3. Ensure the tagged source includes `scripts/install.sh`. The README installer
    uses `hs3180/tidemux` and downloads `SHA256SUMS` plus the single arm64 archive
    from that version’s Release; commit-suffixed filenames are supported. Verify

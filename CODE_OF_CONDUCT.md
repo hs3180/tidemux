@@ -48,11 +48,12 @@ when an individual is officially representing the community in public spaces.
 
 ## Enforcement
 
-A private community reporting channel has not yet been configured for this
-unreleased candidate. The maintainers must publish and verify that channel
-before opening the public community. Do not post private incident details in
-public issues. Reports received through the verified channel will be reviewed
-fairly and handled confidentially.
+To request a private conversation with the maintainer, open an
+[issue](https://github.com/hs3180/tidemux/issues/new) titled "Private contact request"
+without describing the incident or identifying anyone involved. The maintainer
+will arrange a private channel before requesting details. Do not post private
+incident information in public issues. Security vulnerabilities should use the
+private reporting link in [SECURITY.md](SECURITY.md).
 
 ## Attribution
 

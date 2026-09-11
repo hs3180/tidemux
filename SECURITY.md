@@ -2,10 +2,16 @@
 
 ## Reporting
 
-This source candidate has not been publicly released. A verified private
-security reporting channel has not yet been configured; establishing and testing
-one is required before public release. Do not post credentials, private prompts,
-or vulnerability details in public issues.
+Report suspected vulnerabilities privately through
+[GitHub private vulnerability reporting](https://github.com/hs3180/tidemux/security/advisories/new).
+Include the affected version, steps to reproduce and expected impact. Do not
+include live credentials or private conversation data. Do not disclose
+vulnerability details in public issues.
+
+## Supported versions
+
+Security fixes target the latest published release. Version 0.1.0 supports
+macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 
 ## Current boundary
 
@@ -16,9 +22,7 @@ or vulnerability details in public issues.
 - Requests are sent to the configured upstream. No telemetry or diagnostic
   upload feature is implemented.
 
-The tested local release scope and public distribution prerequisites are documented in
-[acceptance status](docs/mvp-acceptance.md). There are no published binaries,
-public Homebrew downloads, or promised response-time guarantees yet.
+The tested release scope is documented in [acceptance status](docs/mvp-acceptance.md).
 
 Security reports should cover the CLI, HTTP service, ledger, credentials,
 and bundled dependencies. Public release materials must identify affected

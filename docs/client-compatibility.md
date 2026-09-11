@@ -51,4 +51,4 @@ reference, not a secret in workspace configuration.
 See [client setup](clients.md) and [protocol boundaries](protocols.md). Image/audio,
 provider server tools and other unimplemented APIs remain explicit limitations.
 The original failed baseline and complete private test evidence remain archived;
-they are not substituted for passing repair results. GitHub publication is deferred.
+they are not substituted for passing repair results. Release artifacts are available from the project’s GitHub Releases page.

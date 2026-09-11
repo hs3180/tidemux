@@ -17,7 +17,6 @@ Requires **macOS 15+ on Apple Silicon** and [Homebrew](https://brew.sh).
 brew install hs3180/tap/tidemux
 ```
 
-**Coming soon:** the Release and Homebrew tap are not published yet.
 [Build from source or install without Homebrew →](docs/install.md)
 
 Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.

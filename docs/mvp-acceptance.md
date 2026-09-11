@@ -47,10 +47,11 @@ model. That original text-only build changed only the version marker and release
 documentation relative to rc.4. The repaired CLI release has separate installed
 workflow evidence described above.
 
-## Deferred public distribution
+## Public distribution
 
-GitHub publication is deferred by the maintainer. A verified private
-security/community reporting channel and clean-machine public tap installation
-remain prerequisites for public distribution. Local source builds, archive
-extraction and local-tap installation are verified on macOS 15.7.4 arm64.
+Release assets are published through [GitHub Releases](https://github.com/hs3180/tidemux/releases),
+with the formula in [hs3180/homebrew-tap](https://github.com/hs3180/homebrew-tap).
+Local source builds, archive extraction and local-tap installation have been
+verified on macOS 15.7.4 arm64. Download-path verification is recorded separately;
+a clean-machine installation is not claimed by these local tests.
 See the [release procedure](releasing.md).

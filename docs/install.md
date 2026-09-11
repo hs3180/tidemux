@@ -3,20 +3,20 @@
 TideMux 0.1.0 targets macOS 15+ on Apple Silicon. Install your coding client
 separately; TideMux does not install Claude Code, Kilo CLI or Hermes Agent.
 
-## Homebrew (recommended after publication)
+## Homebrew (recommended)
 
 ```sh
 brew install hs3180/tap/tidemux
 ```
 
-The GitHub Release and `hs3180/homebrew-tap` are not published yet. Until they
-are available, build from a local source checkout below.
+The formula downloads the verified macOS arm64 archive from
+[GitHub Releases](https://github.com/hs3180/tidemux/releases).
 
 Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Install without Homebrew
 
-After version 0.1.0 is published:
+Install version 0.1.0:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.1.0/scripts/install.sh | sh

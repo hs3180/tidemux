@@ -15,7 +15,7 @@ mkdir -p "$HOME/Library/Application Support/TideMux"
 
 Alternatively extract the candidate archive and run its `tidemux` binary.
 The arm64 local release has been tested on macOS 15.7.4; other OS versions are not
-verified. No public download or Homebrew installation is claimed yet.
+verified. See [installation](install.md) for release downloads and Homebrew.
 
 ## Recommended: configure with the CLI
 
