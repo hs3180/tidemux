@@ -110,7 +110,8 @@ python3 scripts/verify_live.py \
 A verified price entry is needed to finish cost reconciliation. `configure`
 intentionally does not guess current prices: until you add them, ledger cost
 is `null`. The helper can report successful usage reconciliation but stop at
-unknown cost. See [pricing and live verification](demo.md). Never repeat a live
+unknown cost. For `deepseek-flash`, use the [official English USD pricing examples](deepseek-pricing.md).
+See [pricing and live verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.
 
 ## Request limits (0.1.0)

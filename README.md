@@ -73,6 +73,7 @@ without overwriting its original profile.
 
 Inspect requests with `tidemux ledger`. Cost estimates require
 [configured model prices](docs/configure.md); unknown amounts stay unknown.
+Use the [DeepSeek USD rates](docs/deepseek-pricing.md) for this example.
 For separate profiles or simultaneous use of both protocols, see [client setup](docs/clients.md).
 
 ## Compatibility

@@ -90,6 +90,10 @@ usage before retrying. TideMux does not automatically retry any call.
 
 ## Optional pricing
 
+For `deepseek-flash`, use the [DeepSeek USD pricing examples](deepseek-pricing.md),
+which distinguish peak and off-peak rates from the English official price list.
+The generic example below is only for explaining the configuration format.
+
 Add a `prices` object keyed by exact request model ID. Rates are **per million
 tokens**, in an explicit three-letter currency, with your verified source and
 version. The following numbers are synthetic and must not be used as real rates:

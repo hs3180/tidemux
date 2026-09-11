@@ -1,0 +1,12 @@
+{
+  "prices": {
+    "deepseek-flash": {
+      "currency": "USD",
+      "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "version": "2026-09-12-peak",
+      "input_per_million": 0.3,
+      "output_per_million": 1.2,
+      "cache_read_per_million": 0.006
+    }
+  }
+}

@@ -2,6 +2,9 @@
 
 ## 0.1.0 English-language polish
 
+- Add verified DeepSeek English/USD price fragments for peak and off-peak usage;
+  document the explicit rate selection required by the current estimator.
+
 - Use English throughout CLI prompts and test fixtures; clarify international
   contribution conventions and provider/currency neutrality.
 - Refresh project descriptions and distinguish the active currency-aware audit
