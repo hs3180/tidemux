@@ -9,6 +9,9 @@ separately; TideMux does not install Claude Code, Kilo CLI or Hermes Agent.
 brew install hs3180/tap/tidemux
 ```
 
+If Homebrew asks you to trust the formula, run
+`brew trust --formula hs3180/tap/tidemux`, then retry the install command.
+
 The formula downloads the verified macOS arm64 archive from
 [GitHub Releases](https://github.com/hs3180/tidemux/releases).
 
