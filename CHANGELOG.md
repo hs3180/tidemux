@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-rc.4 — 2026-09-11
+
+- `configure` automatically starts the system keychain unlock password prompt
+  in the same terminal when needed, then continues API-key setup. The Mac/keychain
+  password goes directly to `security`, never through TideMux or command arguments.
+- PTY regressions cover already-unlocked, successful unlock, failed unlock and
+  cancellation, including no secret echo and no state changes on failure.
+
 ## 0.1.0-rc.3 — 2026-09-11
 
 - `configure` CLI with a DeepSeek Flash preset, generic endpoint/model options,

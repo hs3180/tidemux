@@ -1,4 +1,4 @@
-# Protocol support — 0.1.0-rc.3
+# Protocol support — 0.1.0-rc.4
 
 One configured API root per process. No provider/model whitelist or protocol
 conversion. This table defines the supported text subset, not all vendor APIs.

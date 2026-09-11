@@ -82,9 +82,6 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if _, err = os.Lstat(abs); err == nil && !*replace {
 		return errors.New("config already exists; use --replace to create new credentials or --config for another profile")
 	}
-	if _, err := exec.Command("security", "show-keychain-info").CombinedOutput(); err != nil {
-		return errors.New("login keychain is unavailable; run `security unlock-keychain` in Terminal, enter your Mac login password when prompted, then rerun configure (do not enter your API key at the unlock prompt)")
-	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return errors.New("run configure in an interactive terminal; API keys are never accepted as command arguments")
@@ -92,6 +89,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 	defer tty.Close()
 	if !term.IsTerminal(int(tty.Fd())) {
 		return errors.New("interactive terminal required")
+	}
+	if err := unlockKeychainIfNeeded(tty); err != nil {
+		return err
 	}
 	fmt.Fprintf(stdout, "Protocol: %s\nAPI root: %s\nModel: %s\nConfig: %s\n", c.Protocol, c.BaseURL, c.Model, abs)
 	fmt.Fprint(tty, "API key (hidden; paste then press Enter): ")
@@ -195,5 +195,24 @@ func saveConfiguration(path string, c gateway.Config, secret string, replace boo
 		return errors.New("could not install configuration; existing config was not replaced")
 	}
 	committed = true
+	return nil
+}
+
+// The system utility reads the login password directly from the controlling TTY.
+// Never use -p, capture its output, or read that password in TideMux.
+func unlockKeychainIfNeeded(tty *os.File) error {
+	if _, err := exec.Command("security", "show-keychain-info").CombinedOutput(); err == nil {
+		return nil
+	}
+	fmt.Fprintln(tty, "登录钥匙串需要解锁。接下来由 macOS security 请求钥匙串密码（通常是 Mac 登录密码，不是 API key）；输入不会回显，按 Control-C 取消。")
+	command := exec.Command("security", "unlock-keychain")
+	command.Stdin, command.Stdout, command.Stderr = tty, tty, tty
+	if err := command.Run(); err != nil {
+		return errors.New("keychain unlock failed or was canceled; no API key was requested and no configuration was changed")
+	}
+	if _, err := exec.Command("security", "show-keychain-info").CombinedOutput(); err != nil {
+		return errors.New("keychain is still unavailable after unlock; no configuration was changed")
+	}
+	fmt.Fprintln(tty, "钥匙串已解锁，继续配置 API key。")
 	return nil
 }

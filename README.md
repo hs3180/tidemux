@@ -4,7 +4,7 @@ A macOS local gateway for user-configured **OpenAI-compatible or
 Anthropic-compatible APIs**. Explicit concurrency, a SQLite audit ledger,
 Keychain credentials, and safe errors in one Go binary.
 
-**Current source candidate: 0.1.0-rc.3.** Both protocol implementations pass local
+**Current source candidate: 0.1.0-rc.4.** Both protocol implementations pass local
 mock and process tests. Live-provider reconciliation and public GitHub/Homebrew
 installation have not been verified; this is not a released 0.1.0.
 
@@ -19,7 +19,8 @@ CGO_ENABLED=0 go build -o tidemux ./cmd/tidemux
 
 For DeepSeek Flash, run `./tidemux configure --preset deepseek`, paste your API
 key at the hidden prompt, then run `./tidemux serve`. No manual Keychain work is
-needed. See the [configuration guide](docs/configure.md).
+needed. If locked, the system asks for your keychain password in the same
+terminal, then setup continues. See the [configuration guide](docs/configure.md).
 
 Follow the [demo](docs/demo.md) for configuration and your first
 request. Choose [OpenAI](examples/openai.json) or

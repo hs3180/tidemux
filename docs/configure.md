@@ -34,17 +34,23 @@ absolute paths (no `~` expansion). Query requests with `tidemux ledger`.
 
 ## If the login keychain is locked
 
-Run this in **your Terminal**, not in chat:
+`configure` automatically starts the macOS `security unlock-keychain` password
+prompt in the current terminal, then continues the same setup after unlocking.
+There is no separate command to copy or rerun.
 
-```sh
-security unlock-keychain
-```
+1. At the **system keychain password** prompt, enter your keychain password
+   (usually your Mac login password), **not** your API key. Input is hidden.
+   The system utility reads this password directly; TideMux never receives it
+   and never passes it through a command argument, environment variable or file.
+2. After unlocking, TideMux displays **API key (hidden)**. Paste the API key here
+   and press Enter. These are two different prompts for two different secrets.
+3. Wrong password, cancellation or an unavailable keychain stops setup before
+   collecting the API key or changing configuration. Press Control-C to cancel.
 
-At that command's password prompt, enter your **Mac login password**, not your
-API key. The system handles the password interactively; do not add a `-p` value
-to the command or put the password in a script. Then rerun `tidemux configure`.
-If macOS displays a Keychain access dialog, verify it is for the `security`
-system utility invoked by your command before allowing access.
+An already accessible keychain skips the system password prompt. This is a
+terminal system prompt, not a separate macOS graphical authorization dialog.
+If the keychain uses a password different from your Mac login password, enter
+that keychain's password. TideMux does not reset keychains or request admin access.
 
 ## DeepSeek via Anthropic format
 

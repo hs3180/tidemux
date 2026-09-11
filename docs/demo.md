@@ -1,7 +1,7 @@
 # Local demo
 
 Requires macOS, Keychain Access and a non-streaming text-capable OpenAI or
-Anthropic compatible endpoint. The source candidate is `0.1.0-rc.3`.
+Anthropic compatible endpoint. The source candidate is `0.1.0-rc.4`.
 
 ## Build or extract
 
