@@ -4,11 +4,12 @@ A macOS local gateway for user-configured **OpenAI-compatible or
 Anthropic-compatible APIs**. Explicit concurrency, a SQLite audit ledger,
 Keychain credentials, and safe errors in one Go binary.
 
-**Version: 0.1.0 repair candidate.** Real DeepSeek `deepseek-flash` workflows
-pass for Claude Code, Kilo CLI/VS Code and Hermes in the development build.
-The previously installed 0.1.0 remains the text-only baseline; repaired-package
-installation and remaining IDE fault acceptance are in progress. GitHub
-publication is deferred. Other compatible services remain untested.
+**Local version: 0.1.0.** The repair is installed and verified with real
+DeepSeek `deepseek-flash` workflows in Claude Code, Kilo CLI and Hermes.
+Package checksums, SBOM, Homebrew install/rollback and CLI usage/price
+reconciliation passed. Remaining VS Code verification is temporarily deferred
+by the maintainer; full IDE compatibility is not claimed. GitHub publication
+remains deferred. Other compatible services remain untested.
 
 ## Featured clients
 
@@ -21,15 +22,13 @@ Agent**, covering terminal coding, IDE workflows, and general agent automation.
 | Kilo Code | OpenAI-compatible custom provider | [AI providers](https://kilo.ai/docs/ai-providers) |
 | Hermes Agent | OpenAI-compatible custom endpoint | [AI providers](https://hermes-agent.nousresearch.com/docs/integrations/providers/) |
 
-**Integration status:** the installed 0.1.0 baseline rejected the three CLI
-workflows. The current development source adds streaming, tool calls and a
-[secure client launcher](docs/clients.md); real file-edit/test workflows have
-passed for the three CLIs with isolated test profiles. Product launchers and the Kilo VS Code read/edit/test and restart workflows
-also pass; IDE fault and repaired-package acceptance remain open. See the
-[client compatibility report](docs/client-compatibility.md) for tested versions,
-observed blockers and the acceptance gate. Today, use the [HTTP demo](docs/demo.md) to try the verified
-protocol subset. Each TideMux process uses one upstream protocol; it does not
-convert between OpenAI and Anthropic formats.
+**Integration status:** all three CLI launchers passed Keychain handoff,
+model discovery, streaming, file reading/editing, test execution and persistent
+conversation checks through the installed repair. Kilo VS Code passed the
+normal workflow and restart checks in a development build; installed IDE,
+fault and pricing checks are deferred. See [client setup](docs/clients.md) and
+[compatibility](docs/client-compatibility.md). Each TideMux process uses one
+upstream protocol; it does not convert between OpenAI and Anthropic formats.
 
 ## Try locally
 

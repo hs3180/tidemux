@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 repair candidate — unreleased
+## 0.1.0 local repair — 2026-09-11
 
 - Dual-protocol SSE, tool calls/results, reasoning and cache fields; explicit
   parameter validation, safe upstream errors and selected Anthropic beta headers.
@@ -10,7 +10,9 @@
   profiles and Hermes Chat Completions routing; IDE restart and duplicate-launch
   handling. `configure --replace` preserves a private original config backup.
 - Real DeepSeek agent workflows pass for all three CLIs and the Kilo VS Code
-  extension. IDE fault and installed-package acceptance remain in progress.
+  extension. Package/install/rollback and installed CLI acceptance passed. Remaining IDE
+  verification is temporarily deferred by the maintainer; full IDE compatibility
+  is not claimed. GitHub publication remains deferred.
 - Same-version repair builds use a commit/build suffix for immutable local
   artifacts. The application version stays 0.1.0; previous assets are preserved.
 

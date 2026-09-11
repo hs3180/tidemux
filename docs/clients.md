@@ -1,7 +1,9 @@
-# Client connections (0.1.0 development build)
+# Client connections (0.1.0 repair)
 
-Build the current source before using `connect`; the previously installed 0.1.0
-binary does not contain this command. This workflow is under acceptance testing.
+The repaired local 0.1.0 includes `connect`; the original pre-repair binary does
+not. Check build/hash when distinguishing these same-version packages. CLI
+workflows have passed installed acceptance. Remaining VS Code verification is
+temporarily deferred by the maintainer.
 Each gateway process uses one protocol and one profile. Start `serve` before
 launching a client. `connect` checks authenticated model discovery, reads only the
 local gateway credential from Keychain, and passes it in the child environment.

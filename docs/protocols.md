@@ -1,7 +1,7 @@
-# Protocol support — 0.1.0 development repair
+# Protocol support — 0.1.0 repair
 
-The installed original 0.1.0 supports text/non-streaming requests. The current
-source extends that release as below; repaired artifacts are not installed yet.
+The original 0.1.0 supported text/non-streaming requests. The locally installed
+repair extends that release as below. Remaining VS Code verification is deferred.
 Each process uses one configured upstream protocol/root. No provider/model
 whitelist or cross-protocol conversion is applied.
 
