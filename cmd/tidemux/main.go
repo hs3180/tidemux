@@ -21,7 +21,7 @@ import (
 
 const (
 	version = "0.1.0"
-	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux version\n"
+	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux connect <claude|kilo|kilo-ide|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
 func main() {
@@ -36,6 +36,9 @@ func run(args []string, stdout, stderr *os.File) error {
 		return errors.New(usage)
 	}
 	command := args[0]
+	if command == "connect" {
+		return connect(args[1:], stdout, stderr)
+	}
 	if command == "configure" {
 		return configure(args[1:], stdout, stderr)
 	}
@@ -52,6 +55,10 @@ func run(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config containing Keychain references")
+	var diagnostics bool
+	if command == "ledger" {
+		flags.BoolVar(&diagnostics, "diagnostics", false, "show local rejections separately from upstream attempts")
+	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -68,6 +75,13 @@ func run(args []string, stdout, stderr *os.File) error {
 			return errors.New("cannot open ledger")
 		}
 		defer store.Close()
+		if diagnostics {
+			rows, err := store.RecentDiagnostics(context.Background(), 100)
+			if err != nil {
+				return errors.New("cannot read local diagnostics")
+			}
+			return json.NewEncoder(stdout).Encode(rows)
+		}
 		rows, err := store.Recent(context.Background(), 100)
 		if err != nil {
 			return errors.New("cannot read ledger")

@@ -67,14 +67,53 @@ func StrictJSON(data []byte, dst any) error {
 }
 
 type Message struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content"`
+	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID       string          `json:"tool_call_id,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
 }
 type Thinking struct {
-	Type string `json:"type"`
+	Type         string `json:"type"`
+	BudgetTokens *int64 `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"`
 }
 
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+type OutputFormat struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+}
+type OutputConfig struct {
+	Effort string        `json:"effort,omitempty"`
+	Format *OutputFormat `json:"format,omitempty"`
+}
+type ResponseFormat struct {
+	Type       string `json:"type"`
+	JSONSchema *struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		Schema      json.RawMessage `json:"schema"`
+		Strict      *bool           `json:"strict,omitempty"`
+	} `json:"json_schema,omitempty"`
+}
+type Metadata struct {
+	UserID string `json:"user_id,omitempty"`
+}
 type Input struct {
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	StreamOptions     *StreamOptions  `json:"stream_options,omitempty"`
+	Metadata          *Metadata       `json:"metadata,omitempty"`
+	OutputConfig      *OutputConfig   `json:"output_config,omitempty"`
+	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"`
+	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+
+	Tools             []Tool          `json:"tools,omitempty"`
+	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+
 	Thinking            *Thinking       `json:"thinking,omitempty"`
 	Model               string          `json:"model"`
 	Messages            []Message       `json:"messages"`
@@ -118,21 +157,93 @@ func Request(protocol string, data []byte, defaultModel string) ([]byte, string,
 	if strings.TrimSpace(in.Model) == "" {
 		return nil, "", errors.New("model")
 	}
-	if in.Thinking != nil && in.Thinking.Type != "disabled" {
-		return nil, "", errors.New("thinking")
+	if in.Thinking != nil {
+		if in.Thinking.Display != "" && (protocol != "anthropic" || in.Thinking.Type == "disabled" || (in.Thinking.Display != "summarized" && in.Thinking.Display != "omitted")) {
+			return nil, "", errors.New("thinking")
+		}
+		switch in.Thinking.Type {
+		case "disabled", "adaptive":
+			if in.Thinking.BudgetTokens != nil || in.Thinking.Type == "adaptive" && protocol != "anthropic" {
+				return nil, "", errors.New("thinking")
+			}
+		case "enabled":
+			if protocol == "anthropic" && (in.Thinking.BudgetTokens == nil || *in.Thinking.BudgetTokens < 1024) {
+				return nil, "", errors.New("thinking")
+			}
+			if in.Thinking.BudgetTokens != nil && (*in.Thinking.BudgetTokens < 1 || *in.Thinking.BudgetTokens > 1_000_000) {
+				return nil, "", errors.New("thinking")
+			}
+		default:
+			return nil, "", errors.New("thinking")
+		}
 	}
-	if in.Stream {
-		return nil, "", errors.New("stream")
+	if in.StreamOptions != nil && (protocol != "openai" || !in.Stream) {
+		return nil, "", errors.New("stream_options")
+	}
+	if in.ContextManagement != nil && (protocol != "anthropic" || !object(in.ContextManagement)) {
+		return nil, "", errors.New("context_management")
+	}
+	if protocol == "openai" && (in.Metadata != nil || in.OutputConfig != nil) {
+		return nil, "", errors.New("invalid_request")
+	}
+	if protocol == "anthropic" && (in.ResponseFormat != nil || in.ReasoningEffort != "") {
+		return nil, "", errors.New("invalid_request")
+	}
+	if in.ResponseFormat != nil {
+		f := in.ResponseFormat
+		if f.Type == "json_schema" {
+			if f.JSONSchema == nil || f.JSONSchema.Name == "" || !object(f.JSONSchema.Schema) {
+				return nil, "", errors.New("response_format")
+			}
+		} else if (f.Type != "json_object" && f.Type != "text") || f.JSONSchema != nil {
+			return nil, "", errors.New("response_format")
+		}
+	}
+	if in.OutputConfig != nil {
+		o := in.OutputConfig
+		if o.Effort != "" && o.Effort != "low" && o.Effort != "medium" && o.Effort != "high" && o.Effort != "max" {
+			return nil, "", errors.New("output_config")
+		}
+		if o.Format != nil && (o.Format.Type != "json_schema" || !object(o.Format.Schema)) {
+			return nil, "", errors.New("output_config")
+		}
+	}
+	if in.Stream && protocol == "openai" && in.StreamOptions == nil {
+		in.StreamOptions = &StreamOptions{IncludeUsage: true}
 	}
 	if len(in.Messages) == 0 {
 		return nil, "", errors.New("messages")
 	}
+	if !validTools(protocol, in.Tools) || !validChoice(protocol, in.ToolChoice) {
+		return nil, "", errors.New("tools")
+	}
+	if protocol == "anthropic" && in.ParallelToolCalls != nil {
+		return nil, "", errors.New("parallel_tool_calls")
+	}
 	for _, m := range in.Messages {
-		allowed := m.Role == "user" || m.Role == "assistant"
+		// System-role messages are a compatible-provider extension emitted by
+		// gateway clients. Preserve their position; do not promote or rewrite them.
+		allowed := m.Role == "user" || m.Role == "assistant" || m.Role == "system"
 		if protocol == "openai" {
-			allowed = allowed || m.Role == "system" || m.Role == "developer"
+			allowed = allowed || m.Role == "system" || m.Role == "developer" || m.Role == "tool"
 		}
-		if !allowed || !textContent(m.Content) {
+		if !allowed {
+			return nil, "", errors.New("messages")
+		}
+		if protocol == "anthropic" && (len(m.ToolCalls) > 0 || m.ToolCallID != "" || m.ReasoningContent != nil) {
+			return nil, "", errors.New("messages")
+		}
+		if len(m.ToolCalls) > 0 && (m.Role != "assistant" || !validCalls(m.ToolCalls)) {
+			return nil, "", errors.New("tool_calls")
+		}
+		if (m.Role == "tool") != (m.ToolCallID != "") {
+			return nil, "", errors.New("tool_call_id")
+		}
+		if m.ReasoningContent != nil && m.Role != "assistant" {
+			return nil, "", errors.New("reasoning_content")
+		}
+		emptyAssistant := protocol == "openai" && m.Role == "assistant" && len(m.ToolCalls) > 0 && (len(m.Content) == 0 || string(m.Content) == "null")
+		if !emptyAssistant && !messageContent(protocol, m.Role, m.Content) {
 			return nil, "", errors.New("messages")
 		}
 	}
@@ -151,7 +262,7 @@ func Request(protocol string, data []byte, defaultModel string) ([]byte, string,
 		if in.MaxTokens == nil || in.MaxCompletionTokens != nil || len(in.Stop) > 0 {
 			return nil, "", errors.New("invalid_request")
 		}
-		if len(in.System) > 0 && !textContent(in.System) {
+		if len(in.System) > 0 && !messageContent("anthropic", "system", in.System) {
 			return nil, "", errors.New("system")
 		}
 		if in.Temperature != nil && *in.Temperature > 1 {
@@ -329,9 +440,10 @@ func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
 	var r struct {
 		Choices []struct {
 			Message struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-				Refusal string          `json:"refusal"`
+				Role      string          `json:"role"`
+				Content   json.RawMessage `json:"content"`
+				Refusal   string          `json:"refusal"`
+				ToolCalls []ToolCall      `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -348,12 +460,12 @@ func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
 			return TokenUsage{}, errors.New("invalid_upstream_response")
 		}
 		for _, c := range r.Choices {
-			if c.Message.Role != "assistant" || (!textContent(c.Message.Content) && c.Message.Refusal == "") {
+			if c.Message.Role != "assistant" || (!textContent(c.Message.Content) && c.Message.Refusal == "" && len(c.Message.ToolCalls) == 0) || !validCalls(c.Message.ToolCalls) {
 				return TokenUsage{}, errors.New("invalid_upstream_response")
 			}
 		}
 	} else {
-		if r.Type != "message" || r.Role != "assistant" || !textContent(r.Content) {
+		if r.Type != "message" || r.Role != "assistant" || !messageContent("anthropic", "assistant", r.Content) {
 			return TokenUsage{}, errors.New("invalid_upstream_response")
 		}
 	}

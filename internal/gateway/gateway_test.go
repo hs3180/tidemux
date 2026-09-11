@@ -158,7 +158,7 @@ func TestValidationNeverCallsUpstream(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer closeDB()
-			for _, body := range []string{`{}`, `{} {}`, `null`, `{"model":"m","model":"n"}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`, strings.Repeat("x", (1<<20)+1)} {
+			for _, body := range []string{`{}`, `{} {}`, `null`, `{"model":"m","model":"n"}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":"invalid"}`, strings.Repeat("x", (1<<20)+1)} {
 				req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(body))
 				req.Header.Set("Authorization", "Bearer local-secret")
 				out := httptest.NewRecorder()

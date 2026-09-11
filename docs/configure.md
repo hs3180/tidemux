@@ -112,3 +112,92 @@ intentionally does not guess current prices: until you add them, ledger cost
 is `null`. The helper can report successful usage reconciliation but stop at
 unknown cost. See [pricing and live verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.
+
+## Request limits (development source)
+
+Existing 0.1.0 configurations remain valid. An optional `limits` object adjusts
+bounds for longer client sessions:
+
+```json
+"limits": {
+  "upstream_timeout_seconds": 300,
+  "request_bytes": 4194304,
+  "response_bytes": 16777216,
+  "stream_bytes": 134217728,
+  "event_bytes": 2097152
+}
+```
+
+Omitted or zero fields keep the previous defaults: 60 seconds after concurrency
+admission, 1 MiB request, 8 MiB non-streaming response, 64 MiB total SSE stream,
+and 1 MiB SSE event. Queue waiting remains cancelable and is not included in the
+upstream timeout. Timeout can be 1–3600 seconds; byte limits can be up to 1 GiB,
+and the event limit cannot exceed the stream limit. Limits do not imply that an
+upstream model supports the corresponding context or output size.
+
+An upstream timeout before streaming returns 504 `upstream_timeout`; after
+streaming starts it emits a safe SSE error. The attempt is recorded as an error
+with unknown usage/cost, rather than a successful response or user cancellation.
+
+## Local rejection diagnostics (development source)
+
+```sh
+./tidemux ledger --diagnostics --config /path/to/config.json
+```
+
+Rejected authentication, unsupported routes, oversized bodies and invalid
+requests receive `X-TideMux-Request-ID`. Match that ID against the independent
+`local_diagnostics` table or this command's JSON output. Each record contains
+only a timestamp, protocol, normalized method/endpoint category, HTTP status and
+safe error code. Original URLs, query strings, headers, unknown field names and
+message contents are not stored.
+
+These rows are not upstream attempts and do not contribute to token/cost totals.
+The ordinary `ledger` command continues to show upstream attempt records. If
+writing a local diagnostic fails, the response is 500 `local_diagnostic_failed`
+with the generated ID; no upstream call was made. The new table is additive and
+does not modify existing 0.1.0 request records.
+
+## Declared model limits (development source)
+
+Use `configure --context-tokens <n> --output-tokens <n>` when you have verified
+these values with your provider, or set:
+
+```json
+"model_capabilities": {
+  "context_tokens": 65536,
+  "max_output_tokens": 8192
+}
+```
+
+These numbers are illustrative, not DeepSeek defaults. Omitted/zero means unknown.
+Both list and detail model discovery expose configured values as `context_length`
+and `max_output_tokens`. `connect kilo` places them in the custom model's limit
+configuration; `connect hermes` sets `model.context_length`. Hermes's per-request
+output budget and Claude's client-specific limits remain under their own client
+settings. No request is silently shortened or rewritten to meet these declarations.
+The gateway's byte limits are separate from model token capabilities.
+
+## Anthropic beta features
+
+On the Anthropic route, TideMux forwards valid `anthropic-beta` feature lists from
+the client. Multiple header values are joined with commas; invalid or oversized
+lists are rejected locally with `invalid_beta_header`. Beta support is decided by
+the upstream provider. The API version always comes from the TideMux profile;
+client authentication headers and unrelated custom headers are not forwarded.
+
+## Configuration rollback
+
+`configure --replace` saves an exact, mode-0600 copy of the previous configuration
+beside it as `<config>.backup-<unique-id>` before installing the replacement. Old
+Keychain items are retained, so that backup still references its original keys.
+If backup creation fails, the existing configuration is not replaced and newly
+created credentials are cleaned up. A setup-time change to the configuration is
+also rejected instead of overwriting that change.
+
+To roll back, stop the gateway using the replacement profile and start the desired
+binary with `serve --config /path/to/config.json.backup-<id>`, using the exact backup
+name. Preserve the new profile before restoring the backup to the original path.
+The ledger path comes from the selected configuration; backing up a configuration
+does not snapshot its SQLite ledger. The full packaged-binary/data rollback check
+remains part of release acceptance.

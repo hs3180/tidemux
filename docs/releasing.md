@@ -19,9 +19,17 @@ or version's assets.
    fresh directory, and run the packaged binary's version / doctor / serve /
    ledger checks. Preserve source commit and test results in private evidence.
 
-`dist/<version>/` is immutable: to change source, create the next candidate
-version instead of overwriting generated output. The script packages but never
-publishes. CI uploads candidate workflow artifacts only, not GitHub Releases.
+`dist/<version>/` is immutable. For the unpublished 0.1.0 repair, retain the
+application version and run `python3 scripts/release.py --build-id` to create
+`dist/0.1.0+<commit-prefix>/` with a distinct archive filename. An explicit
+`--build-id repair-N` is also supported. BUILD.txt records both commit and build
+ID; compare binary SHA256 rather than version text when installing a same-version
+repair. An existing output directory is refused, and failed builds do not publish
+a partial final directory. Original tags and assets remain untouched until the
+repair has completed all gates. Never replace already public assets.
+
+The script packages but never publishes. CI uploads candidate workflow artifacts
+only, not GitHub Releases.
 
 ## Live gate
 

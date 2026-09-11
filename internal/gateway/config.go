@@ -28,6 +28,8 @@ type SecretLookup interface {
 	Lookup(context.Context, KeychainReference) (string, error)
 }
 type Config struct {
+	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
+	Limits              adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr          string                   `json:"listen_addr"`
 	Protocol            string                   `json:"protocol"`
 	BaseURL             string                   `json:"base_url"`
@@ -55,6 +57,12 @@ func LoadConfig(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
+	if err := c.ModelCapabilities.Validate(); err != nil {
+		return err
+	}
+	if err := c.Limits.Validate(); err != nil {
+		return err
+	}
 	host, port, err := net.SplitHostPort(c.ListenAddr)
 	if err != nil || port == "" || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		return errors.New("listen_addr must use a loopback IP and port")

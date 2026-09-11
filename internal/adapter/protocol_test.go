@@ -45,7 +45,7 @@ func TestUnknownUsageAndPartialCacheRemainUnknown(t *testing.T) {
 	}
 }
 func TestStrictRequests(t *testing.T) {
-	for _, body := range []string{`{"model":"m","model":"x","messages":[]}`, `{} {}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[]}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`} {
+	for _, body := range []string{`{"model":"m","model":"x","messages":[]}`, `{} {}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}]}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":"invalid"}`} {
 		if _, _, err := Request("openai", []byte(body), "m"); err == nil {
 			t.Fatalf("accepted %s", body)
 		}
@@ -62,8 +62,26 @@ func TestExplicitThinkingDisable(t *testing.T) {
 		if !strings.Contains(string(encoded), `"thinking":{"type":"disabled"}`) {
 			t.Fatal("explicit setting lost")
 		}
-		if _, _, err = Request(protocol, []byte(strings.Replace(string(body), "disabled", "enabled", 1)), ""); err == nil {
+		if _, _, err = Request(protocol, []byte(strings.Replace(string(body), "disabled", "invalid", 1)), ""); err == nil {
 			t.Fatal("unsupported thinking accepted")
+		}
+	}
+}
+
+func TestThinkingDisplay(t *testing.T) {
+	for _, display := range []string{"summarized", "omitted"} {
+		body := `{"model":"m","max_tokens":4096,"messages":[{"role":"user","content":"hi"}],"thinking":{"type":"adaptive","display":"` + display + `"}}`
+		encoded, _, err := Request("anthropic", []byte(body), "")
+		if err != nil || !strings.Contains(string(encoded), `"display":"`+display+`"`) {
+			t.Fatalf("display not preserved: %v", err)
+		}
+		for _, invalid := range []string{strings.Replace(body, display, "invalid", 1), strings.Replace(body, "adaptive", "disabled", 1)} {
+			if _, _, err := Request("anthropic", []byte(invalid), ""); err == nil {
+				t.Fatal("invalid thinking display accepted")
+			}
+		}
+		if _, _, err := Request("openai", []byte(strings.Replace(body, "adaptive", "enabled", 1)), ""); err == nil {
+			t.Fatal("Anthropic display accepted for OpenAI")
 		}
 	}
 }

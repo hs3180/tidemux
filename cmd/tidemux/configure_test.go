@@ -70,3 +70,52 @@ func TestConfigureSavesReferencesAndRollsBack(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := gateway.Config{ListenAddr: "127.0.0.1:8787", Protocol: "openai", BaseURL: "https://example.com/v1", Model: "old-model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
+	secrets := &memorySecrets{values: map[string]string{}}
+	if err := saveConfiguration(path, c, "old-secret", false, secrets); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Model = "new-model"
+	if err := saveConfiguration(path, c, "new-secret", true, secrets); err != nil {
+		t.Fatal(err)
+	}
+	backups, err := filepath.Glob(path + ".backup-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatal("missing unique backup")
+	}
+	saved, err := os.ReadFile(backups[0])
+	if err != nil || string(saved) != string(before) {
+		t.Fatal("backup changed config bytes")
+	}
+	info, _ := os.Stat(backups[0])
+	if info.Mode().Perm() != 0o600 {
+		t.Fatal("backup permissions")
+	}
+	old, err := gateway.LoadConfig(backups[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := old.ResolveCredentials(context.Background(), secrets)
+	if err != nil || resolved.APIKey != "old-secret" || old.Model != "old-model" {
+		t.Fatal("old profile cannot be restored")
+	}
+	current, err := gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = current.ResolveCredentials(context.Background(), secrets)
+	if err != nil || resolved.APIKey != "new-secret" || current.Model != "new-model" {
+		t.Fatal("new profile not installed")
+	}
+	if len(secrets.values) != 4 {
+		t.Fatal("old credentials removed")
+	}
+}

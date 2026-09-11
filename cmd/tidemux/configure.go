@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -40,7 +41,10 @@ func configure(args []string, stdout, stderr *os.File) error {
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
+	listen := flags.String("listen", "127.0.0.1:8787", "loopback IP:port; use different ports for simultaneous protocol profiles")
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
+	contextTokens := flags.Int64("context-tokens", 0, "verified upstream context window; zero means unknown")
+	outputTokens := flags.Int64("output-tokens", 0, "verified upstream output ceiling; zero means unknown")
 	replace := flags.Bool("replace", false, "replace configuration using new Keychain references (old credentials retained)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -75,7 +79,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return errors.New("invalid config path")
 	}
-	c := gateway.Config{ListenAddr: "127.0.0.1:8787", Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	c := gateway.Config{ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}
@@ -90,7 +94,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if !term.IsTerminal(int(tty.Fd())) {
 		return errors.New("interactive terminal required")
 	}
-	if err := unlockKeychainIfNeeded(tty); err != nil {
+	if err := unlockKeychainIfNeeded(context.Background(), tty); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Protocol: %s\nAPI root: %s\nModel: %s\nConfig: %s\n", c.Protocol, c.BaseURL, c.Model, abs)
@@ -109,6 +113,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	fmt.Fprintln(stdout, "Configured. API key and generated gateway token are stored in macOS Keychain.")
+	if *replace {
+		fmt.Fprintln(stdout, "If a config was replaced, its exact backup is beside it as <config>.backup-<id>; old Keychain items are retained.")
+	}
 	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Prices remain unknown until configured.")
 	fmt.Fprintf(stdout, "Next: tidemux serve --config %q\nInspect: tidemux ledger --config %q\n", abs, abs)
 	return nil
@@ -119,6 +126,17 @@ func saveConfiguration(path string, c gateway.Config, secret string, replace boo
 	}
 	if _, err := os.Lstat(path); err == nil && !replace {
 		return errors.New("config already exists")
+	}
+	var previous []byte
+	previousExists := false
+	if replace {
+		var err error
+		previous, err = os.ReadFile(path)
+		if err == nil {
+			previousExists = true
+		} else if !os.IsNotExist(err) {
+			return errors.New("cannot read existing config for backup")
+		}
 	}
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
@@ -186,7 +204,22 @@ func saveConfiguration(path string, c gateway.Config, secret string, replace boo
 	if _, err = c.ResolveCredentials(ctx, store); err != nil {
 		return errors.New("Keychain read-back verification failed")
 	}
-	if replace {
+	if replace && previousExists {
+		current, readErr := os.ReadFile(path)
+		if readErr != nil || !bytes.Equal(current, previous) {
+			return errors.New("config changed during setup; existing config was not replaced")
+		}
+		backup, backupErr := os.OpenFile(path+".backup-"+account, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if backupErr != nil {
+			return errors.New("cannot create config backup; existing config was not replaced")
+		}
+		_, writeErr := backup.Write(previous)
+		syncErr := backup.Sync()
+		closeErr := backup.Close()
+		if writeErr != nil || syncErr != nil || closeErr != nil {
+			os.Remove(backup.Name())
+			return errors.New("cannot save config backup; existing config was not replaced")
+		}
 		err = os.Rename(tmp.Name(), path)
 	} else {
 		err = os.Link(tmp.Name(), path)
@@ -200,19 +233,19 @@ func saveConfiguration(path string, c gateway.Config, secret string, replace boo
 
 // The system utility reads the login password directly from the controlling TTY.
 // Never use -p, capture its output, or read that password in TideMux.
-func unlockKeychainIfNeeded(tty *os.File) error {
-	if _, err := exec.Command("security", "show-keychain-info").CombinedOutput(); err == nil {
+func unlockKeychainIfNeeded(ctx context.Context, tty *os.File) error {
+	if _, err := exec.CommandContext(ctx, "security", "show-keychain-info").CombinedOutput(); err == nil {
 		return nil
 	}
 	fmt.Fprintln(tty, "登录钥匙串需要解锁。接下来由 macOS security 请求钥匙串密码（通常是 Mac 登录密码，不是 API key）；输入不会回显，按 Control-C 取消。")
-	command := exec.Command("security", "unlock-keychain")
+	command := exec.CommandContext(ctx, "security", "unlock-keychain")
 	command.Stdin, command.Stdout, command.Stderr = tty, tty, tty
 	if err := command.Run(); err != nil {
 		return errors.New("keychain unlock failed or was canceled; no API key was requested and no configuration was changed")
 	}
-	if _, err := exec.Command("security", "show-keychain-info").CombinedOutput(); err != nil {
+	if _, err := exec.CommandContext(ctx, "security", "show-keychain-info").CombinedOutput(); err != nil {
 		return errors.New("keychain is still unavailable after unlock; no configuration was changed")
 	}
-	fmt.Fprintln(tty, "钥匙串已解锁，继续配置 API key。")
+	fmt.Fprintln(tty, "钥匙串已解锁，继续操作。")
 	return nil
 }

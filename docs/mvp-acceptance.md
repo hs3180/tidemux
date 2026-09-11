@@ -1,6 +1,19 @@
 # Local release acceptance — 0.1.0
 
-## Locally verified
+## Repair candidate status
+
+The source now includes dual-protocol streaming, tools, client launchers,
+configurable limits, model discovery and local diagnostics. Real file read/edit/
+test workflows pass for Claude, Kilo CLI, Kilo VS Code and Hermes, including
+launcher-based continuation. The IDE launcher also survives a full application
+restart. See [client acceptance](client-compatibility.md) for boundaries.
+
+The original installed build and evidence below remain a historical baseline.
+Do not infer repaired-package installation or IDE fault acceptance from them;
+those gates remain in progress. Repair assets retain version 0.1.0 and use a
+separate commit/build suffix and hash.
+
+## Original installed baseline: locally verified
 
 - OpenAI and Anthropic text protocols: custom endpoint prefixes, models,
   protocol-specific auth/version, compatible responses and usage normalization.

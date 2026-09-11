@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0 repair candidate — unreleased
+
+- Dual-protocol SSE, tool calls/results, reasoning and cache fields; explicit
+  parameter validation, safe upstream errors and selected Anthropic beta headers.
+- Authenticated model discovery and declared model limits, configurable request
+  and streaming limits, separate local diagnostics and accurate unknown usage.
+- `connect claude|kilo|kilo-ide|hermes` with Keychain handoff, persistent isolated
+  profiles and Hermes Chat Completions routing; IDE restart and duplicate-launch
+  handling. `configure --replace` preserves a private original config backup.
+- Real DeepSeek agent workflows pass for all three CLIs and the Kilo VS Code
+  extension. IDE fault and installed-package acceptance remain in progress.
+- Same-version repair builds use a commit/build suffix for immutable local
+  artifacts. The application version stays 0.1.0; previous assets are preserved.
+
 ## 0.1.0 — 2026-09-11 (local release)
 
 - Freeze the dual-protocol local MVP with interactive system Keychain unlock,

@@ -17,6 +17,7 @@ import (
 )
 
 type Client struct {
+	Limits                                          Limits
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
 	Prices                                          map[string]Price
 	HTTP                                            *http.Client
@@ -30,6 +31,18 @@ type CallError struct {
 
 func (e *CallError) Error() string { return e.Code }
 func (c *Client) Call(ctx context.Context, body []byte, model string) (response []byte, id string, err error) {
+	return c.call(ctx, body, model, nil, CallOptions{})
+}
+func (c *Client) CallStream(ctx context.Context, body []byte, model string, sink StreamSink) ([]byte, string, error) {
+	return c.call(ctx, body, model, sink, CallOptions{})
+}
+func (c *Client) CallWithOptions(ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) ([]byte, string, error) {
+	return c.call(ctx, body, model, sink, options)
+}
+func (c *Client) call(ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) (response []byte, id string, err error) {
+	if err := options.Validate(c.Protocol); err != nil {
+		return nil, "", &CallError{400, "invalid_beta_header"}
+	}
 	started := time.Now()
 	nonce := make([]byte, 16)
 	if _, e := rand.Read(nonce); e != nil {
@@ -68,11 +81,19 @@ func (c *Client) Call(ctx context.Context, body []byte, model string) (response 
 	if e = ctx.Err(); e != nil {
 		return nil, id, &CallError{408, "request_canceled"}
 	}
+	limits := c.Limits.Effective()
+	requestCtx, cancelRequest := context.WithTimeout(ctx, time.Duration(limits.UpstreamTimeoutSeconds)*time.Second)
+	defer cancelRequest()
+	defer func() {
+		if err != nil && ctx.Err() == nil && requestCtx.Err() == context.DeadlineExceeded {
+			err = &CallError{504, "upstream_timeout"}
+		}
+	}()
 	path := "/chat/completions"
 	if c.Protocol == "anthropic" {
 		path = "/messages"
 	}
-	req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(body))
+	req, e := http.NewRequestWithContext(requestCtx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(body))
 	if e != nil {
 		return nil, id, &CallError{502, "upstream_request_failed"}
 	}
@@ -82,8 +103,11 @@ func (c *Client) Call(ctx context.Context, body []byte, model string) (response 
 	} else {
 		req.Header.Set("x-api-key", c.APIKey)
 		req.Header.Set("anthropic-version", c.APIVersion)
+		if options.AnthropicBeta != "" {
+			req.Header.Set("anthropic-beta", options.AnthropicBeta)
+		}
 	}
-	client := http.Client{Timeout: 60 * time.Second}
+	client := http.Client{}
 	if c.HTTP != nil {
 		client = *c.HTTP
 	}
@@ -94,25 +118,39 @@ func (c *Client) Call(ctx context.Context, body []byte, model string) (response 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		status := 502
-		code := "upstream_error"
+		ce := upstreamError(resp)
 		if resp.StatusCode == 429 {
-			status = 429
-			code = "upstream_rate_limited"
 			a.Events = append(a.Events, "rate_limit_429")
 		}
-		return nil, id, &CallError{status, code}
+		return nil, id, ce
 	}
-	data, e := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))
-	if e != nil {
-		return nil, id, &CallError{502, "upstream_read_error"}
-	}
-	if len(data) > 8<<20 {
-		return nil, id, &CallError{502, "upstream_response_too_large"}
-	}
-	usage, e := ValidateResponse(c.Protocol, data)
-	if e != nil {
-		return nil, id, &CallError{502, "invalid_upstream_response"}
+	var data []byte
+	var usage TokenUsage
+	if sink != nil {
+		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			return nil, id, &CallError{502, "invalid_upstream_content_type"}
+		}
+		usage, data, e = readStreamWithLimits(c.Protocol, resp.Body, limits, func(frame []byte) error {
+			if err := sink(id, frame); err != nil {
+				return &CallError{502, "downstream_write_error"}
+			}
+			return nil
+		})
+		if e != nil {
+			return nil, id, e
+		}
+	} else {
+		data, e = io.ReadAll(io.LimitReader(resp.Body, limits.ResponseBytes+1))
+		if e != nil {
+			return nil, id, &CallError{502, "upstream_read_error"}
+		}
+		if int64(len(data)) > limits.ResponseBytes {
+			return nil, id, &CallError{502, "upstream_response_too_large"}
+		}
+		usage, e = ValidateResponse(c.Protocol, data)
+		if e != nil {
+			return nil, id, &CallError{502, "invalid_upstream_response"}
+		}
 	}
 	a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens = usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite
 	if price, ok := c.Prices[model]; ok {

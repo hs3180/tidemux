@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
@@ -27,7 +30,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		return nil, nil, errors.New("cannot open ledger")
 	}
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	return &handler{config: c, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
+	return &handler{config: c, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
 }
 func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
 	h, closeLedger, err := NewHandler(c, client)
@@ -77,7 +80,37 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		valid = valid || subtle.ConstantTimeCompare(a[:], b[:]) == 1
 	}
 	if !valid {
-		h.fail(w, 401, "invalid_api_key")
+		h.reject(w, r, 401, "invalid_api_key")
+		return
+	}
+	modelList := r.URL.Path == "/v1/models" || r.URL.Path == "/models"
+	modelDetail := strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/")
+	if r.Method == "GET" && (modelList || modelDetail) {
+		if modelDetail {
+			modelID := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
+			if modelID != h.config.Model {
+				h.reject(w, r, 404, "model_not_found")
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		model := map[string]any{"id": h.config.Model, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
+		if h.config.Protocol == "anthropic" {
+			model = map[string]any{"id": h.config.Model, "type": "model", "display_name": h.config.Model}
+			h.config.ModelCapabilities.addToModel(model)
+			if modelDetail {
+				json.NewEncoder(w).Encode(model)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": []any{model}, "has_more": false, "first_id": h.config.Model, "last_id": h.config.Model})
+		} else {
+			h.config.ModelCapabilities.addToModel(model)
+			if modelDetail {
+				json.NewEncoder(w).Encode(model)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{model}})
+		}
 		return
 	}
 	path := "/v1/chat/completions"
@@ -85,21 +118,69 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		path = "/v1/messages"
 	}
 	if r.URL.Path != path || r.Method != "POST" {
-		h.fail(w, 404, "unsupported_endpoint")
+		h.reject(w, r, 404, "unsupported_endpoint")
+		return
+	}
+	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ",")}
+	if err := options.Validate(h.config.Protocol); err != nil {
+		h.reject(w, r, 400, "invalid_beta_header")
 		return
 	}
 	defer r.Body.Close()
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.config.Limits.Effective().RequestBytes))
 	if err != nil {
-		h.fail(w, 413, "request_too_large")
+		h.reject(w, r, 413, "request_too_large")
 		return
 	}
 	body, model, err := adapter.Request(h.config.Protocol, data, h.config.Model)
 	if err != nil {
-		h.fail(w, 400, err.Error())
+		h.reject(w, r, 400, err.Error())
 		return
 	}
-	response, id, err := h.client.Call(r.Context(), body, model)
+	var mode struct {
+		Stream bool `json:"stream"`
+	}
+	json.Unmarshal(body, &mode)
+	if mode.Stream {
+		sent := false
+		send := func(id string, frame []byte) error {
+			if !sent {
+				w.Header().Set("X-TideMux-Request-ID", id)
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.WriteHeader(200)
+				sent = true
+			}
+			if _, err := w.Write(frame); err != nil {
+				return err
+			}
+			return http.NewResponseController(w).Flush()
+		}
+		terminal, id, err := h.client.CallWithOptions(r.Context(), body, model, send, options)
+		if err == nil {
+			send(id, terminal)
+			return
+		}
+		var ce *adapter.CallError
+		if !errors.As(err, &ce) {
+			ce = &adapter.CallError{Status: 500, Code: "internal_error"}
+		}
+		if !sent {
+			if id != "" {
+				w.Header().Set("X-TideMux-Request-ID", id)
+			}
+			h.fail(w, ce.Status, ce.Code)
+			return
+		}
+		payload := map[string]any{"error": map[string]string{"type": "api_error", "message": ce.Code}}
+		if h.config.Protocol == "anthropic" {
+			payload["type"] = "error"
+		}
+		encoded, _ := json.Marshal(payload)
+		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
+		return
+	}
+	response, id, err := h.client.CallWithOptions(r.Context(), body, model, nil, options)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)
 	}
@@ -115,4 +196,32 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(response)
+}
+
+func (h *handler) reject(w http.ResponseWriter, r *http.Request, status int, code string) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		h.fail(w, 500, "request_id_failed")
+		return
+	}
+	id := hex.EncodeToString(nonce)
+	w.Header().Set("X-TideMux-Request-ID", id)
+	method := r.Method
+	if method != "GET" && method != "POST" {
+		method = "OTHER"
+	}
+	endpoint := "unsupported"
+	switch r.URL.Path {
+	case "/v1/messages":
+		endpoint = "messages"
+	case "/v1/chat/completions":
+		endpoint = "chat_completions"
+	case "/v1/models", "/models":
+		endpoint = "models"
+	}
+	if err := h.client.Ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: time.Now().UnixMilli(), Protocol: h.config.Protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code}); err != nil {
+		h.fail(w, 500, "local_diagnostic_failed")
+		return
+	}
+	h.fail(w, status, code)
 }

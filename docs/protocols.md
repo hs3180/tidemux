@@ -1,50 +1,74 @@
-# Protocol support — 0.1.0
+# Protocol support — 0.1.0 development repair
 
-One configured API root per process. No provider/model whitelist or protocol
-conversion. This table defines the supported text subset, not all vendor APIs.
+The installed original 0.1.0 supports text/non-streaming requests. The current
+source extends that release as below; repaired artifacts are not installed yet.
+Each process uses one configured upstream protocol/root. No provider/model
+whitelist or cross-protocol conversion is applied.
 
 | Feature | OpenAI compatible | Anthropic compatible |
 | --- | --- | --- |
-| Local endpoint | `/v1/chat/completions` | `/v1/messages` |
+| Inference endpoint | `/v1/chat/completions` | `/v1/messages` |
 | Upstream suffix | `/chat/completions` | `/messages` |
-| Upstream auth | Bearer upstream key | `x-api-key` upstream key |
-| Protocol version | Endpoint configuration | Configured `anthropic-version` |
-| Common input | model, messages, stream=false, temperature, top_p | Same |
-| Token limit | max_tokens or max_completion_tokens | Required max_tokens |
-| Instructions | system/developer messages | Top-level system |
-| Stop | string/string-array stop | stop_sequences |
-| Content | string or text blocks | string or text blocks |
-| Success output | Provider JSON choices/usage preserved | Provider JSON content/usage preserved |
-| Error output | OpenAI-style error object | Anthropic-style type=error envelope |
-| Usage | prompt/completion, cached detail or DeepSeek hit/miss | input/output plus cache read/creation |
+| Upstream credential | Configured Bearer key | Configured `x-api-key` |
+| Protocol headers | Gateway-created headers | Configured version; validated client `anthropic-beta` |
+| Model discovery | `/v1/models`, `/models`, and model detail | Same paths, Anthropic-shaped model objects |
+| Text | String or text blocks | String or text blocks; top-level system |
+| Tools | Function definitions, choices, call IDs, tool messages | Custom tools, choices, tool_use/tool_result blocks |
+| Streaming | Chat Completions SSE and `[DONE]` | Messages SSE and `message_stop` |
+| Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation |
+| Reasoning | `reasoning_content`, `reasoning_effort`, compatible thinking toggle | Thinking modes/display; signed and redacted history blocks |
+| Formatting | `response_format` text/json_object/json_schema | `output_config` effort/schema |
+| Client metadata | `stream_options`, parallel tool calls | `metadata.user_id`, cache_control, context_management object |
 
-An optional `thinking: {"type":"disabled"}` is forwarded exactly when explicitly
-provided; this supports DeepSeek Flash and compatible Anthropic endpoints. It is
-not automatically added for official OpenAI endpoints. Enabled thinking is rejected.
+Explicit parameters are retained; provider acceptance is not inferred from the
+model name. Anthropic-compatible system-role messages within the message list
+are preserved, including position and cache markers. Claude's observed requests
+carry a mid-conversation-system beta declaration. Providers can reject this or
+other beta features; TideMux does not change system instructions into user text.
 
-Text blocks have only `type: "text"` and `text`. Other provider-specific fields,
-images, tools, streaming, Responses API, batches and embeddings are rejected or
-unavailable. Models can impose stricter limits than this gateway; their errors
-return a safe upstream-error code without raw provider detail. No client brand
-is claimed fully compatible.
+OpenAI `max_tokens` and `max_completion_tokens` are mutually exclusive. Anthropic
+requires `max_tokens`. Temperature, top_p and protocol-specific stop fields are
+validated. Tools and history use the selected protocol's wire format; no tool
+execution occurs inside TideMux. Thinking/format options must match their wire
+schema, but actual reasoning and schema enforcement depend on the upstream.
 
-Request bodies are limited to 1 MiB; upstream success responses to 8 MiB.
-Duplicate JSON keys, multiple documents and unknown request/config fields are
-rejected. Requests use a 60-second upstream timeout and never follow redirects.
-The local gateway credential is never forwarded upstream. Authentication and
-preflight validation errors are not provider attempts and do not create audit rows.
+Unknown top-level request/config fields, duplicate JSON keys, multiple JSON
+documents, malformed tool envelopes and invalid beta headers are rejected.
+Images, document/audio blocks, provider server tools, Responses API, embeddings,
+batches and token-counting endpoints are not implemented. These remain explicit
+boundaries; normal tested client workflows do not prove every client feature or
+every upstream model is supported. See [client acceptance](client-compatibility.md).
 
-Input tokens in the audit are total input: Anthropic cache read/creation counts
-are added to input_tokens; OpenAI cached counts are subsets of prompt_tokens.
-Missing/invalid usage cannot become a fabricated successful cost estimate.
-No automatic pricing discovery, retries, budget enforcement or cache tuning.
+## Streaming and errors
 
-Implementation references, checked 2026-09-11:
+Frames are delivered incrementally, preserving LF/CRLF. Anthropic event names must
+agree with their payload type. The final frame is held until terminal audit
+storage succeeds. A missing terminal marker, upstream error, read failure or
+size limit produces a safe failure, not a successful completion. A failure after
+HTTP 200 starts is emitted as an SSE error. Client cancellation retains the
+concurrency slot until the upstream body is closed.
 
-- [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
-- [Anthropic Messages](https://platform.claude.com/docs/en/api/http/messages/create)
+HTTP 429 is preserved as a rate-limit error. Upstream 400/422 parameter rejections
+retain their status with a safe, recognized parameter code when available; raw
+provider bodies are not returned. This allows Hermes to retry without an
+unsupported structured-output field. Other upstream failures use safe gateway
+errors. TideMux itself does not automatically retry. Clients may retry or choose
+a different transport, creating separate auditable attempts.
 
-DeepSeek-specific compatibility references:
+## Configuration and accounting
 
-- [Anthropic format](https://api-docs.deepseek.com/guides/anthropic_api/)
-- [Thinking toggle](https://api-docs.deepseek.com/guides/thinking_mode/)
+Defaults remain 1 MiB request, 8 MiB non-streaming response, 64 MiB SSE stream,
+1 MiB SSE event, and 60 seconds after concurrency admission. All are configurable
+through `limits`; see [configuration](configure.md). Queue waiting is cancelable
+and reported separately. Upstream redirects are not followed.
+
+Model limits are omitted unless explicitly configured under `model_capabilities`;
+they are declarations, not measured model capabilities. Authentication and
+validation failures receive a correlation ID and a separate `local_diagnostics`
+record. They do not become upstream attempts or token/cost records.
+
+Audit input tokens are total input: Anthropic cache read/creation counts are added
+to input_tokens; OpenAI cache counts are subsets of prompt_tokens. Output includes
+reasoning tokens when the provider includes them in completion usage. Missing
+usage or pricing remains null. No automatic pricing discovery, budget enforcement,
+cache tuning or claimed savings are provided.
