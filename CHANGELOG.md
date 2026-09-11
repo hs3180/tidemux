@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0 installation and CLI polish — 2026-09-12
+
+- Recommend Homebrew installation from `hs3180/tap`; provide a checksum-verifying
+  release installer and offline installer tests. Public distribution is pending.
+- Use DeepSeek presets in the quick start. Rename the recommended client command
+  to `tidemux claude|kilo|hermes`; remove the `connect` and `launch` command forms.
+- Reject directory installation targets, including symlinks to directories;
+  verify the installed executable. Add direct-client process tests and document
+  request accounting, price snapshots and reconciliation limitations.
+
 ## 0.1.0 — 2026-09-12 (final local CLI release)
 
 - Dual-protocol SSE, tool calls/results, reasoning and cache fields; explicit

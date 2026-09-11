@@ -198,3 +198,33 @@ func TestIDEConfigurationAndWorkspaceIsolation(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+func TestDirectClientHelp(t *testing.T) {
+	for _, client := range []string{"claude", "kilo", "hermes"} {
+		t.Run(client, func(t *testing.T) {
+			output, err := os.CreateTemp(t.TempDir(), "help")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer output.Close()
+			if err := run([]string{client, "--help"}, output, output); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(output.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), "Usage of tidemux "+client+":") || !strings.Contains(string(data), "-executable") {
+				t.Fatalf("missing client help: %s", data)
+			}
+		})
+	}
+}
+
+func TestRemovedClientCommands(t *testing.T) {
+	for _, command := range []string{"connect", "launch"} {
+		if err := run([]string{command, "claude", "--help"}, os.Stdout, os.Stderr); err == nil || err.Error() != usage {
+			t.Fatalf("removed command %q should return usage, got %v", command, err)
+		}
+	}
+}

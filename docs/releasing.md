@@ -45,18 +45,22 @@ and any claimed savings require separate evidence.
 ## Publish once all gates pass
 
 The intended source repository is `hs3180/tidemux`, and the personal tap is
-`hs3180/homebrew-tidemux`; verify ownership/visibility before creating them.
+`hs3180/homebrew-tap`; verify ownership/visibility before creating them.
 An authenticated maintainer must:
 
 1. Push the reviewed commit and its annotated version tag.
 2. Enable and verify private vulnerability reporting and a private community
    incident contact. Replace the pre-release placeholders in SECURITY / conduct
    docs and ensure those changes are included in the candidate before release.
-3. Create a draft GitHub Release for the tag with exact tested assets,
+3. Ensure the tagged source includes `scripts/install.sh`. The README installer
+   uses `hs3180/tidemux` and downloads `SHA256SUMS` plus the single arm64 archive
+   from that version’s Release; commit-suffixed filenames are supported. Verify
+   the installer against the uploaded assets before advertising it as available.
+4. Create a draft GitHub Release for the tag with exact tested assets,
    SHA256SUMS, SPDX JSON and BUILD.txt. Review download checksums.
-4. Publish the release, copy the generated formula to the tap's
+5. Publish the release, copy the generated formula to the tap's
    `Formula/tidemux.rb`, and push the tap commit.
-5. On clean macOS arm64, install via the tap, check the version and run doctor,
+6. On clean macOS arm64, install via the tap, check the version and run doctor,
    serve and an authorized live request. Check persistence and uninstall behavior.
    Only then mark public delivery complete and add verified install instructions.
 

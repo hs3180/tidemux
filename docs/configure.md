@@ -172,8 +172,8 @@ these values with your provider, or set:
 
 These numbers are illustrative, not DeepSeek defaults. Omitted/zero means unknown.
 Both list and detail model discovery expose configured values as `context_length`
-and `max_output_tokens`. `connect kilo` places them in the custom model's limit
-configuration; `connect hermes` sets `model.context_length`. Hermes's per-request
+and `max_output_tokens`. `tidemux kilo` places them in the custom model's limit
+configuration; `tidemux hermes` sets `model.context_length`. Hermes's per-request
 output budget and Claude's client-specific limits remain under their own client
 settings. No request is silently shortened or rewritten to meet these declarations.
 The gateway's byte limits are separate from model token capabilities.

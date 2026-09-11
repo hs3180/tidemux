@@ -1,11 +1,9 @@
 # Client connections (0.1.0 repair)
 
-The repaired local 0.1.0 includes `connect`; the original pre-repair binary does
-not. Check build/hash when distinguishing these same-version packages. CLI
-workflows have passed installed acceptance. VS Code extension compatibility is
-outside the 0.1.0 release scope.
+Use `tidemux <client>` to start an installed client with TideMux settings.
+The direct commands replace the earlier `connect` interface. VS Code extension compatibility is outside the 0.1.0 scope.
 Each gateway process uses one protocol and one profile. Start `serve` before
-launching a client. `connect` checks authenticated model discovery, reads only the
+launching a client. The client command checks authenticated model discovery, reads only the
 local gateway credential from Keychain, and passes it in the child environment.
 The upstream API key stays in the gateway.
 
@@ -19,8 +17,8 @@ The upstream API key stays in the gateway.
 In another terminal, from your working directory:
 
 ```sh
-./tidemux connect kilo -- run 'Explain this project'
-./tidemux connect hermes -- -q 'Explain this project'
+./tidemux kilo -- run 'Explain this project'
+./tidemux hermes -- -q 'Explain this project'
 ```
 
 Install the respective client first. If it is not on PATH, put
@@ -46,7 +44,7 @@ collects the upstream key without echoing it:
 In another terminal:
 
 ```sh
-./tidemux connect claude --config "$HOME/.config/tidemux/anthropic.json"
+./tidemux claude --config "$HOME/.config/tidemux/anthropic.json"
 ```
 
 ## Profiles and credentials
@@ -84,5 +82,5 @@ management behavior; those capabilities depend on the chosen provider/model.
 
 ## Experimental implementation
 
-The existing `connect kilo-ide` command is retained as experimental code. VS Code
+The existing `tidemux kilo-ide` command is retained as experimental code. VS Code
 extension compatibility is not part of 0.1.0 acceptance or a pending release gate.

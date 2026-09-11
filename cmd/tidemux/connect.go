@@ -22,18 +22,18 @@ import (
 	"github.com/hs3180/tidemux/internal/gateway"
 )
 
-// connect launches an installed client with a local gateway credential only.
+// launch starts an installed client with a local gateway credential only.
 // No upstream key is loaded or passed to the client. The gateway is explicitly
 // started with serve so its lifetime is independent of any one client session.
-func connect(args []string, stdout, stderr *os.File) error {
+func launch(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux connect <claude|kilo|kilo-ide|hermes> [--config path] [--executable path] -- [client arguments]")
+		return errors.New("usage: tidemux <claude|kilo|kilo-ide|hermes> [--config path] [--executable path] -- [client arguments]")
 	}
 	name := args[0]
 	if name != "claude" && name != "kilo" && name != "kilo-ide" && name != "hermes" {
 		return errors.New("client must be claude, kilo, kilo-ide or hermes")
 	}
-	flags := flag.NewFlagSet("connect", flag.ContinueOnError)
+	flags := flag.NewFlagSet("tidemux "+name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "gateway configuration; start tidemux serve with the same file")
 	defaultExecutable := name
@@ -99,7 +99,7 @@ func connect(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		tty, ttyErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		if ttyErr != nil {
-			return errors.New("local gateway credential unavailable; run connect in Terminal to unlock Keychain, or run configure if the credential is missing")
+			return errors.New("local gateway credential unavailable; run the client command in Terminal to unlock Keychain, or run configure if the credential is missing")
 		}
 		unlockErr := unlockKeychainIfNeeded(ctx, tty)
 		tty.Close()
