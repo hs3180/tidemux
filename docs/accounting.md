@@ -117,6 +117,32 @@ settlement truth. Balance net changes are account-level diagnostics only:
 top-ups, grants, expiry and other API clients may alter a balance. They are never
 booked as TideMux spending.
 
+## Budgets
+
+An optional `budget` config section applies to one ledger and one currency. It
+does not convert currencies. `reserve_amount` is a user-selected worst-case
+amount for one request, and is reserved atomically before an upstream request
+is sent. This makes concurrent hard-limit admission conservative.
+
+```json
+"budget": {
+  "currency": "USD",
+  "timezone": "Asia/Shanghai",
+  "daily_limit": 5,
+  "monthly_limit": 80,
+  "alert_threshold": 0.8,
+  "mode": "hard",
+  "reserve_amount": 0.25
+}
+```
+
+`mode` is `alert`, `soft`, or `hard`. Alert records a reservation and allows the
+request. Soft mode requires a deliberate retry with
+`X-TideMux-Budget-Confirm: 1` once a threshold or limit is reached. Hard mode
+rejects before upstream transmission. Once API usage and a configured price
+produce an estimate, the reserve is settled to that estimate; a failed request
+with unknown usage keeps its reserve as an unknown conservative charge.
+
 ## Legacy data
 
 `ledger_requests`, `ledger_events` and their old `Summarize` view remain for

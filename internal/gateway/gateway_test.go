@@ -176,6 +176,34 @@ func TestValidationNeverCallsUpstream(t *testing.T) {
 		})
 	}
 }
+
+func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", Timezone: "UTC", DailyLimit: 1, MonthlyLimit: 1, AlertThreshold: .5, Mode: "hard", ReserveAmount: 1}
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		if i == 0 && out.Code != 200 {
+			t.Fatalf("first=%d", out.Code)
+		}
+		if i == 1 && (out.Code != 429 || !strings.Contains(out.Body.String(), "budget_hard_limit")) {
+			t.Fatalf("second=%d %s", out.Code, out.Body.String())
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls=%d", calls)
+	}
+}
 func TestRedirectDoesNotLeakCredentials(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("redirect followed") }))
 	defer target.Close()

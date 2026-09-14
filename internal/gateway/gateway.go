@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -30,7 +31,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		return nil, nil, errors.New("cannot open ledger")
 	}
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	return &handler{config: c, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
+	return &handler{config: c, ledger: l, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
 }
 func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
 	h, closeLedger, err := NewHandler(c, client)
@@ -48,6 +49,7 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 type handler struct {
 	config Config
 	client *adapter.Client
+	ledger *ledger.Ledger
 }
 
 func (h *handler) fail(w http.ResponseWriter, status int, code string) {
@@ -137,6 +139,24 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, 400, err.Error())
 		return
 	}
+	reservationID := ""
+	if h.config.Budget != (ledger.BudgetPolicy{}) {
+		reservationID = newRequestID()
+		_, err := h.ledger.ReserveBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
+		if err != nil {
+			code := "budget_reservation_failed"
+			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" {
+				code = err.Error()
+			}
+			h.reject(w, r, 429, code)
+			return
+		}
+	}
+	settle := func(auditID string) {
+		if reservationID != "" {
+			_ = h.ledger.SettleBudget(context.Background(), reservationID, auditID)
+		}
+	}
 	var mode struct {
 		Stream bool `json:"stream"`
 	}
@@ -157,6 +177,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return http.NewResponseController(w).Flush()
 		}
 		terminal, id, err := h.client.CallWithOptions(r.Context(), body, model, send, options)
+		settle(id)
 		if err == nil {
 			send(id, terminal)
 			return
@@ -181,6 +202,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, id, err := h.client.CallWithOptions(r.Context(), body, model, nil, options)
+	settle(id)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)
 	}
@@ -196,6 +218,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(response)
+}
+
+func newRequestID() string {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(nonce)
 }
 
 func (h *handler) reject(w http.ResponseWriter, r *http.Request, status int, code string) {
