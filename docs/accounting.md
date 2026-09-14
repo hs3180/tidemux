@@ -143,6 +143,35 @@ rejects before upstream transmission. Once API usage and a configured price
 produce an estimate, the reserve is settled to that estimate; a failed request
 with unknown usage keeps its reserve as an unknown conservative charge.
 
+## Daily reports and delivery
+
+`tidemux report generate --config /absolute/path/to/profile.json` writes a
+content-free report for the current day; `--date YYYY-MM-DD` regenerates a
+specific local-date view and `report list` reads persisted history. A report
+contains counts, token totals, local estimates, budget remainder, reconciliation
+exceptions and balance movement only. It never includes request text, response
+text, API keys, or SMTP credentials.
+
+`tidemux report deliver --id N --channel macos` sends a macOS notification.
+`report retry` retries a recorded failed delivery. Optional SMTP uses this
+config, with the Keychain item containing `username:password` rather than a
+plaintext secret in JSON:
+
+```json
+"smtp": {
+  "host": "smtp.example.com",
+  "port": 587,
+  "from": "tidemux@example.com",
+  "to": "you@example.com",
+  "keychain": {"service": "com.example.tidemux.smtp", "account": "default"}
+}
+```
+
+Run the generate/deliver commands from a user-owned macOS `launchd` job at the
+desired daily time. If the machine is offline or asleep, launchd will run it at
+its next opportunity; TideMux records only the actual generated report and does
+not fabricate a missed balance snapshot.
+
 ## Legacy data
 
 `ledger_requests`, `ledger_events` and their old `Summarize` view remain for
