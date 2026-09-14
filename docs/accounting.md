@@ -5,13 +5,16 @@ usage. It does not fetch provider invoices or charge users.
 
 ## What is recorded
 
-The SQLite database has three active tables:
+The SQLite database has the following active tables:
 
 | Table | Purpose |
 | --- | --- |
 | `request_audit` | One terminal record per admitted-to-processing request, including requests canceled while queued |
 | `audit_events` | Ordered events such as queue waiting and upstream rate limiting, committed with the request |
 | `local_diagnostics` | Rejections before upstream processing, such as invalid authentication, unsupported endpoints or invalid parameters |
+| `token_comparisons` | Optional local tokenizer counts keyed to an audited request; never stores request text |
+| `balance_snapshots` | Explicit account-balance observations for account-level variance diagnostics |
+| `supplier_statement_lines` | Imported supplier statement rows, kept separate from local estimates |
 
 Successful model discovery is served locally and does not create a billing attempt.
 A tool workflow or client retry can create several request records. TideMux does
@@ -83,9 +86,36 @@ also compared response/cache usage and independently calculated Decimal estimate
 with recorded results. Those runs verified selected configured prices; they did
 not implement automatic peak/off-peak pricing or reconcile supplier invoices.
 
-Actual invoice reconciliation would additionally require provider request IDs
-and billing exports, accounting periods, rounding/discount rules, and a workflow
-for resolving unmatched or unknown attempts. These are not implemented in 0.1.0.
+## 0.1.1 reconciliation model
+
+`tidemux reconcile import --config /absolute/path/to/profile.json --file statement.csv`
+imports a normalized supplier statement. The first supported CSV format is:
+
+```text
+period_start,period_end,currency,amount,request_id,model
+2026-09-14T00:00:00Z,2026-09-15T00:00:00Z,USD,0.0134,tidemux-request-id,deepseek-flash
+```
+
+The first four columns are mandatory. Times must be RFC3339 (or positive Unix
+milliseconds), `amount` must be a non-negative finite number, and the end must
+follow the start. `request_id` and `model` are optional. A row without a known
+TideMux `request_id` is explicitly reported as unmatched: TideMux never guesses
+that a statement charge belongs to a local request. Re-importing a file imports
+new lines, so users should retain the source file and avoid accidental repeats.
+
+`tidemux reconcile report --config /absolute/path/to/profile.json --from
+2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z` returns one row per currency
+with local estimated cost, imported statement amount, statement-minus-estimate
+difference, known/unknown statement links, requests with unknown local cost and
+tokenizer comparison counts. It does not combine currencies or call an estimate
+an actual supplier charge when no statement has been imported.
+
+The reconciliation schema also has append-only records for a local tokenizer
+measurement and account-balance snapshots. The tokenizer record contains only
+counts, tool/version and request ID; provider API usage remains the request
+settlement truth. Balance net changes are account-level diagnostics only:
+top-ups, grants, expiry and other API clients may alter a balance. They are never
+booked as TideMux spending.
 
 ## Legacy data
 
