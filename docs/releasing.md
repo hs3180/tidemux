@@ -8,7 +8,7 @@ or published version's assets.
 ## Prepare and build
 
 1. Run `gofmt -l cmd internal`, `CGO_ENABLED=0 go test ./...`,
-   `CGO_ENABLED=0 go vet ./...`, and `go test -race ./...`.
+	`CGO_ENABLED=0 go vet ./...`, and `go test -race ./...`.
 2. Run `python3 scripts/licenses.py` and review dependency versions/notices.
 3. Update the source `version`, CHANGELOG and acceptance evidence. Commit all
    reviewed files; do not include local credentials, config or databases.
@@ -32,6 +32,18 @@ authorize replacing any published tag or asset.
 
 The script packages but never publishes. CI uploads candidate workflow artifacts
 only, not GitHub Releases.
+
+## 0.1.1 acceptance additions
+
+Before tagging 0.1.1, use a copy of a 0.1.0 ledger to verify migrations are
+additive and `tidemux ledger` remains readable. Exercise a hard-limit request
+against a local upstream and verify it receives no second call. Import a
+de-identified statement CSV and confirm unmatched lines remain unmatched.
+Generate a report, inspect its JSON for the absence of message bodies and
+credentials, then test macOS notification delivery and an SMTP test mailbox.
+Record delivery failure and retry behavior. Daily balance API checks require an
+explicit authorized low-cost account; a balance delta is diagnostic only, never
+proof of a particular request charge.
 
 ## Live gate
 

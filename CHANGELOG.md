@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — budget, reconciliation and daily reports
+
+- Add append-only supplier statement import, API-usage/tokenizer comparison and
+  account-balance snapshots. Local estimates remain distinct from supplier bills.
+- Add timezone-aware daily/monthly budget reservations with alert, soft-confirm
+  and pre-upstream hard-limit modes; unknown usage remains conservatively held.
+- Add privacy-safe persisted daily reports, macOS notification delivery, optional
+  Keychain-backed SMTP delivery, delivery status and retry commands.
+
 ## 0.1.0 — initial public release
 
 - macOS arm64 gateway for OpenAI-compatible and Anthropic-compatible APIs.
