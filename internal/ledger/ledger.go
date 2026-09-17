@@ -71,7 +71,20 @@ func Open(path string) (*Ledger, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := l.initBudget(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return l, nil
+}
+
+func (l *Ledger) initBudget(ctx context.Context) error {
+	_, err := l.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS budget_reservations (
+ request_id TEXT PRIMARY KEY, audit_id TEXT, reserved_at_ms INTEGER NOT NULL,
+ currency TEXT NOT NULL, reserved_amount REAL NOT NULL, charged_amount REAL NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('reserved','settled','unknown')));
+ CREATE INDEX IF NOT EXISTS budget_reservation_period ON budget_reservations(currency,reserved_at_ms);`)
+	return err
 }
 
 // Close releases the local database handle.

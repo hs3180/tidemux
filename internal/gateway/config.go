@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 type KeychainReference struct {
@@ -28,6 +29,7 @@ type SecretLookup interface {
 	Lookup(context.Context, KeychainReference) (string, error)
 }
 type Config struct {
+	Budget              ledger.BudgetPolicy      `json:"budget,omitempty"`
 	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits              adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr          string                   `json:"listen_addr"`
@@ -57,6 +59,9 @@ func LoadConfig(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
+	if err := c.Budget.Validate(); err != nil {
+		return err
+	}
 	if err := c.ModelCapabilities.Validate(); err != nil {
 		return err
 	}
