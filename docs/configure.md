@@ -30,7 +30,11 @@ Default files:
 - Ledger: `~/Library/Application Support/TideMux/ledger.db`
 
 The CLI resolves its default path; manually supplied JSON paths still need
-absolute paths (no `~` expansion). Query requests with `tidemux ledger`.
+absolute paths (no `~` expansion). Use `tidemux billing` for a readable summary
+of the current calendar month in your computer's local timezone, or add
+`--details` to inspect its request records. The output shows exact RFC3339 date
+bounds; `--from` and `--to` select another period. Add `--json` for structured
+output, or `--download billing.csv` to save the selected period's billing details.
 
 ## If the login keychain is locked
 
@@ -140,21 +144,25 @@ An upstream timeout before streaming returns 504 `upstream_timeout`; after
 streaming starts it emits a safe SSE error. The attempt is recorded as an error
 with unknown usage/cost, rather than a successful response or user cancellation.
 
-## Local rejection diagnostics (0.1.0)
+## Local rejection diagnostics
 
 ```sh
-./tidemux ledger --diagnostics --config /path/to/config.json
+tidemux doctor --diagnostics --config /absolute/path/to/config.json
+
+# Structured output for tools:
+tidemux doctor --diagnostics --json --config /absolute/path/to/config.json
 ```
 
 Rejected authentication, unsupported routes, oversized bodies and invalid
 requests receive `X-TideMux-Request-ID`. Match that ID against the independent
-`local_diagnostics` table or this command's JSON output. Each record contains
-only a timestamp, protocol, normalized method/endpoint category, HTTP status and
-safe error code. Original URLs, query strings, headers, unknown field names and
-message contents are not stored.
+`local_diagnostics` table or this command's output. The default is a readable
+table of the latest 100 local rejections; `--json` returns those records as a JSON
+array. Each record contains only a timestamp, protocol, normalized method/endpoint
+category, HTTP status and safe error code. Original URLs, query strings, headers,
+unknown field names and message contents are not stored.
 
 These rows are not upstream attempts and do not contribute to token/cost totals.
-The ordinary `ledger` command continues to show upstream attempt records. If
+Use `billing --details` for upstream attempt records. If
 writing a local diagnostic fails, the response is 500 `local_diagnostic_failed`
 with the generated ID; no upstream call was made. The new table is additive and
 does not modify existing 0.1.0 request records.

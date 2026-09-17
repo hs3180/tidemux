@@ -79,12 +79,20 @@ See [protocol support](protocols.md) for accepted fields. The response keeps
 upstream JSON and adds `X-TideMux-Request-ID` for audit correlation.
 
 ```sh
-./tidemux ledger --config ./tidemux.json
+./tidemux billing --config ./tidemux.json
+./tidemux billing --details --config ./tidemux.json
 ```
 
-This prints the 100 most recent audit records as JSON without retrieving keys.
-`null` token/count/cost means unknown. Cancellation is not evidence of zero
-upstream billing. If the gateway reports `audit_failed_do_not_retry_blindly`,
+The first command shows a readable billing summary; the second shows its request
+audit details. Both default to the current calendar month in the computer's
+local timezone and display exact RFC3339 bounds. Use `--from` and `--to` for
+another period; if either is supplied, the missing boundary is open. Add `--json`
+for structured output or use `--download billing.csv` to save the selected period's
+stored billing details. These queries do not retrieve keys or contact the provider.
+Use `doctor --diagnostics` for recent local rejections, adding `--json` for tools.
+
+Unknown token counts or costs remain unknown (`null` in JSON). Cancellation is
+not evidence of zero upstream billing. If the gateway reports `audit_failed_do_not_retry_blindly`,
 the provider may already have executed the call; inspect storage and upstream
 usage before retrying. TideMux does not automatically retry any call.
 
@@ -131,7 +139,7 @@ prompt, response content or key. Review sanitized evidence before sharing it.
 
 New records are in `request_audit` and `audit_events`, committed together.
 Legacy `ledger_requests`/`ledger_events` tables are preserved, not reinterpreted;
-`ledger` shows only the new audit format. Back up the database while the service
-is stopped before switching versions. Removing the binary does not delete the
+`billing --details` shows the current audit format. Back up the database while the
+service is stopped before switching versions. Removing the binary does not delete the
 configured database, JSON file, or Keychain entries. Remove those separately only
 when you intentionally want to erase your local state.

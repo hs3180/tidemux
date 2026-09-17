@@ -21,7 +21,7 @@ import (
 
 const (
 	version = "0.1.0"
-	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux billing [--config <path>] [--from RFC3339 --to RFC3339] [--download path.csv]\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
+	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--config <path>] [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
 func main() {
@@ -58,9 +58,12 @@ func run(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config containing Keychain references")
-	var diagnostics bool
-	if command == "ledger" {
+	var diagnostics, diagnosticJSON bool
+	if command == "ledger" || command == "doctor" {
 		flags.BoolVar(&diagnostics, "diagnostics", false, "show local rejections separately from upstream attempts")
+	}
+	if command == "doctor" {
+		flags.BoolVar(&diagnosticJSON, "json", false, "output local diagnostics as JSON (requires --diagnostics)")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -68,11 +71,19 @@ func run(args []string, stdout, stderr *os.File) error {
 	if *configPath == "" || flags.NArg() != 0 {
 		return errors.New(usage)
 	}
+	if diagnosticJSON && !diagnostics {
+		return errors.New("doctor --json requires --diagnostics")
+	}
 	config, err := gateway.LoadConfig(*configPath)
 	if err != nil {
 		return err
 	}
+	if command == "doctor" && diagnostics {
+		return doctorDiagnostics(config.LedgerPath, diagnosticJSON, stdout)
+	}
 	if command == "ledger" {
+		// Retain the old command's latest-100 JSON contract for existing scripts.
+		// New interactive usage is documented under billing and doctor.
 		store, err := ledger.Open(config.LedgerPath)
 		if err != nil {
 			return errors.New("cannot open ledger")

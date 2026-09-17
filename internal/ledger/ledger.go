@@ -85,6 +85,22 @@ func Open(path string) (*Ledger, error) {
 // schema. SQLite may create WAL coordination sidecars when reading a WAL database.
 // A gateway must initialize automatic reconciliation before querying.
 func OpenReadOnly(path string) (*Ledger, error) {
+	l, err := OpenAuditReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	var initialized int
+	if err = l.db.QueryRow(`SELECT COUNT(*) FROM reconciliation_schema WHERE version=1`).Scan(&initialized); err != nil || initialized != 1 {
+		l.Close()
+		return nil, errors.New("automatic reconciliation is not initialized; start the gateway first")
+	}
+	return l, nil
+}
+
+// OpenAuditReadOnly opens an existing database without creating or migrating
+// schemas. It also supports historical audit and diagnostic databases that
+// predate automatic reconciliation. SQLite may update WAL coordination sidecars.
+func OpenAuditReadOnly(path string) (*Ledger, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve ledger path: %w", err)
@@ -104,10 +120,9 @@ func OpenReadOnly(path string) (*Ledger, error) {
 		return nil, fmt.Errorf("open read-only ledger: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	var initialized int
-	if err = db.QueryRow(`SELECT COUNT(*) FROM reconciliation_schema WHERE version=1`).Scan(&initialized); err != nil || initialized != 1 {
+	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, errors.New("automatic reconciliation is not initialized; start the gateway first")
+		return nil, fmt.Errorf("read existing ledger: %w", err)
 	}
 	return &Ledger{db: db}, nil
 }

@@ -73,15 +73,22 @@ estimation, not exact financial settlement.
 ## Inspect requests
 
 ```sh
-tidemux ledger
-tidemux ledger --diagnostics
-# For another profile:
-tidemux ledger --config /absolute/path/to/profile.json
+# Request details for the current calendar month:
+tidemux billing --details
+
+# Recent local rejections, kept separate from upstream attempts:
+tidemux doctor --diagnostics
+
+# Structured output for another profile:
+tidemux billing --config /absolute/path/to/profile.json --details --json
 ```
 
-The CLI returns the latest 100 records as JSON. Use read-only SQLite queries for
-larger periods; preserve unknown-cost counts and group by currency rather than
-silently treating nulls as free or adding different currencies.
+Request details include every audit in the selected period, newest first, and
+follow the same period as billing statistics and downloads.
+`doctor --diagnostics` shows the latest 100 local rejections in a readable table;
+add `--json` for a structured array. Local rejections are not billed attempts.
+Preserve unknown-cost counts and group by currency rather than silently treating
+unknown amounts as free or adding different currencies.
 
 Validation compares each response's request ID and usage with its audit record,
 then independently recomputes cost from the recorded rates. Tests cover unknown
@@ -146,8 +153,14 @@ stopped, does not trigger reconciliation and requires an existing initialized
 ledger. It does not access Keychain or contact the provider.
 
 ```sh
-# JSON statistics and the latest statement synchronization status:
+# Readable current-month statistics and statement synchronization status:
 tidemux billing
+
+# The same statistics as structured JSON:
+tidemux billing --json
+
+# Request audit details for the same period:
+tidemux billing --details
 
 # An inclusive start and exclusive end for another profile:
 tidemux billing --config /absolute/path/to/profile.json \
@@ -159,14 +172,28 @@ tidemux billing --config /absolute/path/to/profile.json \
   --download /absolute/path/to/billing-2026-09-14.csv
 ```
 
-Times must use RFC3339 and fall after the Unix epoch. Omit either date to leave
-that boundary open. The download path must be new: existing files are never
-overwritten, and a failed export removes its partial output.
+Without `--from` or `--to`, every billing view uses the current calendar month
+in the computer's local timezone: from midnight on its first day, inclusive, to
+midnight on the first day of the next month, exclusive. The output displays the
+exact RFC3339 bounds, including timezone offsets. This default applies to the
+summary, `--details`, `--json` and `--download`.
 
-JSON has a `reconciliation` array grouped by currency and a `statement_sync`
-object. Statistics include local estimated cost, supplier statement amounts,
-matched and unmatched lines, requests with unknown local cost and requests with
-no matching statement. Coverage is `no_statement`, `partial` or `complete`;
+To select a period, use RFC3339 times after the Unix epoch, with at most
+millisecond precision. Finer nonzero fractions are rejected because stored
+timestamps use milliseconds. When you supply either `--from` or `--to`, the
+omitted boundary is open; supplying only `--from` does not add an implicit
+month-end limit. The same period rules apply to every billing
+view. Combine `--details --json` for structured request details. The download path
+must be new: existing files are never overwritten, and a failed export removes
+its partial output.
+
+The summary shows statistics by currency and the latest statement synchronization
+status. With `--json`, the result includes `period`, `usage`, `reconciliation`
+and `statement_sync`. The period's `from` and `to` are RFC3339 strings, or `null`
+for an open boundary. `--details --json` adds a `requests` array, including when
+no records match. Statistics include local estimated cost, supplier statement
+amounts, matched and unmatched lines, requests with unknown local cost and
+requests with no matching statement. Coverage is `no_statement`, `partial` or `complete`;
 `difference` is `null` unless the selected records have complete comparable
 coverage. Supplier periods that only partly fit the selected range are excluded
 from the supplier total and counted separately. Different currencies are never
@@ -180,6 +207,9 @@ an estimate is never substituted for a supplier charge. Blank amounts or token
 counts mean unknown or unavailable, while `0` means a recorded zero. Without a
 supplier statement, the download contains local request records only. A period
 with no records produces column headers and no data rows.
+After a successful download, the CLI confirms the destination and selected
+period. Add `--json` to receive a structured receipt with `period` and `download`
+instead; the CSV contents are still written to the requested file.
 
 The reconciliation schema also has append-only records for a local tokenizer
 measurement and account-balance snapshots. The tokenizer record contains only
@@ -191,6 +221,11 @@ retrieval are not implemented; these diagnostics are present only when
 measurements have been recorded.
 
 ## Legacy data
+
+Older scripts can keep using the hidden `tidemux ledger` and
+`tidemux ledger --diagnostics` commands with their existing latest-100 JSON
+behavior. New usage should use `billing --details` for request records and
+`doctor --diagnostics` for local rejections, adding `--json` when needed.
 
 `ledger_requests`, `ledger_events` and their old `Summarize` view remain for
 historical compatibility. The active gateway writes `request_audit`/`audit_events`,

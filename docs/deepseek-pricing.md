@@ -24,7 +24,10 @@ These files contain only a `prices` object; they are not complete gateway profil
    other model prices, settings and Keychain references.
 3. Run `tidemux doctor --config /absolute/path/to/profile.json`, then restart
    `tidemux serve --config /absolute/path/to/profile.json`.
-4. Inspect new records with `tidemux ledger --config /absolute/path/to/profile.json`.
+4. Inspect this month's records with
+   `tidemux billing --details --config /absolute/path/to/profile.json`.
+   Add `--json` for structured output or select another period with `--from` and
+   `--to`; see [billing periods](accounting.md#billing-statistics-and-download).
 
 The entry records USD, the official source URL and the verification date/period.
 It can be used in either protocol profile for this model. Cache-hit pricing maps

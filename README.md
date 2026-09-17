@@ -74,14 +74,18 @@ tidemux hermes -- -q 'Explain this project'
 TideMux supplies the gateway URL, model and local credential to the client
 without overwriting its original profile.
 
-Inspect requests with `tidemux ledger`. Cost estimates require
+Run `tidemux billing` for a readable summary of the current calendar month in
+your computer's local timezone. Add `--details` to inspect request records or
+`--json` for structured output. Cost estimates require
 [configured model prices](docs/configure.md); unknown amounts stay unknown.
 Use the [DeepSeek USD rates](docs/deepseek-pricing.md) for this example.
 Reconciliation runs automatically with the gateway. Place normalized supplier
-CSVs in the `statements` directory beside the ledger, then use `tidemux billing`
-for statistics or `tidemux billing --download billing.csv` to save stored billing
-details. See [accounting](docs/accounting.md#automatic-reconciliation) for the
-CSV format, synchronization status and statement coverage.
+CSVs in the `statements` directory beside the ledger. Use
+`tidemux billing --download billing.csv` to save that month's stored billing
+details, or select a period with `--from` and `--to`. The summary shows its exact
+RFC3339 date bounds. Use `tidemux doctor --diagnostics` to inspect local request
+rejections. See [accounting](docs/accounting.md#billing-statistics-and-download)
+for periods, synchronization status, statement coverage and the CSV format.
 For separate profiles or simultaneous use of both protocols, see [client setup](docs/clients.md).
 
 ## Compatibility
