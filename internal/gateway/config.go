@@ -28,6 +28,7 @@ type SecretLookup interface {
 	Lookup(context.Context, KeychainReference) (string, error)
 }
 type Config struct {
+	Reconciliation      ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits              adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr          string                   `json:"listen_addr"`
@@ -57,6 +58,9 @@ func LoadConfig(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
+	if err := c.Reconciliation.Validate(); err != nil {
+		return err
+	}
 	if err := c.ModelCapabilities.Validate(); err != nil {
 		return err
 	}

@@ -6,6 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -76,6 +79,37 @@ func Open(path string) (*Ledger, error) {
 		return nil, err
 	}
 	return l, nil
+}
+
+// OpenReadOnly opens an existing database without creating it or migrating its
+// schema. SQLite may create WAL coordination sidecars when reading a WAL database.
+// A gateway must initialize automatic reconciliation before querying.
+func OpenReadOnly(path string) (*Ledger, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ledger path: %w", err)
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return nil, fmt.Errorf("open existing ledger: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("ledger path must be a regular file")
+	}
+	uri := url.URL{Scheme: "file", Path: absolute}
+	query := url.Values{"mode": []string{"ro"}, "_pragma": []string{"query_only(1)", "busy_timeout(5000)"}}
+	uri.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", uri.String())
+	if err != nil {
+		return nil, fmt.Errorf("open read-only ledger: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	var initialized int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM reconciliation_schema WHERE version=1`).Scan(&initialized); err != nil || initialized != 1 {
+		db.Close()
+		return nil, errors.New("automatic reconciliation is not initialized; start the gateway first")
+	}
+	return &Ledger{db: db}, nil
 }
 
 // Close releases the local database handle.

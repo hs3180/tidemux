@@ -1,11 +1,12 @@
 # Request accounting and reconciliation
 
-TideMux records local request outcomes and estimates cost from provider-reported
-usage. It does not fetch provider invoices or charge users.
+TideMux records local request outcomes, estimates cost from provider-reported
+usage and automatically reconciles normalized supplier statements while the
+gateway runs. It does not fetch provider invoices or charge users.
 
 ## What is recorded
 
-The SQLite database has the following active tables:
+The SQLite database keeps the following accounting records:
 
 | Table | Purpose |
 | --- | --- |
@@ -15,6 +16,9 @@ The SQLite database has the following active tables:
 | `token_comparisons` | Optional local tokenizer counts keyed to an audited request; never stores request text |
 | `balance_snapshots` | Explicit account-balance observations for account-level variance diagnostics |
 | `supplier_statement_lines` | Imported supplier statement rows, kept separate from local estimates |
+| `reconciliation_requests`, `reconciliation_statements` | Automatically maintained matches, coverage and comparison amounts |
+| `statement_imports`, `statement_import_sources` | Persistent file fingerprints and accepted source paths |
+| `statement_sync` | Latest background check result and last successful check |
 
 Successful model discovery is served locally and does not create a billing attempt.
 A tool workflow or client retry can create several request records. TideMux does
@@ -66,7 +70,7 @@ observed streaming usage or a cost estimate; they may still incur provider costs
 Cost calculations use floating-point numbers and SQLite REAL, suitable for
 estimation, not exact financial settlement.
 
-## Inspect and reconcile
+## Inspect requests
 
 ```sh
 tidemux ledger
@@ -86,10 +90,17 @@ also compared response/cache usage and independently calculated Decimal estimate
 with recorded results. Those runs verified selected configured prices; they did
 not implement automatic peak/off-peak pricing or reconcile supplier invoices.
 
-## 0.1.1 reconciliation model
+## Automatic reconciliation
 
-`tidemux reconcile import --config /absolute/path/to/profile.json --file statement.csv`
-imports a normalized supplier statement. The first supported CSV format is:
+Reconciliation runs with the gateway; there is no command to start, import or
+retry it. Local estimates are recorded with each completed request. On gateway
+startup and every 60 seconds thereafter, TideMux checks the `statements`
+directory beside the ledger for normalized supplier CSV files and imports new
+files automatically. The gateway creates this directory when needed. Files that
+cannot be read or validated are retried on later checks without interrupting
+request serving.
+
+Obtain the statement from your provider and normalize it to this CSV format:
 
 ```text
 period_start,period_end,currency,amount,request_id,model
@@ -100,22 +111,84 @@ The first four columns are mandatory. Times must be RFC3339 (or positive Unix
 milliseconds), `amount` must be a non-negative finite number, and the end must
 follow the start. `request_id` and `model` are optional. A row without a known
 TideMux `request_id` is explicitly reported as unmatched: TideMux never guesses
-that a statement charge belongs to a local request. Re-importing a file imports
-new lines, so users should retain the source file and avoid accidental repeats.
+that a statement charge belongs to a local request.
 
-`tidemux reconcile report --config /absolute/path/to/profile.json --from
-2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z` returns one row per currency
-with local estimated cost, imported statement amount, statement-minus-estimate
-difference, known/unknown statement links, requests with unknown local cost and
-tokenizer comparison counts. It does not combine currencies or call an estimate
-an actual supplier charge when no statement has been imported.
+Treat statement files as immutable. Write each complete file outside the watched
+directory, then move it into that directory with a `.csv` extension. TideMux
+deduplicates identical file contents, including across gateway restarts or file
+renames. Changes to an already imported file path are rejected. Keep exports
+non-overlapping: content deduplication does not identify the same charge repeated
+in different exports. A file must be at most 32 MiB and contain at most 100,000
+data rows. Each background import also has a two-second time budget to keep
+request auditing responsive; files within the size limits can still exceed this
+budget. Timed-out files are retried on later checks. Split slow or large exports
+into independent, non-overlapping smaller files. Invalid or timed-out files are
+rejected as a whole.
+
+To change the directory or interval, add this optional object to the profile:
+
+```json
+"reconciliation": {
+  "statement_dir": "/absolute/path/to/statements",
+  "poll_interval_seconds": 60
+}
+```
+
+The polling interval accepts 1 through 86400 seconds; `0` selects the default.
+Missing fields use their defaults. Each profile should use its own statement
+directory when it has a separate ledger. TideMux reads provider exports supplied
+locally; automatic provider invoice retrieval is not implemented.
+
+## Billing statistics and download
+
+The single billing command queries stored data. It works while the gateway is
+stopped, does not trigger reconciliation and requires an existing initialized
+ledger. It does not access Keychain or contact the provider.
+
+```sh
+# JSON statistics and the latest statement synchronization status:
+tidemux billing
+
+# An inclusive start and exclusive end for another profile:
+tidemux billing --config /absolute/path/to/profile.json \
+  --from 2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z
+
+# Download the stored billing details as a private CSV file:
+tidemux billing --config /absolute/path/to/profile.json \
+  --from 2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z \
+  --download /absolute/path/to/billing-2026-09-14.csv
+```
+
+Times must use RFC3339 and fall after the Unix epoch. Omit either date to leave
+that boundary open. The download path must be new: existing files are never
+overwritten, and a failed export removes its partial output.
+
+JSON has a `reconciliation` array grouped by currency and a `statement_sync`
+object. Statistics include local estimated cost, supplier statement amounts,
+matched and unmatched lines, requests with unknown local cost and requests with
+no matching statement. Coverage is `no_statement`, `partial` or `complete`;
+`difference` is `null` unless the selected records have complete comparable
+coverage. Supplier periods that only partly fit the selected range are excluded
+from the supplier total and counted separately. Different currencies are never
+combined. Synchronization status reports the last attempt, last successful check,
+files and lines imported, and failures, so stale or unavailable statements remain
+visible. When the gateway is stopped these values stay at the last recorded check.
+
+The CSV is a download of locally stored billing details, not an official provider
+invoice. Local requests and supplier statement lines have separate row types;
+an estimate is never substituted for a supplier charge. Blank amounts or token
+counts mean unknown or unavailable, while `0` means a recorded zero. Without a
+supplier statement, the download contains local request records only. A period
+with no records produces column headers and no data rows.
 
 The reconciliation schema also has append-only records for a local tokenizer
 measurement and account-balance snapshots. The tokenizer record contains only
 counts, tool/version and request ID; provider API usage remains the request
 settlement truth. Balance net changes are account-level diagnostics only:
 top-ups, grants, expiry and other API clients may alter a balance. They are never
-booked as TideMux spending.
+booked as TideMux spending. Automatic local tokenization and provider balance
+retrieval are not implemented; these diagnostics are present only when
+measurements have been recorded.
 
 ## Legacy data
 

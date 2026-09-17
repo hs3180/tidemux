@@ -8,6 +8,7 @@ TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatibl
 - **Simple client setup** — run `tidemux claude`, `tidemux kilo` or `tidemux hermes` with secure credentials and separate profiles.
 - **Concurrency control** — limit active requests and queue the rest.
 - **Local usage ledger** — track outcomes, tokens and cost estimates without storing message bodies.
+- **Automatic reconciliation** — match locally supplied statement CSVs while the gateway runs; query statistics or download billing details with `tidemux billing`.
 
 ## Install
 
@@ -76,6 +77,11 @@ without overwriting its original profile.
 Inspect requests with `tidemux ledger`. Cost estimates require
 [configured model prices](docs/configure.md); unknown amounts stay unknown.
 Use the [DeepSeek USD rates](docs/deepseek-pricing.md) for this example.
+Reconciliation runs automatically with the gateway. Place normalized supplier
+CSVs in the `statements` directory beside the ledger, then use `tidemux billing`
+for statistics or `tidemux billing --download billing.csv` to save stored billing
+details. See [accounting](docs/accounting.md#automatic-reconciliation) for the
+CSV format, synchronization status and statement coverage.
 For separate profiles or simultaneous use of both protocols, see [client setup](docs/clients.md).
 
 ## Compatibility

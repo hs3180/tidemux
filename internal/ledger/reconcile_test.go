@@ -32,7 +32,7 @@ func TestReconcileKeepsEstimatesStatementsAndUnknownsDistinct(t *testing.T) {
 	if err := l.AppendBalanceSnapshot(context.Background(), BalanceSnapshot{ObservedAtMS: 110, Currency: "USD", Total: 6}); err != nil {
 		t.Fatal(err)
 	}
-	r, err := l.Reconcile(context.Background(), 0, 200)
+	r, err := l.Reconcile(context.Background(), 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,10 +40,10 @@ func TestReconcileKeepsEstimatesStatementsAndUnknownsDistinct(t *testing.T) {
 		t.Fatalf("rows=%+v", r)
 	}
 	x := r[0]
-	if x.LocalEstimated != 2.5 || x.SupplierStatement != 4 || x.Difference != 1.5 || x.MatchedLines != 1 || x.UnmatchedLines != 1 || x.UnknownCostRequests != 1 || x.TokenizerComparisons != 1 || x.TokenizerMismatches != 1 {
+	if x.LocalEstimated != 2.5 || x.SupplierStatement != 4 || x.Difference != nil || x.Coverage != "partial" || x.MatchedLines != 1 || x.UnmatchedLines != 1 || x.UnknownCostRequests != 1 || x.TokenizerComparisons != 1 || x.TokenizerMismatches != 1 {
 		t.Fatalf("report=%+v", x)
 	}
-	if x.BalanceNetChange == nil || *x.BalanceNetChange != -4 || x.UnattributedBalanceDelta == nil || *x.UnattributedBalanceDelta != -1.5 {
+	if x.BalanceNetChange == nil || *x.BalanceNetChange != -4 || x.UnattributedBalanceDelta != nil {
 		t.Fatalf("balance=%+v", x)
 	}
 }
