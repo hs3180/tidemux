@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/gateway"
-	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 const (
@@ -52,17 +50,15 @@ func run(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, version)
 		return nil
 	}
-	if command != "serve" && command != "doctor" && command != "ledger" {
+	if command != "serve" && command != "doctor" {
 		return errors.New(usage)
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config containing Keychain references")
 	var diagnostics, diagnosticJSON bool
-	if command == "ledger" || command == "doctor" {
-		flags.BoolVar(&diagnostics, "diagnostics", false, "show local rejections separately from upstream attempts")
-	}
 	if command == "doctor" {
+		flags.BoolVar(&diagnostics, "diagnostics", false, "show local rejections separately from upstream attempts")
 		flags.BoolVar(&diagnosticJSON, "json", false, "output local diagnostics as JSON (requires --diagnostics)")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
@@ -80,27 +76,6 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "doctor" && diagnostics {
 		return doctorDiagnostics(config.LedgerPath, diagnosticJSON, stdout)
-	}
-	if command == "ledger" {
-		// Retain the old command's latest-100 JSON contract for existing scripts.
-		// New interactive usage is documented under billing and doctor.
-		store, err := ledger.Open(config.LedgerPath)
-		if err != nil {
-			return errors.New("cannot open ledger")
-		}
-		defer store.Close()
-		if diagnostics {
-			rows, err := store.RecentDiagnostics(context.Background(), 100)
-			if err != nil {
-				return errors.New("cannot read local diagnostics")
-			}
-			return json.NewEncoder(stdout).Encode(rows)
-		}
-		rows, err := store.Recent(context.Background(), 100)
-		if err != nil {
-			return errors.New("cannot read ledger")
-		}
-		return json.NewEncoder(stdout).Encode(rows)
 	}
 	resolved, err := config.ResolveCredentials(context.Background(), gateway.MacOSKeychain{})
 	if err != nil {

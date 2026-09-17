@@ -222,10 +222,11 @@ measurements have been recorded.
 
 ## Legacy data
 
-Older scripts can keep using the hidden `tidemux ledger` and
-`tidemux ledger --diagnostics` commands with their existing latest-100 JSON
-behavior. New usage should use `billing --details` for request records and
-`doctor --diagnostics` for local rejections, adding `--json` when needed.
+The `ledger` command has been removed. Update scripts to use
+`tidemux billing --details --json` for request records and
+`tidemux doctor --diagnostics --json` for local rejections. Billing request
+records follow the selected period; use explicit `--from` and `--to` bounds
+when the current calendar month is not the intended range.
 
 `ledger_requests`, `ledger_events` and their old `Summarize` view remain for
 historical compatibility. The active gateway writes `request_audit`/`audit_events`,

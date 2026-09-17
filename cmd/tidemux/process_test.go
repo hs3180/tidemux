@@ -108,17 +108,23 @@ func TestServeProcessBothProtocols(t *testing.T) {
 			case <-time.After(12 * time.Second):
 				t.Fatal("shutdown timeout")
 			}
-			query := exec.Command(binary, "ledger", "--config", path)
+			query := exec.Command(binary, "billing", "--details", "--json", "--from", "1970-01-01T00:00:00.001Z", "--config", path)
 			out, err := query.CombinedOutput()
 			if err != nil {
-				t.Fatalf("ledger %s %v", out, err)
+				t.Fatalf("billing %s %v", out, err)
 			}
-			var rows []struct {
-				Status        string   `json:"status"`
-				EstimatedCost *float64 `json:"estimated_cost"`
-				Protocol      string   `json:"protocol"`
+			var report struct {
+				Requests []struct {
+					Status        string   `json:"status"`
+					EstimatedCost *float64 `json:"estimated_cost"`
+					Protocol      string   `json:"protocol"`
+				} `json:"requests"`
 			}
-			if json.Unmarshal(out, &rows) != nil || len(rows) != 1 || rows[0].Status != "ok" || rows[0].EstimatedCost == nil || rows[0].Protocol != protocol {
+			if err := json.Unmarshal(out, &report); err != nil {
+				t.Fatalf("billing JSON: %s: %v", out, err)
+			}
+			rows := report.Requests
+			if len(rows) != 1 || rows[0].Status != "ok" || rows[0].EstimatedCost == nil || rows[0].Protocol != protocol {
 				t.Fatalf("records %s", out)
 			}
 			if *rows[0].EstimatedCost < 13.999e-6 || *rows[0].EstimatedCost > 14.001e-6 {

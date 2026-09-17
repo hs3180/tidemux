@@ -67,4 +67,6 @@ else:sys.exit(2)
             assert config.stat().st_mode & 0o777 == 0o600
             values=json.loads(db.read_text());assert len(values)==2 and secret.decode() in values.values()
             assert 'Local checks passed' in captured.decode()
+            assert 'Inspect: tidemux billing --config' in captured.decode()
+            assert 'tidemux ledger' not in captured.decode()
         print('PTY configure passed: '+mode)

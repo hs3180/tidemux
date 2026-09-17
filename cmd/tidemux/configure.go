@@ -117,7 +117,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, "If a config was replaced, its exact backup is beside it as <config>.backup-<id>; old Keychain items are retained.")
 	}
 	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Prices remain unknown until configured.")
-	fmt.Fprintf(stdout, "Next: tidemux serve --config %q\nInspect: tidemux ledger --config %q\n", abs, abs)
+	fmt.Fprintf(stdout, "Next: tidemux serve --config %q\nInspect: tidemux billing --config %q\n", abs, abs)
 	return nil
 }
 func saveConfiguration(path string, c gateway.Config, secret string, replace bool, store secretWriter) error {

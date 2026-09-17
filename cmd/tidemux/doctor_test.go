@@ -18,28 +18,17 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
-func TestLegacyLedgerKeepsLatest100JSONFromHistoricalDatabase(t *testing.T) {
-	for _, diagnostics := range []bool{false, true} {
-		t.Run(fmt.Sprintf("diagnostics=%t", diagnostics), func(t *testing.T) {
-			configPath, _, audits, rejections := historicalDiagnosticFixture(t, "https://example.com/v1", 105)
-			args := []string{"ledger", "--config", configPath}
-			var expected any = audits[:100]
-			if diagnostics {
-				args = append(args, "--diagnostics")
-				expected = rejections[:100]
-			}
-			output, stderr, err := runDiagnosticTest(t, args...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			encoded, err := json.Marshal(expected)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(output, append(encoded, '\n')) || len(stderr) != 0 {
-				t.Fatalf("legacy output changed: stdout=%s stderr=%s", output, stderr)
-			}
-		})
+func TestRemovedLedgerCommandIsRejectedWithoutSideEffects(t *testing.T) {
+	configPath, ledgerPath, _, _ := historicalDiagnosticFixture(t, "https://example.com/v1", 3)
+	before := billingDirectorySnapshot(t, filepath.Dir(ledgerPath))
+	for _, args := range [][]string{{"ledger"}, {"ledger", "--diagnostics"}, {"ledger", "--help"}} {
+		output, stderr, err := runDiagnosticTest(t, append(args, "--config", configPath)...)
+		if err == nil || err.Error() != usage || len(output) != 0 || len(stderr) != 0 {
+			t.Fatalf("removed command %v was not rejected: stdout=%q stderr=%q err=%v", args, output, stderr, err)
+		}
+	}
+	if got := billingDirectorySnapshot(t, filepath.Dir(ledgerPath)); !reflect.DeepEqual(got, before) {
+		t.Fatalf("removed ledger command changed files: before=%v after=%v", before, got)
 	}
 }
 
@@ -101,7 +90,7 @@ func TestDoctorDiagnosticsReadsHistoricalDatabaseWithoutSideEffects(t *testing.T
 
 func TestDiagnosticEmptyMissingAndInvalidModes(t *testing.T) {
 	configPath, ledgerPath, _, _ := historicalDiagnosticFixture(t, "https://example.com/v1", 0)
-	for _, args := range [][]string{{"ledger"}, {"ledger", "--diagnostics"}, {"doctor", "--diagnostics", "--json"}} {
+	for _, args := range [][]string{{"doctor", "--diagnostics", "--json"}} {
 		output, stderr, err := runDiagnosticTest(t, append(args, "--config", configPath)...)
 		if err != nil || string(output) != "[]\n" || len(stderr) != 0 {
 			t.Fatalf("empty %v: stdout=%q stderr=%q err=%v", args, output, stderr, err)
@@ -133,7 +122,7 @@ func TestUsagePromotesBillingAndDoctor(t *testing.T) {
 }
 
 // Create the audit and diagnostic schema used before automatic reconciliation,
-// with old timestamps to verify that legacy queries never acquire date filters.
+// with old timestamps to verify diagnostics are independent of billing periods.
 func historicalDiagnosticFixture(t *testing.T, baseURL string, count int) (string, string, []ledger.Audit, []ledger.Diagnostic) {
 	t.Helper()
 	dir := t.TempDir()
