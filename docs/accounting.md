@@ -284,6 +284,51 @@ Pre-release budget tables and fields are not migrated automatically. A profile
 using the old budget schema must be replaced with the new configuration before
 the budget feature can be used.
 
+## Daily reports and delivery
+
+`tidemux report generate --config /absolute/path/to/profile.json` writes a
+content-free report for the current day; `--date YYYY-MM-DD` regenerates a
+specific local-date view and `report list` reads persisted history. A report
+contains counts, token totals and local estimates. If reconciliation or budget
+tables exist, it reads those optional data sources without owning their migrations.
+Unavailable extensions are `null`, not zero. Use `--timezone` (default UTC) and,
+for a budget remainder, `--daily-budget N --budget-currency USD`; these are
+reporting inputs and do not enforce a gateway budget. It never includes request text, response
+text, API keys, or SMTP credentials.
+
+Create an offline, self-contained visual report with:
+
+```sh
+tidemux report export --config /absolute/path/to/profile.json \
+  --days 30 --timezone Asia/Shanghai --output /absolute/path/to/tidemux-report.html
+```
+
+The HTML file contains summary cards, inline SVG charts for daily requests and
+estimated cost, and a daily detail table. It has no network or JavaScript
+dependency, is written with private file permissions, and can be opened with
+`--open` or `open /absolute/path/to/tidemux-report.html`. The export reads a
+date range without creating persisted daily-report rows.
+
+`tidemux report deliver --id N --channel macos` sends a macOS notification.
+`report retry` retries a recorded failed delivery. Optional SMTP uses this
+config, with the Keychain item containing `username:password` rather than a
+plaintext secret in JSON:
+
+```json
+"smtp": {
+  "host": "smtp.example.com",
+  "port": 587,
+  "from": "tidemux@example.com",
+  "to": "you@example.com",
+  "keychain": {"service": "com.example.tidemux.smtp", "account": "default"}
+}
+```
+
+Run the generate/deliver commands from a user-owned macOS `launchd` job at the
+desired daily time. If the machine is offline or asleep, launchd will run it at
+its next opportunity; TideMux records only the actual generated report and does
+not fabricate a missed balance snapshot.
+
 ## Legacy data
 
 The `ledger` command has been removed. Update scripts to use

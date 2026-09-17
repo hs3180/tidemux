@@ -82,6 +82,10 @@ func Open(path string) (*Ledger, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := l.initReports(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return l, nil
 }
 
