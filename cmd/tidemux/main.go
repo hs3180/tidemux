@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,12 +15,11 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/gateway"
-	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 const (
 	version = "0.1.0"
-	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
+	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
 func main() {
@@ -42,6 +40,9 @@ func run(args []string, stdout, stderr *os.File) error {
 	if command == "configure" {
 		return configure(args[1:], stdout, stderr)
 	}
+	if command == "billing" {
+		return billing(args[1:], stdout, stderr)
+	}
 	if command == "version" {
 		if len(args) != 1 {
 			return errors.New(usage)
@@ -49,15 +50,16 @@ func run(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, version)
 		return nil
 	}
-	if command != "serve" && command != "doctor" && command != "ledger" {
+	if command != "serve" && command != "doctor" {
 		return errors.New(usage)
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config containing Keychain references")
-	var diagnostics bool
-	if command == "ledger" {
+	var diagnostics, diagnosticJSON bool
+	if command == "doctor" {
 		flags.BoolVar(&diagnostics, "diagnostics", false, "show local rejections separately from upstream attempts")
+		flags.BoolVar(&diagnosticJSON, "json", false, "output local diagnostics as JSON (requires --diagnostics)")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -65,28 +67,15 @@ func run(args []string, stdout, stderr *os.File) error {
 	if *configPath == "" || flags.NArg() != 0 {
 		return errors.New(usage)
 	}
+	if diagnosticJSON && !diagnostics {
+		return errors.New("doctor --json requires --diagnostics")
+	}
 	config, err := gateway.LoadConfig(*configPath)
 	if err != nil {
 		return err
 	}
-	if command == "ledger" {
-		store, err := ledger.Open(config.LedgerPath)
-		if err != nil {
-			return errors.New("cannot open ledger")
-		}
-		defer store.Close()
-		if diagnostics {
-			rows, err := store.RecentDiagnostics(context.Background(), 100)
-			if err != nil {
-				return errors.New("cannot read local diagnostics")
-			}
-			return json.NewEncoder(stdout).Encode(rows)
-		}
-		rows, err := store.Recent(context.Background(), 100)
-		if err != nil {
-			return errors.New("cannot read ledger")
-		}
-		return json.NewEncoder(stdout).Encode(rows)
+	if command == "doctor" && diagnostics {
+		return doctorDiagnostics(config.LedgerPath, diagnosticJSON, stdout)
 	}
 	resolved, err := config.ResolveCredentials(context.Background(), gateway.MacOSKeychain{})
 	if err != nil {

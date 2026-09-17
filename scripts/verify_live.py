@@ -22,7 +22,7 @@ def main():
         with urllib.request.urlopen(request,timeout=130) as response:
             request_id=response.headers.get('X-TideMux-Request-ID');payload=json.load(response)
     except Exception:
-        raise SystemExit('Live request failed; inspect tidemux ledger for a safe error code. No raw response printed.')
+        raise SystemExit('Live request failed; inspect tidemux billing --details or tidemux doctor --diagnostics for a safe error code. No raw response printed.')
     db=sqlite3.connect('file:'+str(pathlib.Path(c['ledger_path']).resolve())+'?mode=ro',uri=True)
     row=db.execute('SELECT record_json FROM request_audit WHERE id=?',(request_id,)).fetchone();db.close()
     if not row:raise SystemExit('No matching audit record')

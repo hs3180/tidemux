@@ -86,7 +86,10 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
         for old in ['connect', 'launch']:
             result = subprocess.run([binary, old, 'claude', '--help'], capture_output=True, timeout=5)
             assert result.returncode != 0
-        print('Removed command rejection passed: connect, launch')
+        for args in [['ledger'], ['ledger', '--diagnostics']]:
+            result = subprocess.run([binary, *args, '--config', str(config)], capture_output=True, timeout=5)
+            assert result.returncode != 0 and result.stdout == b''
+        print('Removed command rejection passed: connect, launch, ledger')
     finally:
         server.shutdown()
         server.server_close()
