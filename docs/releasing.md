@@ -33,6 +33,21 @@ authorize replacing any published tag or asset.
 The script packages but never publishes. CI uploads candidate workflow artifacts
 only, not GitHub Releases.
 
+## Planned 0.1.1 acceptance additions
+
+This checklist is not release evidence. Run it after the independent budget,
+reconciliation and reporting changes are merged.
+
+Before tagging 0.1.1, use a copy of a 0.1.0 ledger to verify migrations are
+additive and `tidemux ledger` remains readable. Exercise a hard-limit request
+against a local upstream and verify it receives no second call. Import a
+de-identified statement CSV and confirm unmatched lines remain unmatched.
+Generate a report, inspect its JSON for the absence of message bodies and
+credentials, then test macOS notification delivery and an SMTP test mailbox.
+Record delivery failure and retry behavior. Daily balance API checks require an
+explicit authorized low-cost account; a balance delta is diagnostic only, never
+proof of a particular request charge.
+
 ## Live gate
 
 On macOS use [verify_live.py](../scripts/verify_live.py) as described in the demo
