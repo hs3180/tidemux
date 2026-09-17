@@ -58,7 +58,6 @@ type billingReport struct {
 func billing(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("billing", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")
 	from := flags.String("from", "", "RFC3339 inclusive start (default period: current local calendar month)")
 	to := flags.String("to", "", "RFC3339 exclusive end (an omitted bound is open when the other is supplied)")
 	details := flags.Bool("details", false, "show all request details in the selected period")
@@ -67,7 +66,7 @@ func billing(args []string, stdout, stderr *os.File) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *configPath == "" || flags.NArg() != 0 {
+	if flags.NArg() != 0 {
 		return errors.New(usage)
 	}
 	period, err := resolveBillingPeriod(*from, *to, time.Now())
@@ -75,7 +74,7 @@ func billing(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	fromMS, toMS := period.bounds()
-	config, err := gateway.LoadConfig(*configPath)
+	config, err := gateway.LoadConfig(defaultConfigPath())
 	if err != nil {
 		return err
 	}

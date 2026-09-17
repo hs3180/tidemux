@@ -41,7 +41,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
-	listen := flags.String("listen", "127.0.0.1:8787", "loopback IP:port; use different ports for simultaneous protocol profiles")
+	listen := flags.String("listen", "127.0.0.1:8787", "loopback IP:port")
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
 	contextTokens := flags.Int64("context-tokens", 0, "verified upstream context window; zero means unknown")
 	outputTokens := flags.Int64("output-tokens", 0, "verified upstream output ceiling; zero means unknown")
@@ -84,7 +84,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	if _, err = os.Lstat(abs); err == nil && !*replace {
-		return errors.New("config already exists; use --replace to create new credentials or --config for another profile")
+		return errors.New("config already exists; use --replace to update it with new credentials")
 	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -117,7 +117,12 @@ func configure(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, "If a config was replaced, its exact backup is beside it as <config>.backup-<id>; old Keychain items are retained.")
 	}
 	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Prices remain unknown until configured.")
-	fmt.Fprintf(stdout, "Next: tidemux serve --config %q\nInspect: tidemux billing --config %q\n", abs, abs)
+	defaultPath, _ := filepath.Abs(defaultConfigPath())
+	if abs == defaultPath {
+		fmt.Fprintln(stdout, "Next: tidemux serve\nInspect: tidemux billing")
+	} else {
+		fmt.Fprintf(stdout, "Next: tidemux serve --config %q\n", abs)
+	}
 	return nil
 }
 func saveConfiguration(path string, c gateway.Config, secret string, replace bool, store secretWriter) error {

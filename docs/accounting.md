@@ -59,8 +59,8 @@ cost = (ordinary_input × input_rate
 
 Rates are explicitly configured per model, with currency, source and version.
 There is no default currency or region-specific pricing behavior.
-The gateway's profile supplies the upstream context. Successful requests retain
-a copy of the configured price with their record, so later configuration changes
+The gateway's configuration supplies the upstream context. Successful requests
+retain a copy of the configured price with their record, so later configuration changes
 do not rewrite history. There is no automatic price discovery, time-of-day rate
 switching, currency conversion or provider discount calculation.
 
@@ -79,8 +79,8 @@ tidemux billing --details
 # Recent local rejections, kept separate from upstream attempts:
 tidemux doctor --diagnostics
 
-# Structured output for another profile:
-tidemux billing --config /absolute/path/to/profile.json --details --json
+# Structured request details from the local ledger:
+tidemux billing --details --json
 ```
 
 Request details include every audit in the selected period, newest first, and
@@ -132,7 +132,8 @@ budget. Timed-out files are retried on later checks. Split slow or large exports
 into independent, non-overlapping smaller files. Invalid or timed-out files are
 rejected as a whole.
 
-To change the directory or interval, add this optional object to the profile:
+To change the directory or interval, add this optional object to the local
+TideMux configuration:
 
 ```json
 "reconciliation": {
@@ -142,13 +143,15 @@ To change the directory or interval, add this optional object to the profile:
 ```
 
 The polling interval accepts 1 through 86400 seconds; `0` selects the default.
-Missing fields use their defaults. Each profile should use its own statement
-directory when it has a separate ledger. TideMux reads provider exports supplied
+Missing fields use their defaults. TideMux reads provider exports supplied
 locally; automatic provider invoice retrieval is not implemented.
 
 ## Billing statistics and download
 
-The single billing command queries stored data. It works while the gateway is
+Billing is a single-user local view. The command reads
+`~/Library/Application Support/TideMux/config.json` and queries the existing
+database at its `ledger_path`, preserving the configured location and history.
+The command uses this location automatically. It works while the gateway is
 stopped, does not trigger reconciliation and requires an existing initialized
 ledger. It does not access Keychain or contact the provider.
 
@@ -162,13 +165,11 @@ tidemux billing --json
 # Request audit details for the same period:
 tidemux billing --details
 
-# An inclusive start and exclusive end for another profile:
-tidemux billing --config /absolute/path/to/profile.json \
-  --from 2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z
+# An inclusive start and exclusive end:
+tidemux billing --from 2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z
 
 # Download the stored billing details as a private CSV file:
-tidemux billing --config /absolute/path/to/profile.json \
-  --from 2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z \
+tidemux billing --from 2026-09-14T00:00:00Z --to 2026-09-15T00:00:00Z \
   --download /absolute/path/to/billing-2026-09-14.csv
 ```
 

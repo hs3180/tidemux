@@ -28,7 +28,7 @@ func TestBillingReadsStoredStatisticsWithoutSideEffects(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer upstream.Close()
-	configPath, ledgerPath := billingFixture(t, upstream.URL)
+	_, ledgerPath := billingFixture(t, upstream.URL)
 	statementDir := filepath.Join(filepath.Dir(ledgerPath), "statements")
 	if err := os.Mkdir(statementDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestBillingReadsStoredStatisticsWithoutSideEffects(t *testing.T) {
 	t.Setenv("TIDEMUX_TEST_SECURITY_MARKER", securityMarker)
 	t.Setenv("PATH", fakeBin)
 	before := billingDirectorySnapshot(t, filepath.Dir(ledgerPath))
-	output, err := runBillingTest(t, "billing", "--config", configPath, "--json", "--from", "2026-09-01T00:00:00Z")
+	output, err := runBillingTest(t, "billing", "--json", "--from", "2026-09-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestBillingDownloadPreservesUnknownAndZeroAndExistingFiles(t *testing.T) {
 	configPath, ledgerPath := billingFixture(t, "https://example.com/v1")
 	destination := filepath.Join(t.TempDir(), "billing.csv")
 	before := billingDirectorySnapshot(t, filepath.Dir(ledgerPath))
-	if output, err := runBillingTest(t, "billing", "--config", configPath, "--from", "2026-09-01T00:00:00Z", "--download", destination); err != nil {
+	if output, err := runBillingTest(t, "billing", "--from", "2026-09-01T00:00:00Z", "--download", destination); err != nil {
 		t.Fatalf("download %q: %v", output, err)
 	}
 	info, err := os.Stat(destination)
@@ -136,7 +136,7 @@ func TestBillingDownloadPreservesUnknownAndZeroAndExistingFiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runBillingTest(t, "billing", "--config", configPath, "--download", existingPath); err == nil {
+		if _, err := runBillingTest(t, "billing", "--download", existingPath); err == nil {
 			t.Fatalf("download overwrote %s", existingPath)
 		}
 		unchanged, err := os.ReadFile(existingPath)
@@ -150,10 +150,11 @@ func TestBillingDownloadPreservesUnknownAndZeroAndExistingFiles(t *testing.T) {
 }
 
 func TestBillingRejectsMutationCommandsAndInvalidPeriodsBeforeCreatingOutput(t *testing.T) {
-	configPath, _ := billingFixture(t, "https://example.com/v1")
+	billingFixture(t, "https://example.com/v1")
 	for _, args := range [][]string{
 		{"reconcile", "report"}, {"reconcile", "import"},
 		{"billing", "run"}, {"billing", "import"}, {"billing", "retry"},
+		{"billing", "config"}, {"billing", "--config", defaultConfigPath()},
 		{"billing", "--from", "bad"},
 		{"billing", "--to", "bad"},
 		{"billing", "--from", "1969-12-31T23:59:59Z"},
@@ -163,7 +164,7 @@ func TestBillingRejectsMutationCommandsAndInvalidPeriodsBeforeCreatingOutput(t *
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			destination := filepath.Join(t.TempDir(), "billing.csv")
-			args := append(append([]string{}, args...), "--config", configPath, "--download", destination)
+			args := append(append([]string{}, args...), "--download", destination)
 			if _, err := runBillingTest(t, args...); err == nil {
 				t.Fatalf("accepted invalid command: %v", args)
 			}
@@ -175,13 +176,13 @@ func TestBillingRejectsMutationCommandsAndInvalidPeriodsBeforeCreatingOutput(t *
 }
 
 func TestBillingDoesNotInitializeMissingLedger(t *testing.T) {
-	configPath, ledgerPath := billingFixture(t, "https://example.com/v1")
+	_, ledgerPath := billingFixture(t, "https://example.com/v1")
 	if err := os.Remove(ledgerPath); err != nil {
 		t.Fatal(err)
 	}
 	for _, options := range [][]string{nil, {"--download", filepath.Join(t.TempDir(), "billing.csv")}} {
 		before := billingDirectorySnapshot(t, filepath.Dir(ledgerPath))
-		args := append([]string{"billing", "--config", configPath}, options...)
+		args := append([]string{"billing"}, options...)
 		if _, err := runBillingTest(t, args...); err == nil {
 			t.Fatal("billing accepted a missing ledger")
 		}
@@ -261,7 +262,13 @@ func billingFixtureAt(t *testing.T, baseURL string, start time.Time) (string, st
 	if err != nil {
 		t.Fatal(err)
 	}
-	configPath := filepath.Join(dir, "config.json")
+	// Keep the existing ledger outside the default config directory to verify
+	// that billing discovers its configured location without a path selector.
+	t.Setenv("HOME", t.TempDir())
+	configPath := defaultConfigPath()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +384,7 @@ func TestBillingDefaultMonthAndExplicitRangeAgreeAcrossViews(t *testing.T) {
 		{name: "explicit offset range", start: time.Date(2026, 9, 1, 0, 0, 0, 0, time.FixedZone("test", 8*3600)), end: time.Date(2026, 10, 1, 0, 0, 0, 0, time.FixedZone("test", 8*3600)), flags: []string{"--from", "2026-09-01T00:00:00+08:00", "--to", "2026-10-01T00:00:00+08:00"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			config, path := billingFixtureAt(t, "https://example.com/v1", test.start.AddDate(0, 0, 13))
+			_, path := billingFixtureAt(t, "https://example.com/v1", test.start.AddDate(0, 0, 13))
 			l, err := ledger.Open(path)
 			if err != nil {
 				t.Fatal(err)
@@ -389,7 +396,7 @@ func TestBillingDefaultMonthAndExplicitRangeAgreeAcrossViews(t *testing.T) {
 				}
 			}
 			l.Close()
-			args := append([]string{"billing", "--config", config}, test.flags...)
+			args := append([]string{"billing"}, test.flags...)
 			human, err := runBillingTest(t, args...)
 			if err != nil || !strings.Contains(string(human), "Requests: 4") || json.Valid(human) || strings.Contains(string(human), "Request details") {
 				t.Fatalf("default summary=%q error=%v", human, err)
@@ -463,16 +470,16 @@ func TestBillingDefaultMonthAndExplicitRangeAgreeAcrossViews(t *testing.T) {
 }
 
 func TestBillingHumanOutputExplainsMissingEvidenceAndEmptyPeriods(t *testing.T) {
-	config, _ := billingFixture(t, "https://example.com/v1")
-	out, err := runBillingTest(t, "billing", "--config", config, "--from", "2026-09-14T00:00:00Z", "--to", "2026-09-14T12:00:00Z")
+	billingFixture(t, "https://example.com/v1")
+	out, err := runBillingTest(t, "billing", "--from", "2026-09-14T00:00:00Z", "--to", "2026-09-14T12:00:00Z")
 	if err != nil || !strings.Contains(string(out), "Partial coverage") || !strings.Contains(string(out), "Outside selected bounds") || !strings.Contains(string(out), "Unknown") {
 		t.Fatalf("partial-period output=%s error=%v", out, err)
 	}
-	out, err = runBillingTest(t, "billing", "--config", config, "--details", "--from", "2030-01-01T00:00:00Z")
+	out, err = runBillingTest(t, "billing", "--details", "--from", "2030-01-01T00:00:00Z")
 	if err != nil || !strings.Contains(string(out), "No requests recorded for this period.") || !strings.Contains(string(out), "Requests: 0") {
 		t.Fatalf("empty-period output=%s error=%v", out, err)
 	}
-	out, err = runBillingTest(t, "billing", "--config", config, "--details", "--json", "--from", "2030-01-01T00:00:00Z")
+	out, err = runBillingTest(t, "billing", "--details", "--json", "--from", "2030-01-01T00:00:00Z")
 	if err != nil || !strings.Contains(string(out), `"requests":[]`) {
 		t.Fatalf("empty JSON=%s error=%v", out, err)
 	}

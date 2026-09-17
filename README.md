@@ -5,7 +5,7 @@
 TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatible APIs**.
 
 - **Streaming and tools** — forward conversations and tool calls to your chosen provider.
-- **Simple client setup** — run `tidemux claude`, `tidemux kilo` or `tidemux hermes` with secure credentials and separate profiles.
+- **Simple client setup** — run `tidemux claude`, `tidemux kilo` or `tidemux hermes` with secure local credentials.
 - **Concurrency control** — limit active requests and queue the rest.
 - **Local usage ledger** — track outcomes, tokens and cost estimates without storing message bodies.
 - **Automatic reconciliation** — match locally supplied statement CSVs while the gateway runs; query statistics or download billing details with `tidemux billing`.
@@ -63,19 +63,20 @@ Next time, just run `tidemux serve` to reuse your configuration.
 In another terminal, from your project directory, run the command matching your configured protocol:
 
 ```sh
-# Anthropic profile
+# Anthropic API format
 tidemux claude
 
-# OpenAI profile — choose one
+# OpenAI API format — choose one
 tidemux kilo -- run 'Explain this project'
 tidemux hermes -- -q 'Explain this project'
 ```
 
 TideMux supplies the gateway URL, model and local credential to the client
-without overwriting its original profile.
+without overwriting its existing settings.
 
 Run `tidemux billing` for a readable summary of the current calendar month in
-your computer's local timezone. Add `--details` to inspect request records or
+your computer's local timezone. It reads your existing local ledger from the
+default TideMux configuration. Add `--details` to inspect request records or
 `--json` for structured output. Cost estimates require
 [configured model prices](docs/configure.md); unknown amounts stay unknown.
 Use the [DeepSeek USD rates](docs/deepseek-pricing.md) for this example.
@@ -86,7 +87,7 @@ details, or select a period with `--from` and `--to`. The summary shows its exac
 RFC3339 date bounds. Use `tidemux doctor --diagnostics` to inspect local request
 rejections. See [accounting](docs/accounting.md#billing-statistics-and-download)
 for periods, synchronization status, statement coverage and the CSV format.
-For separate profiles or simultaneous use of both protocols, see [client setup](docs/clients.md).
+For client invocation options and setup details, see [client setup](docs/clients.md).
 
 ## Compatibility
 
