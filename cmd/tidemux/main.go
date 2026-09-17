@@ -21,7 +21,7 @@ import (
 
 const (
 	version = "0.1.0"
-	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
+	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux report <generate|list|deliver|retry> --config <path> [options]\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
 func main() {
@@ -41,6 +41,9 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "configure" {
 		return configure(args[1:], stdout, stderr)
+	}
+	if command == "report" {
+		return report(args[1:], stdout, stderr)
 	}
 	if command == "version" {
 		if len(args) != 1 {
