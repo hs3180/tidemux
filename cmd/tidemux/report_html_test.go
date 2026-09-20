@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,83 @@ func TestReportExportWritesPrivateSelfContainedHTML(t *testing.T) {
 	if strings.Contains(content, "html-export") {
 		t.Fatal("HTML report exposed a request ID")
 	}
+
+	defaultPath := defaultReportPath(ledgerPath)
+	stdout, err = runReportTest(t, "report", "export", "--config", configPath, "--days", "3", "--date", "2026-09-14", "--timezone", "UTC")
+	if err != nil {
+		t.Fatalf("default export failed: %v; output=%s", err, stdout)
+	}
+	if err := json.Unmarshal(stdout, &result); err != nil {
+		t.Fatalf("invalid default export result %q: %v", stdout, err)
+	}
+	if result.Path != defaultPath {
+		t.Fatalf("default export path = %q, want %q", result.Path, defaultPath)
+	}
+	if info, err := os.Stat(filepath.Dir(defaultPath)); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0o700 {
+		t.Fatalf("report directory permissions = %o, want 700", info.Mode().Perm())
+	}
+
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	openCapture := filepath.Join(dir, "open-target")
+	if err := os.WriteFile(filepath.Join(fakeBin, "open"), []byte("#!/bin/sh\nprintf '%s' \"$1\" > \"$TIDEMUX_OPEN_CAPTURE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "terminal-notifier"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TIDEMUX_NOTIFY_CAPTURE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notifyCapture := filepath.Join(dir, "notify-args")
+	t.Setenv("TIDEMUX_OPEN_CAPTURE", openCapture)
+	t.Setenv("TIDEMUX_NOTIFY_CAPTURE", notifyCapture)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := runReportTest(t, "report", "open", "--config", configPath); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := os.ReadFile(openCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(opened) != defaultPath {
+		t.Fatalf("report open target = %q, want %q", opened, defaultPath)
+	}
+
+	generated, err := runReportTest(t, "report", "generate", "--config", configPath, "--date", "2026-09-14", "--timezone", "UTC")
+	if err != nil {
+		t.Fatalf("generate failed: %v; output=%s", err, generated)
+	}
+	var daily ledger.DailyReport
+	if err := json.Unmarshal(generated, &daily); err != nil {
+		t.Fatalf("invalid generated report %q: %v", generated, err)
+	}
+	delivered, err := runReportTest(t, "report", "deliver", "--config", configPath, "--id", strconv.FormatInt(daily.ID, 10), "--channel", "macos", "--days", "3")
+	if err != nil {
+		t.Fatalf("deliver failed: %v; output=%s", err, delivered)
+	}
+	if !strings.Contains(string(delivered), `"status":"sent"`) {
+		t.Fatalf("unexpected delivery result: %s", delivered)
+	}
+	notificationArgs, err := os.ReadFile(notifyCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(notificationArgs)), "\n")
+	if !containsReportNotificationArgs(args, defaultPath) {
+		t.Fatalf("notification args do not open %q: %v", defaultPath, args)
+	}
+}
+
+func containsReportNotificationArgs(args []string, reportPath string) bool {
+	wantURL := (&url.URL{Scheme: "file", Path: reportPath}).String()
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-open" && args[i+1] == wantURL {
+			return true
+		}
+	}
+	return false
 }
 
 func runReportTest(t *testing.T, args ...string) ([]byte, error) {

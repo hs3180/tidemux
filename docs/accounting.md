@@ -300,19 +300,30 @@ Create an offline, self-contained visual report with:
 
 ```sh
 tidemux report export --config /absolute/path/to/profile.json \
-  --days 30 --timezone Asia/Shanghai --output /absolute/path/to/tidemux-report.html
+  --days 30 --timezone Asia/Shanghai
 ```
 
 The HTML file contains summary cards, inline SVG charts for daily requests and
 estimated cost, and a daily detail table. It has no network or JavaScript
-dependency, is written with private file permissions, and can be opened with
-`--open` or `open /absolute/path/to/tidemux-report.html`. The export reads a
-date range without creating persisted daily-report rows.
+dependency, is written with private file permissions, and is saved by default
+as `reports/latest.html` beside the configured ledger. Run
+`tidemux report open` to open that latest report in the default browser. Use
+`--output /absolute/path/to/tidemux-report.html` for another destination or
+`--open` to open an export immediately. The export reads a date range without
+creating persisted daily-report rows.
 
-`tidemux report deliver --id N --channel macos` sends a macOS notification.
-`report retry` retries a recorded failed delivery. Optional SMTP uses this
-config, with the Keychain item containing `username:password` rather than a
-plaintext secret in JSON:
+`tidemux report deliver --id N --channel macos` refreshes the default HTML
+report and sends a macOS notification whose click target is that file when
+`terminal-notifier` is installed:
+
+```sh
+brew install terminal-notifier
+```
+
+Without it, TideMux keeps using the built-in AppleScript notification and
+includes `tidemux report open` as the short fallback. `report retry` retries a
+recorded failed delivery. Optional SMTP uses this config, with the Keychain
+item containing `username:password` rather than a plaintext secret in JSON:
 
 ```json
 "smtp": {

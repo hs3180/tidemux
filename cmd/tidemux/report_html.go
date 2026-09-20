@@ -38,6 +38,10 @@ type reportExportResult struct {
 	Timezone string `json:"timezone"`
 }
 
+func defaultReportPath(ledgerPath string) string {
+	return filepath.Join(filepath.Dir(ledgerPath), "reports", "latest.html")
+}
+
 type reportHTMLModel struct {
 	GeneratedAt          string
 	StartDay             string
@@ -101,6 +105,9 @@ func exportHTMLReport(ctx context.Context, store *ledger.Ledger, output, timezon
 	if err != nil {
 		return reportExportResult{}, err
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return reportExportResult{}, fmt.Errorf("create HTML report directory: %w", err)
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return reportExportResult{}, fmt.Errorf("create HTML report: %w", err)
@@ -117,11 +124,32 @@ func exportHTMLReport(ctx context.Context, store *ledger.Ledger, output, timezon
 		return reportExportResult{}, fmt.Errorf("close HTML report: %w", err)
 	}
 	if open {
-		if err := exec.Command("open", path).Run(); err != nil {
-			return reportExportResult{}, fmt.Errorf("open HTML report: %w", err)
+		if err := openHTMLReport(path); err != nil {
+			return reportExportResult{}, err
 		}
 	}
 	return reportExportResult{Path: path, Days: len(reports), StartDay: reports[0].Day, EndDay: reports[len(reports)-1].Day, Timezone: timezone}, nil
+}
+
+func openHTMLReport(output string) error {
+	path, err := filepath.Abs(output)
+	if err != nil {
+		return fmt.Errorf("resolve HTML report path: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("HTML report not found at %s; run `tidemux report export` first", path)
+		}
+		return fmt.Errorf("read HTML report: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("HTML report path is not a regular file: %s", path)
+	}
+	if err := exec.Command("open", path).Run(); err != nil {
+		return fmt.Errorf("open HTML report: %w", err)
+	}
+	return nil
 }
 
 func renderReportHTML(w io.Writer, model reportHTMLModel) error {
