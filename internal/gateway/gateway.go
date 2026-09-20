@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -31,7 +32,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	}
 	stopReconciliation := startStatementSync(c, l)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	return &handler{config: c, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, func() error {
+	return &handler{config: c, ledger: l, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: adapter.NewPromptCache(), Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, func() error {
 		stopReconciliation()
 		return l.Close()
 	}, nil
@@ -51,6 +52,7 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 
 type handler struct {
 	config Config
+	ledger *ledger.Ledger
 	client *adapter.Client
 }
 
@@ -125,9 +127,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, 404, "unsupported_endpoint")
 		return
 	}
-	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ",")}
+	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get("X-TideMux-Session-ID"))}
 	if err := options.Validate(h.config.Protocol); err != nil {
-		h.reject(w, r, 400, "invalid_beta_header")
+		h.reject(w, r, 400, err.Error())
 		return
 	}
 	defer r.Body.Close()
@@ -140,6 +142,44 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.reject(w, r, 400, err.Error())
 		return
+	}
+	if options.SessionID == "" {
+		options.SessionID = adapter.SessionID(h.config.Protocol, body)
+	}
+	if err := options.Validate(h.config.Protocol); err != nil {
+		h.reject(w, r, 400, "invalid_session_id")
+		return
+	}
+	if h.config.Budget != (ledger.BudgetPolicy{}) {
+		if _, ok := h.config.Prices[model]; !ok {
+			h.reject(w, r, 503, "budget_pricing_unconfigured")
+			return
+		}
+	}
+	reservationID := ""
+	if h.config.Budget != (ledger.BudgetPolicy{}) {
+		reservationID, err = newRequestID()
+		if err != nil {
+			h.reject(w, r, 500, "request_id_failed")
+			return
+		}
+		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
+		if err != nil {
+			code := "budget_reservation_failed"
+			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {
+				code = err.Error()
+			}
+			h.reject(w, r, 429, code)
+			return
+		}
+		if decision.Warning {
+			w.Header().Set("X-TideMux-Budget-Warning", "1")
+		}
+	}
+	settle := func(auditID string) {
+		if reservationID != "" {
+			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, h.config.Budget.Currency, time.Now())
+		}
 	}
 	var mode struct {
 		Stream bool `json:"stream"`
@@ -161,6 +201,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return http.NewResponseController(w).Flush()
 		}
 		terminal, id, err := h.client.CallWithOptions(r.Context(), body, model, send, options)
+		settle(id)
 		if err == nil {
 			send(id, terminal)
 			return
@@ -185,6 +226,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, id, err := h.client.CallWithOptions(r.Context(), body, model, nil, options)
+	settle(id)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)
 	}
@@ -200,6 +242,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(response)
+}
+
+func newRequestID() (string, error) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(nonce), nil
 }
 
 func (h *handler) reject(w http.ResponseWriter, r *http.Request, status int, code string) {

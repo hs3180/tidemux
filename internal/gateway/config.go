@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 type KeychainReference struct {
@@ -28,6 +30,7 @@ type SecretLookup interface {
 	Lookup(context.Context, KeychainReference) (string, error)
 }
 type Config struct {
+	Budget              ledger.BudgetPolicy      `json:"budget,omitempty"`
 	Reconciliation      ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits              adapter.Limits           `json:"limits,omitempty"`
@@ -53,11 +56,24 @@ func LoadConfig(path string) (Config, error) {
 	}
 	var c Config
 	if adapter.StrictJSON(data, &c) != nil {
+		var raw struct {
+			Budget map[string]json.RawMessage `json:"budget"`
+		}
+		if json.Unmarshal(data, &raw) == nil {
+			for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
+				if _, ok := raw.Budget[key]; ok {
+					return c, errors.New("legacy budget fields conflict with the current schema; run tidemux budget or configure --replace")
+				}
+			}
+		}
 		return c, errors.New("invalid config: use the current example; plaintext and legacy DeepSeek fields are not supported")
 	}
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
+	if err := c.Budget.Validate(); err != nil {
+		return err
+	}
 	if err := c.Reconciliation.Validate(); err != nil {
 		return err
 	}
@@ -86,6 +102,15 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
 		return errors.New("model and upstream_id are required")
+	}
+	if c.Budget != (ledger.BudgetPolicy{}) {
+		price, ok := c.Prices[c.Model]
+		if !ok {
+			return errors.New("budget requires pricing for configured model")
+		}
+		if price.Currency != c.Budget.Currency {
+			return errors.New("budget currency must match model pricing currency")
+		}
 	}
 	if len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n") {
 		return errors.New("upstream_id must be a short non-secret label")

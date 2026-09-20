@@ -9,10 +9,43 @@ Neither secret is accepted as a command-line argument or written into JSON.
 Run the installed CLI (or replace `tidemux` with `./tidemux` for an extracted binary):
 
 ```sh
-tidemux configure --preset deepseek
+tidemux configure --preset deepseek-flash
 tidemux doctor
 tidemux serve
 ```
+
+To configure a budget without editing JSON, use the interactive budget TUI:
+
+```sh
+tidemux budget
+```
+
+For scripting or direct changes, provide only the fields to update:
+
+```sh
+tidemux budget \
+  --budget-5h 0.001 \
+  --budget-weekly 0.01
+```
+
+Both commands automatically use the user profile at
+`~/Library/Application Support/TideMux/config.json`. The optional `--config`
+flag is only for managing an alternate profile.
+
+Use `--budget-mode alert|soft|hard`, `--budget-currency`, and
+`--budget-alert-threshold` to adjust individual fields. Use `--disable` to
+remove budget enforcement. A budget without matching pricing is rejected
+before any configuration is written; TideMux never estimates cost from a
+fallback amount.
+
+`budget` only changes budget limits. Pricing is selected when the provider API
+key is configured, so changing a budget never changes the rates used for
+accounting.
+
+The budget schema is intentionally not migrated from earlier pre-release
+profiles. If an existing profile contains conflicting legacy budget fields,
+replace it with the new schema using `tidemux budget` or recreate it with
+`tidemux configure --replace`.
 
 1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
    `deepseek-flash`. At **API key (hidden)**, paste your DeepSeek key and press Enter.
@@ -64,7 +97,7 @@ To switch the current local gateway to Anthropic format, stop it with Control-C
 and replace the local configuration:
 
 ```sh
-tidemux configure --preset deepseek --protocol anthropic --replace
+tidemux configure --preset deepseek-flash --protocol anthropic --replace
 tidemux doctor
 tidemux serve
 ```
@@ -80,13 +113,20 @@ setup with Anthropic format, omit `--replace`.
 ```sh
 tidemux configure --protocol openai \
   --base-url https://your-provider.example/v1 \
-  --model your-model-id
+  --model your-model-id \
+  --pricing-input-cache-hit 1 \
+  --pricing-input-cache-miss 2 \
+  --pricing-output 4 \
+  --pricing-currency USD
 ```
 
 Use `--protocol anthropic` for an Anthropic-format API. Include the endpoint's
-version/path prefix. Model IDs are not limited to a preset. `--max-in-flight 2`
-changes the explicit concurrency cap. To replace an existing local setup, stop
-the gateway first and add `--replace`. Inspect other options with
+version/path prefix. Model IDs are not limited to a preset. Prices are per
+million tokens. The three rates are input cache hit, input cache miss and output;
+`--pricing-currency` defaults to `USD`, while source and version default to
+`manual-cli` and `manual`. `--max-in-flight 2` changes the explicit concurrency cap.
+To replace an existing local setup,
+stop the gateway first and add `--replace`. Inspect other options with
 `tidemux configure --help`.
 
 ## Update the current local configuration
@@ -94,9 +134,10 @@ the gateway first and add `--replace`. Inspect other options with
 By default the command refuses to overwrite an existing file. To intentionally
 replace it, stop the server and repeat the configure command with `--replace`.
 New Keychain accounts are generated; old credentials and ledger data are retained
-in place. The command replaces the configuration as a whole. Before restarting,
-review manually added settings such as prices and limits against the saved backup,
-and keep the existing `ledger_path` so billing continues to read your history.
+in place. The command replaces the configuration as a whole, including the
+provider pricing selected alongside the new API key. Before restarting, review
+the new pricing and limits against the saved backup, and keep the existing
+`ledger_path` so billing continues to read your history.
 Remove unused old entries later in Keychain Access if desired. A failed setup
 rolls back newly saved entries; the previous configuration remains in place.
 
@@ -117,11 +158,12 @@ python3 scripts/verify_live.py \
   --disable-thinking --output /tmp/tidemux-live-openai.json
 ```
 
-A verified price entry is needed to finish cost reconciliation. `configure`
-intentionally does not guess current prices: until you add them, ledger cost
-is `null`. The helper can report successful usage reconciliation but stop at
-unknown cost. For `deepseek-flash`, use the [official English USD pricing examples](deepseek-pricing.md).
-See [pricing and live verification](demo.md). Never repeat a live
+The configured provider profile always carries its pricing. `configure --preset
+deepseek-flash` uses TideMux's fixed peak DeepSeek preset. For another provider,
+pass `--pricing-input-cache-hit`, `--pricing-input-cache-miss`, and
+`--pricing-output` when setting the API key; use `--pricing-source` and
+`--pricing-version` for the verified reference. See [pricing and live
+verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.
 
 ## Request limits (0.1.0)

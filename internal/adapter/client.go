@@ -20,6 +20,7 @@ type Client struct {
 	Limits                                          Limits
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
 	Prices                                          map[string]Price
+	PromptCache                                     *PromptCache
 	HTTP                                            *http.Client
 	Ledger                                          *ledger.Ledger
 	Gate                                            *limiter.ConcurrencyGate
@@ -30,6 +31,24 @@ type CallError struct {
 }
 
 func (e *CallError) Error() string { return e.Code }
+
+type observedReader struct {
+	io.Reader
+	observed *bytes.Buffer
+}
+
+func (r observedReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 {
+		r.observed.Write(p[:n])
+	}
+	return n, err
+}
+
+func mustJSON(value any) []byte {
+	data, _ := json.Marshal(value)
+	return data
+}
 func (c *Client) Call(ctx context.Context, body []byte, model string) (response []byte, id string, err error) {
 	return c.call(ctx, body, model, nil, CallOptions{})
 }
@@ -41,7 +60,7 @@ func (c *Client) CallWithOptions(ctx context.Context, body []byte, model string,
 }
 func (c *Client) call(ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) (response []byte, id string, err error) {
 	if err := options.Validate(c.Protocol); err != nil {
-		return nil, "", &CallError{400, "invalid_beta_header"}
+		return nil, "", &CallError{400, err.Error()}
 	}
 	started := time.Now()
 	nonce := make([]byte, 16)
@@ -50,7 +69,26 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, Model: model, Status: "error", Events: []string{}}
+	price, priced := c.Prices[model]
+	if !priced {
+		price, priced = BuiltInPrice(c.BaseURL, model, started)
+	}
+	var observed bytes.Buffer
+	attempted := false
+	localEstimate := func(response []byte) {
+		if !priced || a.EstimatedCost != nil {
+			return
+		}
+		cost, usage, source := c.PromptCache.LocalEstimate(c.Protocol, model, options.SessionID, body, response, price)
+		if cost != nil {
+			a.InputTokens, a.OutputTokens, a.CacheReadTokens = usage.Input, usage.Output, usage.CacheRead
+			a.Currency, a.PriceSnapshot, a.EstimatedCost, a.CostSource = price.Currency, mustJSON(price), cost, source
+		}
+	}
 	defer func() {
+		if a.EstimatedCost == nil && attempted {
+			localEstimate(observed.Bytes())
+		}
 		a.LatencyMS = time.Since(started).Milliseconds()
 		if err != nil {
 			a.ErrorCode = "upstream_error"
@@ -112,6 +150,7 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 		client = *c.HTTP
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	attempted = true
 	resp, e := client.Do(req)
 	if e != nil {
 		return nil, id, &CallError{502, "upstream_transport_error"}
@@ -126,21 +165,23 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 	}
 	var data []byte
 	var usage TokenUsage
+	recordedBody := observedReader{Reader: resp.Body, observed: &observed}
 	if sink != nil {
 		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			return nil, id, &CallError{502, "invalid_upstream_content_type"}
 		}
-		usage, data, e = readStreamWithLimits(c.Protocol, resp.Body, limits, func(frame []byte) error {
+		usage, data, e = readStreamWithLimits(c.Protocol, recordedBody, limits, func(frame []byte) error {
 			if err := sink(id, frame); err != nil {
 				return &CallError{502, "downstream_write_error"}
 			}
 			return nil
 		})
 		if e != nil {
+			localEstimate(observed.Bytes())
 			return nil, id, e
 		}
 	} else {
-		data, e = io.ReadAll(io.LimitReader(resp.Body, limits.ResponseBytes+1))
+		data, e = io.ReadAll(io.LimitReader(recordedBody, limits.ResponseBytes+1))
 		if e != nil {
 			return nil, id, &CallError{502, "upstream_read_error"}
 		}
@@ -149,18 +190,25 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 		}
 		usage, e = ValidateResponse(c.Protocol, data)
 		if e != nil {
+			localEstimate(data)
 			return nil, id, &CallError{502, "invalid_upstream_response"}
 		}
 	}
 	a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens = usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite
-	price, ok := c.Prices[model]
-	if !ok {
-		price, ok = BuiltInPrice(c.BaseURL, model, started)
-	}
-	if ok {
+	if priced {
 		a.Currency = price.Currency
 		a.PriceSnapshot, _ = json.Marshal(price)
 		a.EstimatedCost = price.Estimate(c.Protocol, usage)
+	}
+	if a.EstimatedCost == nil {
+		if sink != nil {
+			localEstimate(observed.Bytes())
+		} else {
+			localEstimate(data)
+		}
+	}
+	if c.PromptCache != nil {
+		c.PromptCache.Remember(c.Protocol, model, options.SessionID, body)
 	}
 	a.Status = "ok"
 	return data, id, nil

@@ -35,13 +35,13 @@ Install your preferred client CLI. The example below uses **DeepSeek
 For Kilo CLI or Hermes Agent:
 
 ```sh
-tidemux configure --preset deepseek
+tidemux configure --preset deepseek-flash
 ```
 
 For Claude Code, use this command **instead** to select the Anthropic-compatible endpoint:
 
 ```sh
-tidemux configure --preset deepseek --protocol anthropic
+tidemux configure --preset deepseek-flash --protocol anthropic
 ```
 
 Paste your API key at the hidden prompt; TideMux handles Keychain storage.

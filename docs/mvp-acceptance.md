@@ -24,8 +24,10 @@ build remains archived as a historical baseline.
   start upstream work; successful queue events are observable.
 - Atomic terminal audit/event writes; transport/read/HTTP/parse failures and
   cancellation are not recorded as successful. Audit failure is surfaced safely.
-- Unknown usage and price remain null; cached-token arithmetic and explicit
-  model pricing are tested without assuming a provider's current prices.
+- Provider usage and explicit model pricing are tested without assuming a
+  provider's current prices; when usage is absent, configured pricing enables a
+  clearly marked local content estimate, while requests without a usable price
+  remain unknown.
 - Interactive configure: PTY covers automatic unlock, no unnecessary prompt,
   wrong-password/cancellation stop, hidden API key input and no plaintext config;
   rollback is tested. Real isolated Keychain writes/read-back preserve existing items.

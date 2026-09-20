@@ -1,8 +1,9 @@
 # Request accounting and reconciliation
 
 TideMux records local request outcomes, estimates cost from provider-reported
-usage and automatically reconciles normalized supplier statements while the
-gateway runs. It does not fetch provider invoices or charge users.
+usage or, when that is unavailable, from a local content estimate, and
+automatically reconciles normalized supplier statements while the gateway runs.
+It does not fetch provider invoices or charge users.
 
 ## What is recorded
 
@@ -42,33 +43,43 @@ An abrupt process crash before terminal persistence can leave an attempt unrecor
 
 ## Usage and cost
 
-Usage comes from the upstream response, not local tokenization. OpenAI cached
-input is a subset of prompt tokens. Anthropic cache read/write counts are added
-to its ordinary input count to produce total input. Streaming usage is handled
-according to each protocol's events; cumulative counters are not blindly summed.
+Provider usage takes precedence. OpenAI cached input is a subset of prompt
+tokens. Anthropic cache read/write counts are added to its ordinary input count
+to produce total input. Streaming usage is handled according to each protocol's
+events; cumulative counters are not blindly summed.
 
 With sufficient usage and configured prices, the estimate is:
 
 ```text
-ordinary_input = total_input - cache_read - cache_write
-cost = (ordinary_input × input_rate
-      + cache_read × cache_read_rate
-      + cache_write × cache_write_rate
+input_cache_miss = total_input - cache_read
+cost = (input_cache_miss × input_cache_miss_rate
+      + cache_read × input_cache_hit_rate
       + output × output_rate) / 1,000,000
 ```
 
-Rates are explicitly configured per model, with currency, source and version.
-There is no default currency or region-specific pricing behavior.
-The gateway's configuration supplies the upstream context. Successful requests
-retain a copy of the configured price with their record, so later configuration changes
-do not rewrite history. There is no automatic price discovery, time-of-day rate
-switching, currency conversion or provider discount calculation.
+Cache creation/write tokens are included in `input_cache_miss`; there is no
+separate cache-write price.
 
-Missing usage, missing required rates or ambiguous cache breakdowns produce
-`null`, not zero. Current failed/canceled attempts do not retain partially
-observed streaming usage or a cost estimate; they may still incur provider costs.
-Cost calculations use floating-point numbers and SQLite REAL, suitable for
-estimation, not exact financial settlement.
+Rates are stored per model with currency, source and version. The DeepSeek
+preset supplies one fixed peak price for supported models; custom `prices`
+entries are selected by `configure` and override the preset. There is no
+generic price discovery, default currency, or provider discount calculation.
+The gateway's configuration supplies the upstream context. Successful requests
+retain a copy of the selected price with their record, so later configuration
+changes do not rewrite history. TideMux does not perform currency conversion.
+
+If provider usage is missing, ambiguous or incomplete and a matching price is
+configured or built in, TideMux uses a model-independent local content estimator. It counts
+the normalized request input, uses the response text/content received so far
+for output, and applies the configured input-cache-hit rate to the longest
+common input prefix for a known session. Once an upstream transport attempt starts,
+the full input is counted even when the transport fails; an interrupted stream
+contributes only the output received before interruption. These records have
+`cost_source: "local_estimated_cache_prefix"` and are estimates, not supplier
+billing. A request that was never sent, has no price, or cannot produce a
+usable local estimate remains `null`, not zero. Cost calculations use
+floating-point numbers and SQLite REAL, suitable for estimation, not exact
+financial settlement.
 
 ## Inspect requests
 
@@ -95,7 +106,7 @@ then independently recomputes cost from the recorded rates. Tests cover unknown
 usage, failures, cancellation, queueing and atomic writes. Real DeepSeek acceptance
 also compared response/cache usage and independently calculated Decimal estimates
 with recorded results. Those runs verified selected configured prices; they did
-not implement automatic peak/off-peak pricing or reconcile supplier invoices.
+not reconcile supplier invoices.
 
 ## Automatic reconciliation
 
@@ -220,6 +231,58 @@ top-ups, grants, expiry and other API clients may alter a balance. They are neve
 booked as TideMux spending. Automatic local tokenization and provider balance
 retrieval are not implemented; these diagnostics are present only when
 measurements have been recorded.
+
+## Budgets
+
+An optional `budget` config section applies to one ledger and one currency. It
+does not convert currencies. A matching configured `prices` entry for the
+configured model is required whenever `budget` is enabled. DeepSeek's peak
+preset and custom rates are written by `configure` alongside the provider API
+key; `budget` only changes limits. If pricing is absent or uses another
+currency, TideMux refuses to start and never sends an upstream request. Budget
+windows are rolling five-hour and seven-day periods.
+
+```json
+"budget": {
+  "currency": "USD",
+  "five_hour_limit": 5,
+  "weekly_limit": 80,
+  "alert_threshold": 0.8,
+  "mode": "hard"
+}
+```
+
+`mode` is `alert`, `soft`, or `hard`. Budget checks use settled charges; there
+is no user-configured per-request reserve. Alert allows the request and sets
+`X-TideMux-Budget-Warning: 1` after the threshold is reached. Soft mode requires
+a deliberate retry with `X-TideMux-Budget-Confirm: 1` once a threshold or limit
+is reached. Hard mode rejects before upstream transmission. If usage or pricing
+remains unknown, later budget requests are blocked with
+`budget_usage_unknown`. A request for a model without a matching configured
+price is rejected with `budget_pricing_unconfigured` before upstream
+transmission.
+
+Budget admission persists a zero-value pending attempt before the upstream call.
+It is not a reserve and does not count toward the amount. If the process exits
+before settlement, restart converts the pending attempt to `unknown`, so the
+request cannot disappear from budget accounting.
+
+When provider usage is missing, TideMux can make a local content estimate if a
+pricing entry is configured. Provider usage always takes precedence. For a
+known session, the longest common normalized input prefix is priced as cache-hit
+input and new input as cache-miss input. Set `X-TideMux-Session-ID` on compatible
+clients, or use Anthropic `metadata.user_id`; without a session identifier all
+input is treated as cache-miss. The SSE response itself is output, never cache
+hit input. Output is estimated from response content, including only the
+portion received before an interrupted stream. The tokenizer is intentionally
+model-independent, so this is a transparent approximation rather than an
+exact provider token count. These records are marked
+`local_estimated_cache_prefix`, not supplier billing. Session prompt history is
+in memory; after a restart the next request starts without a local cache prefix.
+
+Pre-release budget tables and fields are not migrated automatically. A profile
+using the old budget schema must be replaced with the new configuration before
+the budget feature can be used.
 
 ## Legacy data
 

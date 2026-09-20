@@ -23,6 +23,7 @@ type Audit struct {
 	CacheReadTokens  *int64          `json:"cache_read_tokens"`
 	CacheWriteTokens *int64          `json:"cache_write_tokens"`
 	EstimatedCost    *float64        `json:"estimated_cost"`
+	CostSource       string          `json:"cost_source,omitempty"`
 	Currency         string          `json:"currency,omitempty"`
 	PriceSnapshot    json.RawMessage `json:"price_snapshot,omitempty"`
 	LatencyMS        int64           `json:"latency_ms"`
