@@ -3,7 +3,36 @@ package adapter
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestBuiltInDeepSeekPricingFollowsOfficialSchedule(t *testing.T) {
+	cases := []struct {
+		name                  string
+		at                    string
+		input, output, cached float64
+	}{
+		{"weekday peak first window", "2026-09-21T02:00:00Z", 0.30, 1.20, 0.006},
+		{"weekday peak second window", "2026-09-21T08:00:00Z", 0.30, 1.20, 0.006},
+		{"weekday off peak", "2026-09-21T05:00:00Z", 0.15, 0.60, 0.003},
+		{"weekend off peak", "2026-09-20T08:00:00Z", 0.15, 0.60, 0.003},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			at, err := time.Parse(time.RFC3339, tc.at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, ok := BuiltInPrice("https://api.deepseek.com/anthropic/v1", "deepseek-flash", at)
+			if !ok || *p.Input != tc.input || *p.Output != tc.output || *p.CacheRead != tc.cached {
+				t.Fatalf("price=%+v ok=%v", p, ok)
+			}
+		})
+	}
+	if _, ok := BuiltInPrice("https://proxy.example/v1", "deepseek-flash", time.Now()); ok {
+		t.Fatal("enabled built-in price for a third-party endpoint")
+	}
+}
 
 func TestUsageAndPricing(t *testing.T) {
 	cases := []struct {

@@ -27,7 +27,7 @@ esac
     child = mock / 'client'
     child.write_text('''#!/usr/bin/env python3
 import json,os,sys
-keys=['TIDEMUX_GATEWAY_TOKEN','ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','CLAUDE_CONFIG_DIR','KILO_CONFIG_CONTENT','HERMES_HOME']
+keys=['TIDEMUX_GATEWAY_TOKEN','ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_SIMPLE','CLAUDE_CONFIG_DIR','KILO_CONFIG_CONTENT','HERMES_HOME']
 print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}))
 ''')
     child.chmod(0o700)
@@ -71,7 +71,9 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
             if name == 'claude':
                 assert record['env']['ANTHROPIC_BASE_URL'] == url
                 assert record['env']['ANTHROPIC_API_KEY'] == 'synthetic-local-token'
-                assert record['args'][:2] == ['--model', 'test-model']
+                assert record['env']['ANTHROPIC_MODEL'] == 'test-model'
+                assert record['env']['CLAUDE_CODE_SIMPLE'] == '1'
+                assert record['args'] == ['argument with spaces', '--client-option']
             elif name == 'kilo':
                 data = json.loads(record['env']['KILO_CONFIG_CONTENT'])
                 assert data['model'] == 'tidemux-local/test-model'
@@ -86,7 +88,10 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
         for old in ['connect', 'launch']:
             result = subprocess.run([binary, old, 'claude', '--help'], capture_output=True, timeout=5)
             assert result.returncode != 0
-        print('Removed command rejection passed: connect, launch')
+        for args in [['ledger'], ['ledger', '--diagnostics']]:
+            result = subprocess.run([binary, *args, '--config', str(config)], capture_output=True, timeout=5)
+            assert result.returncode != 0 and result.stdout == b''
+        print('Removed command rejection passed: connect, launch, ledger')
     finally:
         server.shutdown()
         server.server_close()

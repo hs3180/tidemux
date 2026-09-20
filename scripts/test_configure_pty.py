@@ -31,11 +31,12 @@ elif a[0]=='delete-generic-password':
 else:sys.exit(2)
 ''');(fake/'security').chmod(0o700)
     for mode in ['unlocked','success','failure','cancel']:
-        db=root/(mode+'-secrets.json');config=root/mode/'config.json'
-        env=dict(os.environ,PATH=str(fake)+':'+os.environ['PATH'],TIDEMUX_TEST_KEYCHAIN_DB=str(db),TIDEMUX_TEST_UNLOCK=mode)
+        db=root/(mode+'-secrets.json');user_directory=root/mode/'user'
+        config=user_directory/'Library'/'Application Support'/'TideMux'/'config.json'
+        env=dict(os.environ,HOME=str(user_directory),PATH=str(fake)+':'+os.environ['PATH'],TIDEMUX_TEST_KEYCHAIN_DB=str(db),TIDEMUX_TEST_UNLOCK=mode)
         secret=b'synthetic-pty-secret-not-real';password=b'synthetic-login-password'
         pid,fd=pty.fork()
-        if pid==0:os.execve(binary,[binary,'configure','--preset','deepseek','--config',str(config)],env)
+        if pid==0:os.execve(binary,[binary,'configure','--preset','deepseek'],env)
         captured=b'';sent=False;unlocked=False;deadline=time.monotonic()+15;status=None
         try:
             while time.monotonic()<deadline:
@@ -67,4 +68,6 @@ else:sys.exit(2)
             assert config.stat().st_mode & 0o777 == 0o600
             values=json.loads(db.read_text());assert len(values)==2 and secret.decode() in values.values()
             assert 'Local checks passed' in captured.decode()
+            assert 'Inspect: tidemux billing\r\n' in captured.decode()
+            assert 'tidemux ledger' not in captured.decode()
         print('PTY configure passed: '+mode)

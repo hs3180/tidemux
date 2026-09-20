@@ -31,6 +31,7 @@ type SecretLookup interface {
 }
 type Config struct {
 	Budget              ledger.BudgetPolicy      `json:"budget,omitempty"`
+	Reconciliation      ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits              adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr          string                   `json:"listen_addr"`
@@ -71,6 +72,9 @@ func LoadConfig(path string) (Config, error) {
 }
 func (c Config) Validate() error {
 	if err := c.Budget.Validate(); err != nil {
+		return err
+	}
+	if err := c.Reconciliation.Validate(); err != nil {
 		return err
 	}
 	if err := c.ModelCapabilities.Validate(); err != nil {

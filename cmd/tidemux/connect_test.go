@@ -73,7 +73,7 @@ func TestClientLaunchConfiguration(t *testing.T) {
 		}
 		switch name {
 		case "claude":
-			if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" || len(args) != 2 || args[1] != "custom-model" {
+			if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" || env["ANTHROPIC_MODEL"] != "custom-model" || env["CLAUDE_CODE_SIMPLE"] != "1" || len(args) != 0 {
 				t.Fatal(env, args)
 			}
 		case "kilo":

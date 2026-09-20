@@ -70,6 +70,9 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, Model: model, Status: "error", Events: []string{}}
 	price, priced := c.Prices[model]
+	if !priced {
+		price, priced = BuiltInPrice(c.BaseURL, model, started)
+	}
 	var observed bytes.Buffer
 	attempted := false
 	localEstimate := func(response []byte) {

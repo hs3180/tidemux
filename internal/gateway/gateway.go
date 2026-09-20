@@ -30,8 +30,12 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	if err != nil {
 		return nil, nil, errors.New("cannot open ledger")
 	}
+	stopReconciliation := startStatementSync(c, l)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	return &handler{config: c, ledger: l, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: adapter.NewPromptCache(), Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
+	return &handler{config: c, ledger: l, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: adapter.NewPromptCache(), Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, func() error {
+		stopReconciliation()
+		return l.Close()
+	}, nil
 }
 func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
 	h, closeLedger, err := NewHandler(c, client)
@@ -48,8 +52,8 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 
 type handler struct {
 	config Config
-	client *adapter.Client
 	ledger *ledger.Ledger
+	client *adapter.Client
 }
 
 func (h *handler) fail(w http.ResponseWriter, status int, code string) {
@@ -154,7 +158,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	reservationID := ""
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
-		reservationID = newRequestID()
+		reservationID, err = newRequestID()
+		if err != nil {
+			h.reject(w, r, 500, "request_id_failed")
+			return
+		}
 		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
 		if err != nil {
 			code := "budget_reservation_failed"
@@ -236,12 +244,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write(response)
 }
 
-func newRequestID() string {
+func newRequestID() (string, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
-		return ""
+		return "", err
 	}
-	return hex.EncodeToString(nonce)
+	return hex.EncodeToString(nonce), nil
 }
 
 func (h *handler) reject(w http.ResponseWriter, r *http.Request, status int, code string) {
