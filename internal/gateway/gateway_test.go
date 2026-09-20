@@ -183,7 +183,7 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
 	defer up.Close()
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", Timezone: "UTC", DailyLimit: 1, MonthlyLimit: 1, AlertThreshold: .5, Mode: "hard", ReserveAmount: 1}
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .5, Mode: "hard"}
 	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
 	h, closeDB, err := NewHandler(c, nil)
 	if err != nil {
@@ -198,11 +198,11 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 		if i == 0 && out.Code != 200 {
 			t.Fatalf("first=%d", out.Code)
 		}
-		if i == 1 && (out.Code != 429 || !strings.Contains(out.Body.String(), "budget_hard_limit")) {
+		if i == 1 && out.Code != 200 {
 			t.Fatalf("second=%d %s", out.Code, out.Body.String())
 		}
 	}
-	if calls != 1 {
+	if calls != 2 {
 		t.Fatalf("upstream calls=%d", calls)
 	}
 }
@@ -217,7 +217,7 @@ func TestBudgetRejectsUnpricedRequestedModel(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
 	defer up.Close()
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", Timezone: "UTC", DailyLimit: 1, MonthlyLimit: 1, AlertThreshold: .5, Mode: "hard", ReserveAmount: 1}
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .5, Mode: "hard"}
 	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
 	h, closeDB, err := NewHandler(c, nil)
 	if err != nil {

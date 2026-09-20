@@ -50,7 +50,7 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 
 func TestBudgetRequiresConfiguredModelPricing(t *testing.T) {
 	c := testConfig("l.db", "https://example.com/prefix/v1")
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", Timezone: "UTC", DailyLimit: 1, MonthlyLimit: 1, AlertThreshold: .8, Mode: "hard", ReserveAmount: 1}
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget requires pricing") {
 		t.Fatalf("missing pricing error=%v", err)
 	}

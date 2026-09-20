@@ -92,30 +92,26 @@ for resolving unmatched or unknown attempts. These are not implemented in 0.1.0.
 An optional `budget` config section applies to one ledger and one currency. It
 does not convert currencies. A matching `prices` entry for the configured model
 is required whenever `budget` is enabled. If pricing is absent or uses another
-currency, TideMux refuses to start and never sends an upstream request. It does
-not use `reserve_amount` as a pricing fallback.
+currency, TideMux refuses to start and never sends an upstream request. Budget
+windows are rolling five-hour and seven-day periods.
 
 ```json
 "budget": {
   "currency": "USD",
-  "timezone": "Asia/Shanghai",
-  "daily_limit": 5,
-  "monthly_limit": 80,
+  "five_hour_limit": 5,
+  "weekly_limit": 80,
   "alert_threshold": 0.8,
-  "mode": "hard",
-  "reserve_amount": 0.25
+  "mode": "hard"
 }
 ```
 
-`mode` is `alert`, `soft`, or `hard`. `reserve_amount` is a user-selected
-worst-case amount for one request, and is reserved atomically before an
-upstream request is sent. This makes concurrent hard-limit admission
-conservative. Alert records a reservation and allows the request. Soft mode requires a deliberate retry with
+`mode` is `alert`, `soft`, or `hard`. Budget checks use settled actual charges;
+there is no user-configured per-request reserve. Alert allows the request and
+sets `X-TideMux-Budget-Warning: 1` after the threshold is reached. Soft mode requires a deliberate retry with
 `X-TideMux-Budget-Confirm: 1` once a threshold or limit is reached. Hard mode
-rejects before upstream transmission. Once API usage and a configured price
-produce an estimate, the reserve is settled to that estimate; a failed request
-with unknown usage keeps its reserve as an unknown conservative charge. A
-request for a model without a matching price is rejected with
+rejects before upstream transmission. If usage or pricing remains unknown, the
+charge is not guessed and later budget requests are blocked with
+`budget_usage_unknown`. A request for a model without a matching price is rejected with
 `budget_pricing_unconfigured` before upstream transmission.
 
 ## Legacy data

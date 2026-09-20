@@ -14,20 +14,26 @@ tidemux doctor
 tidemux serve
 ```
 
-To configure a budget without editing JSON, provide a pricing fragment and a
-budget amount. The amount is applied to both the daily and monthly limit; the
-reservation defaults to the same amount and can be overridden:
+To configure a budget without editing JSON, use the interactive budget TUI:
 
 ```sh
-tidemux configure --preset deepseek \
-  --budget 0.001 \
+tidemux budget --config "$HOME/Library/Application Support/TideMux/config.json"
+```
+
+For scripting or direct changes, provide only the fields to update:
+
+```sh
+tidemux budget \
+  --budget-5h 0.001 \
+  --budget-weekly 0.01 \
   --pricing-file examples/deepseek-pricing-off-peak.json
 ```
 
-Use `--budget-mode alert|soft|hard`, `--budget-currency`,
-`--budget-timezone`, `--budget-alert-threshold`, and `--budget-reserve` to
-adjust the policy. A budget without matching pricing is rejected before any
-configuration is written; TideMux never estimates cost from the reserve alone.
+Use `--budget-mode alert|soft|hard`, `--budget-currency`, and
+`--budget-alert-threshold` to adjust individual fields. Use `--disable` to
+remove budget enforcement. A budget without matching pricing is rejected
+before any configuration is written; TideMux never estimates cost from a
+fallback amount.
 
 1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
    `deepseek-flash`. At **API key (hidden)**, paste your DeepSeek key and press Enter.

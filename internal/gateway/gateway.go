@@ -148,19 +148,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reservationID := ""
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
 		reservationID = newRequestID()
-		_, err := h.ledger.ReserveBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
+		decision, err := h.ledger.CheckBudget(r.Context(), h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
 		if err != nil {
 			code := "budget_reservation_failed"
-			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" {
+			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {
 				code = err.Error()
 			}
 			h.reject(w, r, 429, code)
 			return
 		}
+		if decision.Warning {
+			w.Header().Set("X-TideMux-Budget-Warning", "1")
+		}
 	}
 	settle := func(auditID string) {
 		if reservationID != "" {
-			_ = h.ledger.SettleBudget(context.Background(), reservationID, auditID)
+			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, h.config.Budget.Currency, time.Now())
 		}
 	}
 	var mode struct {

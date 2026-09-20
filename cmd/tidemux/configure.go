@@ -47,12 +47,11 @@ func configure(args []string, stdout, stderr *os.File) error {
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
 	contextTokens := flags.Int64("context-tokens", 0, "verified upstream context window; zero means unknown")
 	outputTokens := flags.Int64("output-tokens", 0, "verified upstream output ceiling; zero means unknown")
-	budget := flags.Float64("budget", 0, "daily and monthly budget in the pricing currency; zero disables budget")
+	budget5h := flags.Float64("budget-5h", 0, "rolling five-hour budget in the pricing currency; zero disables it")
+	budgetWeekly := flags.Float64("budget-weekly", 0, "rolling seven-day budget in the pricing currency; zero disables it")
 	budgetCurrency := flags.String("budget-currency", "USD", "budget currency")
-	budgetTimezone := flags.String("budget-timezone", "UTC", "IANA timezone used for budget periods")
 	budgetMode := flags.String("budget-mode", "hard", "budget mode: alert, soft or hard")
 	budgetThreshold := flags.Float64("budget-alert-threshold", 0.8, "budget alert threshold from 0 to 1")
-	budgetReserve := flags.Float64("budget-reserve", 0, "worst-case reservation per request; defaults to --budget")
 	pricingFile := flags.String("pricing-file", "", "JSON pricing fragment containing a prices object")
 	replace := flags.Bool("replace", false, "replace configuration using new Keychain references (old credentials retained)")
 	if err := flags.Parse(args); err != nil {
@@ -92,16 +91,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return err
 	}
-	budgetPolicy := ledger.BudgetPolicy{}
-	if *budget > 0 {
-		reserve := *budgetReserve
-		if reserve == 0 {
-			reserve = *budget
-		}
-		budgetPolicy = ledger.BudgetPolicy{Currency: *budgetCurrency, Timezone: *budgetTimezone, DailyLimit: *budget, MonthlyLimit: *budget, AlertThreshold: *budgetThreshold, Mode: *budgetMode, ReserveAmount: reserve}
-	} else if *budgetReserve > 0 {
-		return errors.New("--budget-reserve requires --budget")
-	}
+	budgetPolicy := ledger.BudgetPolicy{Currency: *budgetCurrency, FiveHourLimit: *budget5h, WeeklyLimit: *budgetWeekly, AlertThreshold: *budgetThreshold, Mode: *budgetMode}
 	c := gateway.Config{Budget: budgetPolicy, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
@@ -122,7 +112,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	}
 	fmt.Fprintf(stdout, "Protocol: %s\nAPI root: %s\nModel: %s\nConfig: %s\n", c.Protocol, c.BaseURL, c.Model, abs)
 	if c.Budget != (ledger.BudgetPolicy{}) {
-		fmt.Fprintf(stdout, "Budget: %g %s daily/monthly (%s mode)\n", c.Budget.DailyLimit, c.Budget.Currency, c.Budget.Mode)
+		fmt.Fprintf(stdout, "Budget: %g %s / 5h, %g %s / 7d (%s mode)\n", c.Budget.FiveHourLimit, c.Budget.Currency, c.Budget.WeeklyLimit, c.Budget.Currency, c.Budget.Mode)
 	}
 	fmt.Fprint(tty, "API key (hidden; paste then press Enter): ")
 	secret, err := term.ReadPassword(int(tty.Fd()))

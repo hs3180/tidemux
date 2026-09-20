@@ -79,11 +79,25 @@ func Open(path string) (*Ledger, error) {
 }
 
 func (l *Ledger) initBudget(ctx context.Context) error {
-	_, err := l.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS budget_reservations (
- request_id TEXT PRIMARY KEY, audit_id TEXT, reserved_at_ms INTEGER NOT NULL,
- currency TEXT NOT NULL, reserved_amount REAL NOT NULL, charged_amount REAL NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('reserved','settled','unknown')));
- CREATE INDEX IF NOT EXISTS budget_reservation_period ON budget_reservations(currency,reserved_at_ms);`)
+	_, err := l.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS budget_charges (
+ request_id TEXT PRIMARY KEY, audit_id TEXT, charged_at_ms INTEGER NOT NULL,
+ currency TEXT NOT NULL, charged_amount REAL NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('settled','unknown')));
+ CREATE INDEX IF NOT EXISTS budget_charge_period ON budget_charges(currency,charged_at_ms);`)
+	if err != nil {
+		return err
+	}
+	var legacy int
+	if err := l.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='budget_reservations'`).Scan(&legacy); err != nil {
+		return err
+	}
+	if legacy == 0 {
+		return nil
+	}
+	_, err = l.db.ExecContext(ctx, `INSERT OR IGNORE INTO budget_charges (request_id,audit_id,charged_at_ms,currency,charged_amount,state)
+ SELECT request_id,audit_id,reserved_at_ms,currency,charged_amount,
+ CASE WHEN state='settled' THEN 'settled' ELSE 'unknown' END
+ FROM budget_reservations`)
 	return err
 }
 

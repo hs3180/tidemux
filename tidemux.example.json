@@ -13,14 +13,21 @@
     "account": "default"
   },
   "max_in_flight": 1,
+  "prices": {
+    "replace-with-your-model-id": {
+      "currency": "USD",
+      "source": "replace-with-verified-source",
+      "version": "replace-with-source-version",
+      "input_per_million": 1,
+      "output_per_million": 1
+    }
+  },
   "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db",
   "budget": {
     "currency": "USD",
-    "timezone": "UTC",
-    "daily_limit": 5,
-    "monthly_limit": 80,
+    "five_hour_limit": 5,
+    "weekly_limit": 80,
     "alert_threshold": 0.8,
-    "mode": "hard",
-    "reserve_amount": 0.25
+    "mode": "hard"
   }
 }
