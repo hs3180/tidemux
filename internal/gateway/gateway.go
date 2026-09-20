@@ -31,7 +31,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		return nil, nil, errors.New("cannot open ledger")
 	}
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	return &handler{config: c, ledger: l, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
+	return &handler{config: c, ledger: l, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: adapter.NewPromptCache(), Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, l.Close, nil
 }
 func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
 	h, closeLedger, err := NewHandler(c, client)
@@ -123,9 +123,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, 404, "unsupported_endpoint")
 		return
 	}
-	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ",")}
+	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get("X-TideMux-Session-ID"))}
 	if err := options.Validate(h.config.Protocol); err != nil {
-		h.reject(w, r, 400, "invalid_beta_header")
+		h.reject(w, r, 400, err.Error())
 		return
 	}
 	defer r.Body.Close()
@@ -137,6 +137,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, model, err := adapter.Request(h.config.Protocol, data, h.config.Model)
 	if err != nil {
 		h.reject(w, r, 400, err.Error())
+		return
+	}
+	if options.SessionID == "" {
+		options.SessionID = adapter.SessionID(h.config.Protocol, body)
+	}
+	if err := options.Validate(h.config.Protocol); err != nil {
+		h.reject(w, r, 400, "invalid_session_id")
 		return
 	}
 	if h.config.Budget != (ledger.BudgetPolicy{}) {

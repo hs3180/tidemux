@@ -1,7 +1,8 @@
 # Request accounting and reconciliation
 
 TideMux records local request outcomes and estimates cost from provider-reported
-usage. It does not fetch provider invoices or charge users.
+usage or, when that is unavailable, from a local content estimate. It does not
+fetch provider invoices or charge users.
 
 ## What is recorded
 
@@ -35,10 +36,10 @@ An abrupt process crash before terminal persistence can leave an attempt unrecor
 
 ## Usage and cost
 
-Usage comes from the upstream response, not local tokenization. OpenAI cached
-input is a subset of prompt tokens. Anthropic cache read/write counts are added
-to its ordinary input count to produce total input. Streaming usage is handled
-according to each protocol's events; cumulative counters are not blindly summed.
+Provider usage takes precedence. OpenAI cached input is a subset of prompt
+tokens. Anthropic cache read/write counts are added to its ordinary input count
+to produce total input. Streaming usage is handled according to each protocol's
+events; cumulative counters are not blindly summed.
 
 With sufficient usage and configured prices, the estimate is:
 
@@ -57,11 +58,18 @@ a copy of the configured price with their record, so later configuration changes
 do not rewrite history. There is no automatic price discovery, time-of-day rate
 switching, currency conversion or provider discount calculation.
 
-Missing usage, missing required rates or ambiguous cache breakdowns produce
-`null`, not zero. Current failed/canceled attempts do not retain partially
-observed streaming usage or a cost estimate; they may still incur provider costs.
-Cost calculations use floating-point numbers and SQLite REAL, suitable for
-estimation, not exact financial settlement.
+If provider usage is missing, ambiguous or incomplete and a matching price is
+configured, TideMux uses a model-independent local content estimator. It counts
+the normalized request input, uses the response text/content received so far
+for output, and applies the configured cache-read rate to the longest common
+input prefix for a known session. Once an upstream transport attempt starts,
+the full input is counted even when the transport fails; an interrupted stream
+contributes only the output received before interruption. These records have
+`cost_source: "local_estimated_cache_prefix"` and are estimates, not supplier
+billing. A request that was never sent, has no price, or cannot produce a
+usable local estimate remains `null`, not zero. Cost calculations use
+floating-point numbers and SQLite REAL, suitable for estimation, not exact
+financial settlement.
 
 ## Inspect and reconcile
 
@@ -118,6 +126,19 @@ Budget admission persists a zero-value pending attempt before the upstream call.
 It is not a reserve and does not count toward the amount. If the process exits
 before settlement, restart converts the pending attempt to `unknown`, so the
 request cannot disappear from budget accounting.
+
+When provider usage is missing, TideMux can make a local content estimate if a
+pricing entry is configured. Provider usage always takes precedence. For a
+known session, the longest common normalized input prefix is priced as cache-hit
+input and new input as cache-miss input. Set `X-TideMux-Session-ID` on compatible
+clients, or use Anthropic `metadata.user_id`; without a session identifier all
+input is treated as cache-miss. The SSE response itself is output, never cache
+hit input. Output is estimated from response content, including only the
+portion received before an interrupted stream. The tokenizer is intentionally
+model-independent, so this is a transparent approximation rather than an
+exact provider token count. These records are marked
+`local_estimated_cache_prefix`, not supplier billing. Session prompt history is
+in memory; after a restart the next request starts without a local cache prefix.
 
 Pre-release budget tables and fields are not migrated automatically. A profile
 using the old budget schema must be replaced with the new configuration before

@@ -83,10 +83,12 @@ upstream JSON and adds `X-TideMux-Request-ID` for audit correlation.
 ```
 
 This prints the 100 most recent audit records as JSON without retrieving keys.
-`null` token/count/cost means unknown. Cancellation is not evidence of zero
-upstream billing. If the gateway reports `audit_failed_do_not_retry_blindly`,
-the provider may already have executed the call; inspect storage and upstream
-usage before retrying. TideMux does not automatically retry any call.
+`null` token/count/cost means unknown; a `cost_source` of
+`local_estimated_cache_prefix` identifies a transparent local estimate rather
+than provider-reported usage. Cancellation is not evidence of zero upstream
+billing. If the gateway reports `audit_failed_do_not_retry_blindly`, the
+provider may already have executed the call; inspect storage and upstream usage
+before retrying. TideMux does not automatically retry any call.
 
 ## Optional pricing
 
@@ -106,10 +108,12 @@ version. The following numbers are synthetic and must not be used as real rates:
 }}}
 ```
 
-Missing prices produce unknown cost. Positive cached usage requires the
-corresponding price. Unknown cache breakdown with differential rates also produces
-unknown cost. Estimates are token arithmetic, not provider invoices; request fees,
-service-tier adjustments, tool fees and taxes are outside this model.
+Missing prices produce unknown cost. Positive provider-reported cached usage
+requires the corresponding price. Unknown provider cache breakdowns can use the
+local content estimator when a session and pricing are available; otherwise the
+cost remains unknown. Estimates are token arithmetic, not provider invoices;
+request fees, service-tier adjustments, tool fees and taxes are outside this
+model.
 
 ## Live verification
 
