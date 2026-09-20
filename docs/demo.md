@@ -117,10 +117,10 @@ set rates on the same command; rates are **per million tokens**:
 tidemux configure --protocol openai \
   --base-url https://provider.example/v1 \
   --model your-model \
-  --pricing-input 2 \
+  --pricing-input-cache-hit 1 \
+  --pricing-input-cache-miss 2 \
   --pricing-output 4 \
-  --pricing-cache-read 1 \
-  --pricing-cache-write 3
+  --pricing-currency USD
 ```
 
 Use `--pricing-currency`, `--pricing-source`, and `--pricing-version` when the

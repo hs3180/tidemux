@@ -22,14 +22,14 @@ func BuiltInPrice(baseURL, model string, _ time.Time) (Price, bool) {
 		return Price{}, false
 	}
 	version := "deepseek-v4-pricing-2026-08-16-peak"
-	input, output, cacheRead := 0.30, 1.20, 0.006
+	inputCacheHit, inputCacheMiss, output := 0.006, 0.30, 1.20
 	return Price{
-		Currency:  "USD",
-		Source:    deepSeekPricingSource,
-		Version:   version,
-		Input:     floatPtr(input),
-		Output:    floatPtr(output),
-		CacheRead: floatPtr(cacheRead),
+		Currency:       "USD",
+		Source:         deepSeekPricingSource,
+		Version:        version,
+		InputCacheHit:  floatPtr(inputCacheHit),
+		InputCacheMiss: floatPtr(inputCacheMiss),
+		Output:         floatPtr(output),
 	}, true
 }
 

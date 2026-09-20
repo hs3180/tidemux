@@ -114,17 +114,18 @@ setup with Anthropic format, omit `--replace`.
 tidemux configure --protocol openai \
   --base-url https://your-provider.example/v1 \
   --model your-model-id \
-  --pricing-input 2 \
+  --pricing-input-cache-hit 1 \
+  --pricing-input-cache-miss 2 \
   --pricing-output 4 \
-  --pricing-cache-read 1 \
-  --pricing-cache-write 3
+  --pricing-currency USD
 ```
 
 Use `--protocol anthropic` for an Anthropic-format API. Include the endpoint's
 version/path prefix. Model IDs are not limited to a preset. Prices are per
-million tokens; `--pricing-currency` defaults to `USD`, while source and version
-default to `manual-cli` and `manual`. Cache prices are optional. `--max-in-flight
-2` changes the explicit concurrency cap. To replace an existing local setup,
+million tokens. The three rates are input cache hit, input cache miss and output;
+`--pricing-currency` defaults to `USD`, while source and version default to
+`manual-cli` and `manual`. `--max-in-flight 2` changes the explicit concurrency cap.
+To replace an existing local setup,
 stop the gateway first and add `--replace`. Inspect other options with
 `tidemux configure --help`.
 
@@ -158,10 +159,11 @@ python3 scripts/verify_live.py \
 ```
 
 The configured provider profile always carries its pricing. `configure --preset
-deepseek` uses TideMux's fixed peak DeepSeek preset. For another provider, pass
-`--pricing-input`, `--pricing-output`, and any optional cache prices when setting
-the API key; use `--pricing-source` and `--pricing-version` for the verified
-reference. See [pricing and live verification](demo.md). Never repeat a live
+deepseek-flash` uses TideMux's fixed peak DeepSeek preset. For another provider,
+pass `--pricing-input-cache-hit`, `--pricing-input-cache-miss`, and
+`--pricing-output` when setting the API key; use `--pricing-source` and
+`--pricing-version` for the verified reference. See [pricing and live
+verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.
 
 ## Request limits (0.1.0)

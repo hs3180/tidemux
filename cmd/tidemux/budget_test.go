@@ -20,7 +20,7 @@ func TestBudgetCommandReplacesLegacyBudgetFields(t *testing.T) {
 		"access_token_keychain": map[string]string{"service": "test.gateway", "account": "default"},
 		"max_in_flight":         1,
 		"ledger_path":           filepath.Join(dir, "ledger.db"),
-		"prices":                map[string]any{"custom-model": map[string]any{"currency": "USD", "source": "test", "version": "1", "input_per_million": 1, "output_per_million": 1}},
+		"prices":                map[string]any{"custom-model": map[string]any{"currency": "USD", "source": "test", "version": "1", "input_cache_hit_per_million": 1, "input_cache_miss_per_million": 1, "output_per_million": 1}},
 		"budget":                map[string]any{"currency": "USD", "timezone": "UTC", "daily_limit": 5, "monthly_limit": 10, "reserve_amount": 1, "mode": "hard", "alert_threshold": .8},
 	}
 	data, _ := json.Marshal(config)

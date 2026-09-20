@@ -209,7 +209,7 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 
 func testPrice() adapter.Price {
 	input, output := 1.0, 1.0
-	return adapter.Price{Currency: "USD", Source: "test", Version: "1", Input: &input, Output: &output}
+	return adapter.Price{Currency: "USD", Source: "test", Version: "1", InputCacheHit: &input, InputCacheMiss: &input, Output: &output}
 }
 
 func TestBudgetRejectsUnpricedRequestedModel(t *testing.T) {

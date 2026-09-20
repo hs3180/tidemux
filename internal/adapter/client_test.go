@@ -79,7 +79,7 @@ func TestMissingUsageUsesLocalContentEstimateAndSessionCache(t *testing.T) {
 		Protocol:    "openai",
 		BaseURL:     up.URL,
 		Upstream:    "test",
-		Prices:      map[string]Price{"m": {Currency: "USD", Source: "test", Version: "1", Input: &in, Output: &out, CacheRead: &hit}},
+		Prices:      map[string]Price{"m": {Currency: "USD", Source: "test", Version: "1", InputCacheMiss: &in, InputCacheHit: &hit, Output: &out}},
 		PromptCache: NewPromptCache(),
 		Ledger:      l,
 	}
@@ -129,7 +129,7 @@ func TestInterruptedStreamEstimatesReceivedOutput(t *testing.T) {
 		Protocol:    "openai",
 		BaseURL:     up.URL,
 		Upstream:    "test",
-		Prices:      map[string]Price{"m": {Currency: "USD", Source: "test", Version: "1", Input: &in, Output: &out}},
+		Prices:      map[string]Price{"m": {Currency: "USD", Source: "test", Version: "1", InputCacheMiss: &in, InputCacheHit: &in, Output: &out}},
 		PromptCache: NewPromptCache(),
 		Ledger:      l,
 		Gate:        g,

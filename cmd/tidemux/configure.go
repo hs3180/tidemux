@@ -55,10 +55,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 	pricingCurrency := flags.String("pricing-currency", "USD", "pricing currency")
 	pricingSource := flags.String("pricing-source", "manual-cli", "pricing source or provider reference")
 	pricingVersion := flags.String("pricing-version", "manual", "pricing version or verification date")
-	pricingInput := flags.Float64("pricing-input", 0, "input price per million tokens")
+	pricingInputCacheHit := flags.Float64("pricing-input-cache-hit", 0, "cache-hit input price per million tokens")
+	pricingInputCacheMiss := flags.Float64("pricing-input-cache-miss", 0, "cache-miss input price per million tokens")
 	pricingOutput := flags.Float64("pricing-output", 0, "output price per million tokens")
-	pricingCacheRead := flags.Float64("pricing-cache-read", 0, "cache-read price per million tokens")
-	pricingCacheWrite := flags.Float64("pricing-cache-write", 0, "cache-write price per million tokens")
 	replace := flags.Bool("replace", false, "replace configuration using new Keychain references (old credentials retained)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -93,7 +92,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return errors.New("invalid config path")
 	}
-	prices, err := configurePrices(flags, *preset, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInput, *pricingOutput, *pricingCacheRead, *pricingCacheWrite)
+	prices, err := configurePrices(flags, *preset, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
 	if err != nil {
 		return err
 	}
@@ -151,35 +150,30 @@ func configure(args []string, stdout, stderr *os.File) error {
 	return nil
 }
 
-func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, source, version string, input, output, cacheRead, cacheWrite float64) (map[string]adapter.Price, error) {
+func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, source, version string, inputCacheHit, inputCacheMiss, output float64) (map[string]adapter.Price, error) {
 	prices := map[string]adapter.Price{}
 	if preset == "deepseek-flash" {
 		if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
 			prices[model] = price
 		}
 	}
-	pricingFlags := []string{"pricing-currency", "pricing-source", "pricing-version", "pricing-input", "pricing-output", "pricing-cache-read", "pricing-cache-write"}
+	pricingFlags := []string{"pricing-currency", "pricing-source", "pricing-version", "pricing-input-cache-hit", "pricing-input-cache-miss", "pricing-output"}
 	if !flagWasSet(flags, pricingFlags...) {
 		if len(prices) == 0 {
-			return nil, errors.New("pricing is required; use --pricing-input and --pricing-output")
+			return nil, errors.New("pricing is required; use --pricing-input-cache-hit, --pricing-input-cache-miss and --pricing-output")
 		}
 		return prices, nil
 	}
-	if !flagWasSet(flags, "pricing-input") || !flagWasSet(flags, "pricing-output") {
-		return nil, errors.New("custom pricing requires --pricing-input and --pricing-output")
+	if !flagWasSet(flags, "pricing-input-cache-hit") || !flagWasSet(flags, "pricing-input-cache-miss") || !flagWasSet(flags, "pricing-output") {
+		return nil, errors.New("custom pricing requires --pricing-input-cache-hit, --pricing-input-cache-miss and --pricing-output")
 	}
 	price := adapter.Price{
-		Currency: currency,
-		Source:   source,
-		Version:  version,
-		Input:    &input,
-		Output:   &output,
-	}
-	if flagWasSet(flags, "pricing-cache-read") {
-		price.CacheRead = &cacheRead
-	}
-	if flagWasSet(flags, "pricing-cache-write") {
-		price.CacheWrite = &cacheWrite
+		Currency:       currency,
+		Source:         source,
+		Version:        version,
+		InputCacheHit:  &inputCacheHit,
+		InputCacheMiss: &inputCacheMiss,
+		Output:         &output,
 	}
 	if err := price.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid custom pricing: %w", err)

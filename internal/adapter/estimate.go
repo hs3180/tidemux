@@ -53,7 +53,7 @@ func (c *PromptCache) LocalEstimate(protocol, model, session string, request, re
 		c.prompts[key] = append([]byte(nil), prompt...)
 		c.mu.Unlock()
 	}
-	if hitBytes > 0 && price.CacheRead == nil {
+	if hitBytes > 0 && price.InputCacheHit == nil {
 		// Without a cache-hit rate, price the whole input as cache-miss rather
 		// than inventing a discount.
 		hitBytes = 0

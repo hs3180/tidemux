@@ -51,12 +51,14 @@ events; cumulative counters are not blindly summed.
 With sufficient usage and configured prices, the estimate is:
 
 ```text
-ordinary_input = total_input - cache_read - cache_write
-cost = (ordinary_input × input_rate
-      + cache_read × cache_read_rate
-      + cache_write × cache_write_rate
+input_cache_miss = total_input - cache_read
+cost = (input_cache_miss × input_cache_miss_rate
+      + cache_read × input_cache_hit_rate
       + output × output_rate) / 1,000,000
 ```
+
+Cache creation/write tokens are included in `input_cache_miss`; there is no
+separate cache-write price.
 
 Rates are stored per model with currency, source and version. The DeepSeek
 preset supplies one fixed peak price for supported models; custom `prices`
@@ -69,8 +71,8 @@ changes do not rewrite history. TideMux does not perform currency conversion.
 If provider usage is missing, ambiguous or incomplete and a matching price is
 configured or built in, TideMux uses a model-independent local content estimator. It counts
 the normalized request input, uses the response text/content received so far
-for output, and applies the configured cache-read rate to the longest common
-input prefix for a known session. Once an upstream transport attempt starts,
+for output, and applies the configured input-cache-hit rate to the longest
+common input prefix for a known session. Once an upstream transport attempt starts,
 the full input is counted even when the transport fails; an interrupted stream
 contributes only the output received before interruption. These records have
 `cost_source: "local_estimated_cache_prefix"` and are estimates, not supplier
