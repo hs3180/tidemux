@@ -12,13 +12,13 @@ import (
 // BudgetPolicy is deliberately currency-scoped. TideMux never converts an
 // estimate between currencies in order to make an admission decision.
 type BudgetPolicy struct {
-	Currency       string
-	Timezone       string
-	DailyLimit     float64
-	MonthlyLimit   float64
-	AlertThreshold float64
-	Mode           string // alert, soft, hard
-	ReserveAmount  float64
+	Currency       string  `json:"currency"`
+	Timezone       string  `json:"timezone"`
+	DailyLimit     float64 `json:"daily_limit"`
+	MonthlyLimit   float64 `json:"monthly_limit"`
+	AlertThreshold float64 `json:"alert_threshold"`
+	Mode           string  `json:"mode"` // alert, soft, hard
+	ReserveAmount  float64 `json:"reserve_amount"`
 }
 
 func (p BudgetPolicy) Validate() error {

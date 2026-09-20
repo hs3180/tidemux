@@ -2,10 +2,31 @@ package ledger
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestBudgetPolicyUsesDocumentedJSONFields(t *testing.T) {
+	var p BudgetPolicy
+	if err := json.Unmarshal([]byte(`{"currency":"USD","timezone":"Asia/Shanghai","daily_limit":5,"monthly_limit":80,"alert_threshold":0.8,"mode":"hard","reserve_amount":0.25}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Currency != "USD" || p.Timezone != "Asia/Shanghai" || p.DailyLimit != 5 || p.MonthlyLimit != 80 || p.AlertThreshold != 0.8 || p.Mode != "hard" || p.ReserveAmount != 0.25 {
+		t.Fatalf("decoded policy: %+v", p)
+	}
+	encoded, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"currency":"USD","timezone":"Asia/Shanghai","daily_limit":5,"monthly_limit":80,"alert_threshold":0.8,"mode":"hard","reserve_amount":0.25}` {
+		t.Fatalf("encoded policy: %s", encoded)
+	}
+}
 
 func TestBudgetHardLimitReservesAtomicallyAndUnknownsStayConservative(t *testing.T) {
 	l, err := Open(filepath.Join(t.TempDir(), "ledger.db"))
