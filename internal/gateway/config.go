@@ -88,6 +88,15 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
 		return errors.New("model and upstream_id are required")
 	}
+	if c.Budget != (ledger.BudgetPolicy{}) {
+		price, ok := c.Prices[c.Model]
+		if !ok {
+			return errors.New("budget requires pricing for configured model")
+		}
+		if price.Currency != c.Budget.Currency {
+			return errors.New("budget currency must match model pricing currency")
+		}
+	}
 	if len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n") {
 		return errors.New("upstream_id must be a short non-secret label")
 	}

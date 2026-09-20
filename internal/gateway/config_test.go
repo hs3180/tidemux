@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 type testSecrets map[string]string
@@ -42,5 +45,17 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 		if _, err := LoadConfig(p); err == nil {
 			t.Fatal("bad config accepted")
 		}
+	}
+}
+
+func TestBudgetRequiresConfiguredModelPricing(t *testing.T) {
+	c := testConfig("l.db", "https://example.com/prefix/v1")
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", Timezone: "UTC", DailyLimit: 1, MonthlyLimit: 1, AlertThreshold: .8, Mode: "hard", ReserveAmount: 1}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget requires pricing") {
+		t.Fatalf("missing pricing error=%v", err)
+	}
+	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("priced budget rejected: %v", err)
 	}
 }

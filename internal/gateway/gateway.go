@@ -139,6 +139,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, 400, err.Error())
 		return
 	}
+	if h.config.Budget != (ledger.BudgetPolicy{}) {
+		if _, ok := h.config.Prices[model]; !ok {
+			h.reject(w, r, 503, "budget_pricing_unconfigured")
+			return
+		}
+	}
 	reservationID := ""
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
 		reservationID = newRequestID()

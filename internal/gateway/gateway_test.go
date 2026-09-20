@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
@@ -183,6 +184,7 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 	defer up.Close()
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
 	c.Budget = ledger.BudgetPolicy{Currency: "USD", Timezone: "UTC", DailyLimit: 1, MonthlyLimit: 1, AlertThreshold: .5, Mode: "hard", ReserveAmount: 1}
+	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
 	h, closeDB, err := NewHandler(c, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +203,36 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 		}
 	}
 	if calls != 1 {
+		t.Fatalf("upstream calls=%d", calls)
+	}
+}
+
+func testPrice() adapter.Price {
+	input, output := 1.0, 1.0
+	return adapter.Price{Currency: "USD", Source: "test", Version: "1", Input: &input, Output: &output}
+}
+
+func TestBudgetRejectsUnpricedRequestedModel(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", Timezone: "UTC", DailyLimit: 1, MonthlyLimit: 1, AlertThreshold: .5, Mode: "hard", ReserveAmount: 1}
+	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := `{"model":"other-model","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != 503 || !strings.Contains(out.Body.String(), "budget_pricing_unconfigured") {
+		t.Fatalf("code=%d body=%s", out.Code, out.Body.String())
+	}
+	if calls != 0 {
 		t.Fatalf("upstream calls=%d", calls)
 	}
 }

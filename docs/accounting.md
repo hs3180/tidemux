@@ -90,9 +90,10 @@ for resolving unmatched or unknown attempts. These are not implemented in 0.1.0.
 ## Budgets
 
 An optional `budget` config section applies to one ledger and one currency. It
-does not convert currencies. `reserve_amount` is a user-selected worst-case
-amount for one request, and is reserved atomically before an upstream request
-is sent. This makes concurrent hard-limit admission conservative.
+does not convert currencies. A matching `prices` entry for the configured model
+is required whenever `budget` is enabled. If pricing is absent or uses another
+currency, TideMux refuses to start and never sends an upstream request. It does
+not use `reserve_amount` as a pricing fallback.
 
 ```json
 "budget": {
@@ -106,12 +107,16 @@ is sent. This makes concurrent hard-limit admission conservative.
 }
 ```
 
-`mode` is `alert`, `soft`, or `hard`. Alert records a reservation and allows the
-request. Soft mode requires a deliberate retry with
+`mode` is `alert`, `soft`, or `hard`. `reserve_amount` is a user-selected
+worst-case amount for one request, and is reserved atomically before an
+upstream request is sent. This makes concurrent hard-limit admission
+conservative. Alert records a reservation and allows the request. Soft mode requires a deliberate retry with
 `X-TideMux-Budget-Confirm: 1` once a threshold or limit is reached. Hard mode
 rejects before upstream transmission. Once API usage and a configured price
 produce an estimate, the reserve is settled to that estimate; a failed request
-with unknown usage keeps its reserve as an unknown conservative charge.
+with unknown usage keeps its reserve as an unknown conservative charge. A
+request for a model without a matching price is rejected with
+`budget_pricing_unconfigured` before upstream transmission.
 
 ## Legacy data
 
