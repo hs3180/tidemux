@@ -46,7 +46,11 @@ func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error
 		return errors.New("invalid config JSON")
 	}
 	var current ledger.BudgetPolicy
+	legacyBudget := false
 	if value, ok := raw["budget"]; ok {
+		if object, ok := value.(map[string]any); ok {
+			legacyBudget = hasLegacyBudgetFields(object)
+		}
 		encoded, _ := json.Marshal(value)
 		if err := json.Unmarshal(encoded, &current); err != nil {
 			return errors.New("invalid budget configuration")
@@ -144,8 +148,20 @@ func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error
 	if err := os.Rename(tmp, path); err != nil {
 		return errors.New("cannot install config")
 	}
+	if legacyBudget {
+		fmt.Fprintln(stdout, "Replaced legacy budget fields with the current schema.")
+	}
 	fmt.Fprintf(stdout, "Budget configuration updated: %s\n", path)
 	return nil
+}
+
+func hasLegacyBudgetFields(value map[string]any) bool {
+	for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
+		if _, ok := value[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func flagWasSet(flags *flag.FlagSet, names ...string) bool {

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
@@ -54,6 +55,16 @@ func LoadConfig(path string) (Config, error) {
 	}
 	var c Config
 	if adapter.StrictJSON(data, &c) != nil {
+		var raw struct {
+			Budget map[string]json.RawMessage `json:"budget"`
+		}
+		if json.Unmarshal(data, &raw) == nil {
+			for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
+				if _, ok := raw.Budget[key]; ok {
+					return c, errors.New("legacy budget fields conflict with the current schema; run tidemux budget or configure --replace")
+				}
+			}
+		}
 		return c, errors.New("invalid config: use the current example; plaintext and legacy DeepSeek fields are not supported")
 	}
 	return c, c.Validate()

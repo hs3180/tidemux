@@ -59,3 +59,14 @@ func TestBudgetRequiresConfiguredModelPricing(t *testing.T) {
 		t.Fatalf("priced budget rejected: %v", err)
 	}
 }
+
+func TestLegacyBudgetConfigReportsConflict(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"budget":{"daily_limit":1,"monthly_limit":2,"timezone":"UTC","reserve_amount":1}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "legacy budget fields conflict") {
+		t.Fatalf("error=%v", err)
+	}
+}
