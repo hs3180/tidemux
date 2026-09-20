@@ -14,6 +14,21 @@ tidemux doctor
 tidemux serve
 ```
 
+To configure a budget without editing JSON, provide a pricing fragment and a
+budget amount. The amount is applied to both the daily and monthly limit; the
+reservation defaults to the same amount and can be overridden:
+
+```sh
+tidemux configure --preset deepseek \
+  --budget 0.001 \
+  --pricing-file examples/deepseek-pricing-off-peak.json
+```
+
+Use `--budget-mode alert|soft|hard`, `--budget-currency`,
+`--budget-timezone`, `--budget-alert-threshold`, and `--budget-reserve` to
+adjust the policy. A budget without matching pricing is rejected before any
+configuration is written; TideMux never estimates cost from the reserve alone.
+
 1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
    `deepseek-flash`. At **API key (hidden)**, paste your DeepSeek key and press Enter.
    Nothing appears while entering the key; this is expected.
@@ -108,9 +123,8 @@ python3 scripts/verify_live.py \
 ```
 
 A verified price entry is needed to finish cost reconciliation. `configure`
-intentionally does not guess current prices: until you add them, ledger cost
-is `null`. The helper can report successful usage reconciliation but stop at
-unknown cost. For `deepseek-flash`, use the [official English USD pricing examples](deepseek-pricing.md).
+does not guess current prices: use `--pricing-file` with a verified local
+pricing fragment. For `deepseek-flash`, use the [official English USD pricing examples](deepseek-pricing.md).
 See [pricing and live verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.
 

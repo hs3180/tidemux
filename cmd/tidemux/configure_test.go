@@ -119,3 +119,21 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 		t.Fatal("old credentials removed")
 	}
 }
+
+func TestLoadPricingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pricing.json")
+	if err := os.WriteFile(path, []byte(`{"prices":{"deepseek-flash":{"currency":"USD","source":"test","version":"1","input_per_million":0.15,"output_per_million":0.6}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prices, err := loadPricingFile(path)
+	if err != nil || prices["deepseek-flash"].Currency != "USD" {
+		t.Fatalf("prices=%v err=%v", prices, err)
+	}
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(bad, []byte(`{"pricing":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadPricingFile(bad); err == nil {
+		t.Fatal("accepted pricing file without prices")
+	}
+}

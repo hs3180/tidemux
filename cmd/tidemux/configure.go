@@ -16,7 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/gateway"
+	"github.com/hs3180/tidemux/internal/ledger"
 	"golang.org/x/term"
 )
 
@@ -45,6 +47,13 @@ func configure(args []string, stdout, stderr *os.File) error {
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
 	contextTokens := flags.Int64("context-tokens", 0, "verified upstream context window; zero means unknown")
 	outputTokens := flags.Int64("output-tokens", 0, "verified upstream output ceiling; zero means unknown")
+	budget := flags.Float64("budget", 0, "daily and monthly budget in the pricing currency; zero disables budget")
+	budgetCurrency := flags.String("budget-currency", "USD", "budget currency")
+	budgetTimezone := flags.String("budget-timezone", "UTC", "IANA timezone used for budget periods")
+	budgetMode := flags.String("budget-mode", "hard", "budget mode: alert, soft or hard")
+	budgetThreshold := flags.Float64("budget-alert-threshold", 0.8, "budget alert threshold from 0 to 1")
+	budgetReserve := flags.Float64("budget-reserve", 0, "worst-case reservation per request; defaults to --budget")
+	pricingFile := flags.String("pricing-file", "", "JSON pricing fragment containing a prices object")
 	replace := flags.Bool("replace", false, "replace configuration using new Keychain references (old credentials retained)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -79,7 +88,21 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return errors.New("invalid config path")
 	}
-	c := gateway.Config{ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	prices, err := loadPricingFile(*pricingFile)
+	if err != nil {
+		return err
+	}
+	budgetPolicy := ledger.BudgetPolicy{}
+	if *budget > 0 {
+		reserve := *budgetReserve
+		if reserve == 0 {
+			reserve = *budget
+		}
+		budgetPolicy = ledger.BudgetPolicy{Currency: *budgetCurrency, Timezone: *budgetTimezone, DailyLimit: *budget, MonthlyLimit: *budget, AlertThreshold: *budgetThreshold, Mode: *budgetMode, ReserveAmount: reserve}
+	} else if *budgetReserve > 0 {
+		return errors.New("--budget-reserve requires --budget")
+	}
+	c := gateway.Config{Budget: budgetPolicy, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}
@@ -98,6 +121,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Protocol: %s\nAPI root: %s\nModel: %s\nConfig: %s\n", c.Protocol, c.BaseURL, c.Model, abs)
+	if c.Budget != (ledger.BudgetPolicy{}) {
+		fmt.Fprintf(stdout, "Budget: %g %s daily/monthly (%s mode)\n", c.Budget.DailyLimit, c.Budget.Currency, c.Budget.Mode)
+	}
 	fmt.Fprint(tty, "API key (hidden; paste then press Enter): ")
 	secret, err := term.ReadPassword(int(tty.Fd()))
 	fmt.Fprintln(tty)
@@ -119,6 +145,23 @@ func configure(args []string, stdout, stderr *os.File) error {
 	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Prices remain unknown until configured.")
 	fmt.Fprintf(stdout, "Next: tidemux serve --config %q\nInspect: tidemux ledger --config %q\n", abs, abs)
 	return nil
+}
+
+func loadPricingFile(path string) (map[string]adapter.Price, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.New("cannot read pricing file")
+	}
+	var fragment struct {
+		Prices map[string]adapter.Price `json:"prices"`
+	}
+	if err := adapter.StrictJSON(data, &fragment); err != nil || fragment.Prices == nil {
+		return nil, errors.New("pricing file must contain a prices object")
+	}
+	return fragment.Prices, nil
 }
 func saveConfiguration(path string, c gateway.Config, secret string, replace bool, store secretWriter) error {
 	if strings.TrimSpace(secret) == "" || strings.ContainsAny(secret, "\r\n\x00") {
