@@ -38,7 +38,7 @@ func defaultConfigPath() string {
 func configure(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("configure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	preset := flags.String("preset", "", "optional preset: deepseek")
+	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	protocol := flags.String("protocol", "openai", "openai or anthropic")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	model := flags.String("model", "", "default model ID")
@@ -69,10 +69,10 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected configure argument")
 	}
-	if *preset != "" && *preset != "deepseek" {
+	if *preset != "" && *preset != "deepseek-flash" {
 		return errors.New("unknown preset; use --base-url and --model for any compatible provider")
 	}
-	if *preset == "deepseek" {
+	if *preset == "deepseek-flash" {
 		if *baseURL == "" {
 			*baseURL = "https://api.deepseek.com"
 			if *protocol == "anthropic" {
@@ -84,7 +84,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 	}
 	if *baseURL == "" || *model == "" {
-		return errors.New("use configure --preset deepseek, or provide --protocol, --base-url and --model")
+		return errors.New("use configure --preset deepseek-flash, or provide --protocol, --base-url and --model")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("configure requires macOS Keychain")
@@ -153,7 +153,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 
 func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, source, version string, input, output, cacheRead, cacheWrite float64) (map[string]adapter.Price, error) {
 	prices := map[string]adapter.Price{}
-	if preset == "deepseek" {
+	if preset == "deepseek-flash" {
 		if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
 			prices[model] = price
 		}

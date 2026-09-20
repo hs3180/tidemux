@@ -19,7 +19,7 @@ import (
 
 const (
 	version = "0.1.0"
-	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux configure --base-url URL --model ID --pricing-input amount --pricing-output amount\n       tidemux budget [--budget-5h amount] [--budget-weekly amount]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
+	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek-flash [--protocol anthropic]\n       tidemux configure --base-url URL --model ID --pricing-input amount --pricing-output amount\n       tidemux budget [--budget-5h amount] [--budget-weekly amount]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
 func main() {

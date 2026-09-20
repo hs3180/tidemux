@@ -124,7 +124,7 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 
 func TestConfigurePricesUsesPeakDeepSeekPreset(t *testing.T) {
 	flags, currency, source, version, input, output, cacheRead, cacheWrite := pricingTestFlags(t)
-	prices, err := configurePrices(flags, "deepseek", "https://api.deepseek.com", "deepseek-flash", *currency, *source, *version, *input, *output, *cacheRead, *cacheWrite)
+	prices, err := configurePrices(flags, "deepseek-flash", "https://api.deepseek.com", "deepseek-flash", *currency, *source, *version, *input, *output, *cacheRead, *cacheWrite)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +160,12 @@ func TestConfigurePricesRequiresCustomRatesForNonPreset(t *testing.T) {
 func TestConfigureDoesNotAcceptPricingFile(t *testing.T) {
 	if err := configure([]string{"--pricing-file", "pricing.json"}, os.Stdout, os.Stderr); err == nil {
 		t.Fatal("configure still accepts --pricing-file")
+	}
+}
+
+func TestConfigureRejectsOldDeepSeekPresetName(t *testing.T) {
+	if err := configure([]string{"--preset", "deepseek"}, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "unknown preset") {
+		t.Fatalf("error=%v", err)
 	}
 }
 

@@ -16,7 +16,7 @@ the price snapshot used when they were written.
 
 ## Configure with the API key
 
-`configure --preset deepseek` stores the peak preset in the provider profile at
+`configure --preset deepseek-flash` stores the peak preset in the provider profile at
 the same time it stores the API key reference. The `budget` command never edits
 or asks for pricing.
 

@@ -20,7 +20,7 @@ verified. See [installation](install.md) for release downloads and Homebrew.
 ## Recommended: configure with the CLI
 
 ```sh
-./tidemux configure --preset deepseek
+./tidemux configure --preset deepseek-flash
 ./tidemux doctor
 ./tidemux serve
 ```

@@ -9,7 +9,7 @@ Neither secret is accepted as a command-line argument or written into JSON.
 Run the installed CLI (or replace `tidemux` with `./tidemux` for an extracted binary):
 
 ```sh
-tidemux configure --preset deepseek
+tidemux configure --preset deepseek-flash
 tidemux doctor
 tidemux serve
 ```
@@ -97,7 +97,7 @@ To switch the current local gateway to Anthropic format, stop it with Control-C
 and replace the local configuration:
 
 ```sh
-tidemux configure --preset deepseek --protocol anthropic --replace
+tidemux configure --preset deepseek-flash --protocol anthropic --replace
 tidemux doctor
 tidemux serve
 ```

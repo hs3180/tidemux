@@ -36,7 +36,7 @@ else:sys.exit(2)
         env=dict(os.environ,HOME=str(user_directory),PATH=str(fake)+':'+os.environ['PATH'],TIDEMUX_TEST_KEYCHAIN_DB=str(db),TIDEMUX_TEST_UNLOCK=mode)
         secret=b'synthetic-pty-secret-not-real';password=b'synthetic-login-password'
         pid,fd=pty.fork()
-        if pid==0:os.execve(binary,[binary,'configure','--preset','deepseek'],env)
+        if pid==0:os.execve(binary,[binary,'configure','--preset','deepseek-flash'],env)
         captured=b'';sent=False;unlocked=False;deadline=time.monotonic()+15;status=None
         try:
             while time.monotonic()<deadline:

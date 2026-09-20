@@ -10,7 +10,7 @@ The upstream API key stays in the gateway.
 ## OpenAI profile: Kilo CLI and Hermes
 
 ```sh
-./tidemux configure --preset deepseek
+./tidemux configure --preset deepseek-flash
 ./tidemux serve
 ```
 
@@ -36,7 +36,7 @@ Create a separate configuration with a different port. The configure prompt
 collects the upstream key without echoing it:
 
 ```sh
-./tidemux configure --preset deepseek --protocol anthropic \
+./tidemux configure --preset deepseek-flash --protocol anthropic \
   --listen 127.0.0.1:8788 --config "$HOME/.config/tidemux/anthropic.json"
 ./tidemux serve --config "$HOME/.config/tidemux/anthropic.json"
 ```
