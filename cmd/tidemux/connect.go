@@ -205,7 +205,9 @@ func clientLaunch(name, url, model, state, kiloConfig string, declared ...gatewa
 	case "claude":
 		env["CLAUDE_CONFIG_DIR"] = state
 		env["ANTHROPIC_BASE_URL"] = url
-		return env, []string{"--model", model}, nil
+		env["ANTHROPIC_MODEL"] = model
+		env["CLAUDE_CODE_SIMPLE"] = "1"
+		return env, nil, nil
 	case "kilo", "kilo-ide":
 		for _, kind := range []string{"CONFIG", "DATA", "CACHE", "STATE"} {
 			env["XDG_"+kind+"_HOME"] = filepath.Join(state, strings.ToLower(kind))
