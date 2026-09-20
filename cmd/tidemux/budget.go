@@ -25,7 +25,6 @@ func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error
 	currency := flags.String("budget-currency", "", "budget currency")
 	mode := flags.String("budget-mode", "", "budget mode: alert, soft or hard")
 	threshold := flags.Float64("budget-alert-threshold", 0, "alert threshold from 0 to 1")
-	pricingFile := flags.String("pricing-file", "", "JSON pricing fragment to merge")
 	disable := flags.Bool("disable", false, "disable budget enforcement")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -57,10 +56,9 @@ func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error
 		}
 	}
 
-	interactive := !*disable && !flagWasSet(flags, "budget-5h", "budget-weekly", "budget-currency", "budget-mode", "budget-alert-threshold", "pricing-file")
-	pricingPath := *pricingFile
+	interactive := !*disable && !flagWasSet(flags, "budget-5h", "budget-weekly", "budget-currency", "budget-mode", "budget-alert-threshold")
 	if interactive {
-		current, pricingPath, err = promptBudget(stdin, stdout, current)
+		current, err = promptBudget(stdin, stdout, current)
 		if err != nil {
 			return err
 		}
@@ -96,22 +94,6 @@ func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error
 		raw["budget"] = current
 	} else {
 		delete(raw, "budget")
-	}
-	if strings.TrimSpace(pricingPath) != "" {
-		prices, err := loadPricingFile(pricingPath)
-		if err != nil {
-			return err
-		}
-		encoded, _ := json.Marshal(prices)
-		var incoming map[string]any
-		json.Unmarshal(encoded, &incoming)
-		if existing, ok := raw["prices"].(map[string]any); ok {
-			for model, price := range incoming {
-				existing[model] = price
-			}
-		} else {
-			raw["prices"] = incoming
-		}
 	}
 	updated, err := json.Marshal(raw)
 	if err != nil {
@@ -175,7 +157,7 @@ func flagWasSet(flags *flag.FlagSet, names ...string) bool {
 	return false
 }
 
-func promptBudget(in *os.File, out *os.File, current ledger.BudgetPolicy) (ledger.BudgetPolicy, string, error) {
+func promptBudget(in *os.File, out *os.File, current ledger.BudgetPolicy) (ledger.BudgetPolicy, error) {
 	s := bufio.NewScanner(in)
 	read := func(label, value string) (string, error) {
 		fmt.Fprintf(out, "%s [%s]: ", label, value)
@@ -191,18 +173,18 @@ func promptBudget(in *os.File, out *os.File, current ledger.BudgetPolicy) (ledge
 	var err error
 	var value string
 	if value, err = read("5h limit", formatBudget(current.FiveHourLimit)); err != nil {
-		return current, "", err
+		return current, err
 	}
 	current.FiveHourLimit, err = parseBudgetValue(value)
 	if err != nil {
-		return current, "", err
+		return current, err
 	}
 	if value, err = read("weekly limit", formatBudget(current.WeeklyLimit)); err != nil {
-		return current, "", err
+		return current, err
 	}
 	current.WeeklyLimit, err = parseBudgetValue(value)
 	if err != nil {
-		return current, "", err
+		return current, err
 	}
 	if current.Currency == "" {
 		current.Currency = "USD"
@@ -214,23 +196,19 @@ func promptBudget(in *os.File, out *os.File, current ledger.BudgetPolicy) (ledge
 		current.AlertThreshold = .8
 	}
 	if current.Currency, err = read("currency", current.Currency); err != nil {
-		return current, "", err
+		return current, err
 	}
 	if current.Mode, err = read("mode", current.Mode); err != nil {
-		return current, "", err
+		return current, err
 	}
 	if value, err = read("alert threshold", strconv.FormatFloat(current.AlertThreshold, 'g', -1, 64)); err != nil {
-		return current, "", err
+		return current, err
 	}
 	current.AlertThreshold, err = strconv.ParseFloat(value, 64)
 	if err != nil {
-		return current, "", errors.New("invalid alert threshold")
+		return current, errors.New("invalid alert threshold")
 	}
-	pricing, err := read("pricing file (blank to keep current)", "")
-	if err != nil {
-		return current, "", err
-	}
-	return current, pricing, nil
+	return current, nil
 }
 
 func parseBudgetValue(value string) (float64, error) {

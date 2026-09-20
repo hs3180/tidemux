@@ -45,4 +45,7 @@ func TestBudgetCommandReplacesLegacyBudgetFields(t *testing.T) {
 	if _, ok := budget["daily_limit"]; ok {
 		t.Fatal("legacy daily_limit retained")
 	}
+	if err := budgetCommand([]string{"--config", path, "--pricing-file", "pricing.json"}, os.Stdin, os.Stdout, os.Stderr); err == nil {
+		t.Fatal("budget still accepts --pricing-file")
+	}
 }

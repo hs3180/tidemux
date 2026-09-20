@@ -58,10 +58,10 @@ cost = (ordinary_input × input_rate
       + output × output_rate) / 1,000,000
 ```
 
-Rates are stored per model with currency, source and version. The official
-DeepSeek endpoint has a built-in, time-of-day schedule for supported models;
-explicit `prices` entries override it. There is no generic price discovery,
-default currency, or provider discount calculation.
+Rates are stored per model with currency, source and version. The DeepSeek
+preset supplies one fixed peak price for supported models; custom `prices`
+entries are selected by `configure` and override the preset. There is no
+generic price discovery, default currency, or provider discount calculation.
 The gateway's configuration supplies the upstream context. Successful requests
 retain a copy of the selected price with their record, so later configuration
 changes do not rewrite history. TideMux does not perform currency conversion.
@@ -104,7 +104,7 @@ then independently recomputes cost from the recorded rates. Tests cover unknown
 usage, failures, cancellation, queueing and atomic writes. Real DeepSeek acceptance
 also compared response/cache usage and independently calculated Decimal estimates
 with recorded results. Those runs verified selected configured prices; they did
-not implement automatic peak/off-peak pricing or reconcile supplier invoices.
+not reconcile supplier invoices.
 
 ## Automatic reconciliation
 
@@ -233,11 +233,12 @@ measurements have been recorded.
 ## Budgets
 
 An optional `budget` config section applies to one ledger and one currency. It
-does not convert currencies. A matching explicit `prices` entry for the
-configured model is required whenever `budget` is enabled; built-in pricing is
-not used to authorize a budget. If pricing is absent or uses another currency,
-TideMux refuses to start and never sends an upstream request. Budget windows are
-rolling five-hour and seven-day periods.
+does not convert currencies. A matching configured `prices` entry for the
+configured model is required whenever `budget` is enabled. DeepSeek's peak
+preset and custom rates are written by `configure` alongside the provider API
+key; `budget` only changes limits. If pricing is absent or uses another
+currency, TideMux refuses to start and never sends an upstream request. Budget
+windows are rolling five-hour and seven-day periods.
 
 ```json
 "budget": {
@@ -255,8 +256,9 @@ is no user-configured per-request reserve. Alert allows the request and sets
 a deliberate retry with `X-TideMux-Budget-Confirm: 1` once a threshold or limit
 is reached. Hard mode rejects before upstream transmission. If usage or pricing
 remains unknown, later budget requests are blocked with
-`budget_usage_unknown`. A request for a model without a matching explicit price
-is rejected with `budget_pricing_unconfigured` before upstream transmission.
+`budget_usage_unknown`. A request for a model without a matching configured
+price is rejected with `budget_pricing_unconfigured` before upstream
+transmission.
 
 Budget admission persists a zero-value pending attempt before the upstream call.
 It is not a reserve and does not count toward the amount. If the process exits

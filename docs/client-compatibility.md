@@ -23,8 +23,8 @@ a pending IDE acceptance requirement.
 - Controlled local upstream tests cover missing usage, truncation, cancellation,
   queueing and recovery from upstream 429/5xx. Hermes may recover a truncated
   stream through a non-streaming retry; each attempt remains independently audited.
-- Client-delivered input/output/cache usage and configured official off-peak
-  pricing reconcile with installed gateway records. Failed/unknown amounts remain
+- Client-delivered input/output/cache usage and configured DeepSeek peak pricing
+  reconcile with installed gateway records. Failed/unknown amounts remain
   null. These checks validate usage and estimates, not provider invoices.
 - Package checksums, SPDX/build provenance, Homebrew install/rollback/reinstall
   and dual-protocol old/new/old configuration and ledger compatibility passed.

@@ -52,7 +52,13 @@ func configure(args []string, stdout, stderr *os.File) error {
 	budgetCurrency := flags.String("budget-currency", "USD", "budget currency")
 	budgetMode := flags.String("budget-mode", "hard", "budget mode: alert, soft or hard")
 	budgetThreshold := flags.Float64("budget-alert-threshold", 0.8, "budget alert threshold from 0 to 1")
-	pricingFile := flags.String("pricing-file", "", "JSON pricing fragment containing a prices object")
+	pricingCurrency := flags.String("pricing-currency", "USD", "pricing currency")
+	pricingSource := flags.String("pricing-source", "manual-cli", "pricing source or provider reference")
+	pricingVersion := flags.String("pricing-version", "manual", "pricing version or verification date")
+	pricingInput := flags.Float64("pricing-input", 0, "input price per million tokens")
+	pricingOutput := flags.Float64("pricing-output", 0, "output price per million tokens")
+	pricingCacheRead := flags.Float64("pricing-cache-read", 0, "cache-read price per million tokens")
+	pricingCacheWrite := flags.Float64("pricing-cache-write", 0, "cache-write price per million tokens")
 	replace := flags.Bool("replace", false, "replace configuration using new Keychain references (old credentials retained)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -87,7 +93,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return errors.New("invalid config path")
 	}
-	prices, err := loadPricingFile(*pricingFile)
+	prices, err := configurePrices(flags, *preset, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInput, *pricingOutput, *pricingCacheRead, *pricingCacheWrite)
 	if err != nil {
 		return err
 	}
@@ -135,7 +141,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if *replace {
 		fmt.Fprintln(stdout, "If a config was replaced, its exact backup is beside it as <config>.backup-<id>; old Keychain items are retained.")
 	}
-	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Prices remain unknown until configured.")
+	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Pricing is stored with this provider profile.")
 	defaultPath, _ := filepath.Abs(defaultConfigPath())
 	if abs == defaultPath {
 		fmt.Fprintln(stdout, "Next: tidemux serve\nInspect: tidemux billing")
@@ -145,21 +151,41 @@ func configure(args []string, stdout, stderr *os.File) error {
 	return nil
 }
 
-func loadPricingFile(path string) (map[string]adapter.Price, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil
+func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, source, version string, input, output, cacheRead, cacheWrite float64) (map[string]adapter.Price, error) {
+	prices := map[string]adapter.Price{}
+	if preset == "deepseek" {
+		if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
+			prices[model] = price
+		}
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, errors.New("cannot read pricing file")
+	pricingFlags := []string{"pricing-currency", "pricing-source", "pricing-version", "pricing-input", "pricing-output", "pricing-cache-read", "pricing-cache-write"}
+	if !flagWasSet(flags, pricingFlags...) {
+		if len(prices) == 0 {
+			return nil, errors.New("pricing is required; use --pricing-input and --pricing-output")
+		}
+		return prices, nil
 	}
-	var fragment struct {
-		Prices map[string]adapter.Price `json:"prices"`
+	if !flagWasSet(flags, "pricing-input") || !flagWasSet(flags, "pricing-output") {
+		return nil, errors.New("custom pricing requires --pricing-input and --pricing-output")
 	}
-	if err := adapter.StrictJSON(data, &fragment); err != nil || fragment.Prices == nil {
-		return nil, errors.New("pricing file must contain a prices object")
+	price := adapter.Price{
+		Currency: currency,
+		Source:   source,
+		Version:  version,
+		Input:    &input,
+		Output:   &output,
 	}
-	return fragment.Prices, nil
+	if flagWasSet(flags, "pricing-cache-read") {
+		price.CacheRead = &cacheRead
+	}
+	if flagWasSet(flags, "pricing-cache-write") {
+		price.CacheWrite = &cacheWrite
+	}
+	if err := price.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid custom pricing: %w", err)
+	}
+	prices[model] = price
+	return prices, nil
 }
 func saveConfiguration(path string, c gateway.Config, secret string, replace bool, store secretWriter) error {
 	if strings.TrimSpace(secret) == "" || strings.ContainsAny(secret, "\r\n\x00") {

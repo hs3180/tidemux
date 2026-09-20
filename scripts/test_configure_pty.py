@@ -65,6 +65,7 @@ else:sys.exit(2)
             assert unlocked==(mode=='success'), 'unnecessary or missing unlock prompt'
             c=json.loads(config.read_text());assert secret.decode() not in config.read_text()
             assert c['model']=='deepseek-flash' and c['base_url']=='https://api.deepseek.com'
+            price=c['prices']['deepseek-flash'];assert price['version']=='deepseek-v4-pricing-2026-08-16-peak' and price['input_per_million']==0.3 and price['output_per_million']==1.2
             assert config.stat().st_mode & 0o777 == 0o600
             values=json.loads(db.read_text());assert len(values)==2 and secret.decode() in values.values()
             assert 'Local checks passed' in captured.decode()

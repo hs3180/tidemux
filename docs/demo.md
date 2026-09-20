@@ -107,23 +107,25 @@ billing. If the gateway reports `audit_failed_do_not_retry_blindly`, the
 provider may already have executed the call; inspect storage and upstream usage
 before retrying. TideMux does not automatically retry any call.
 
-## Optional pricing
+## Pricing
 
-For `deepseek-flash`, use the [DeepSeek USD pricing examples](deepseek-pricing.md),
-which distinguish peak and off-peak rates from the English official price list.
-The generic example below is only for explaining the configuration format.
+Pricing is selected together with the provider API key by `configure`. The
+DeepSeek preset stores the fixed peak rates automatically. For another provider,
+set rates on the same command; rates are **per million tokens**:
 
-Add a `prices` object keyed by exact request model ID. Rates are **per million
-tokens**, in an explicit three-letter currency, with your verified source and
-version. The following numbers are synthetic and must not be used as real rates:
-
-```json
-{"prices":{"your-model":{
-  "currency":"USD","source":"synthetic-example-only","version":"example-1",
-  "input_per_million":2,"output_per_million":4,
-  "cache_read_per_million":1,"cache_write_per_million":3
-}}}
+```sh
+tidemux configure --protocol openai \
+  --base-url https://provider.example/v1 \
+  --model your-model \
+  --pricing-input 2 \
+  --pricing-output 4 \
+  --pricing-cache-read 1 \
+  --pricing-cache-write 3
 ```
+
+Use `--pricing-currency`, `--pricing-source`, and `--pricing-version` when the
+defaults (`USD`, `manual-cli`, and `manual`) are not appropriate. `budget` only
+changes limits and does not accept or modify pricing.
 
 Missing prices produce unknown cost. Positive provider-reported cached usage
 requires the corresponding price. Unknown provider cache breakdowns can use the

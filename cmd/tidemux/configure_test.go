@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/hs3180/tidemux/internal/gateway"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hs3180/tidemux/internal/gateway"
 )
 
 type memorySecrets struct {
@@ -120,20 +122,59 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 	}
 }
 
-func TestLoadPricingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pricing.json")
-	if err := os.WriteFile(path, []byte(`{"prices":{"deepseek-flash":{"currency":"USD","source":"test","version":"1","input_per_million":0.15,"output_per_million":0.6}}}`), 0600); err != nil {
+func TestConfigurePricesUsesPeakDeepSeekPreset(t *testing.T) {
+	flags, currency, source, version, input, output, cacheRead, cacheWrite := pricingTestFlags(t)
+	prices, err := configurePrices(flags, "deepseek", "https://api.deepseek.com", "deepseek-flash", *currency, *source, *version, *input, *output, *cacheRead, *cacheWrite)
+	if err != nil {
 		t.Fatal(err)
 	}
-	prices, err := loadPricingFile(path)
-	if err != nil || prices["deepseek-flash"].Currency != "USD" {
-		t.Fatalf("prices=%v err=%v", prices, err)
+	price := prices["deepseek-flash"]
+	if price.Version != "deepseek-v4-pricing-2026-08-16-peak" || price.Input == nil || *price.Input != .3 || price.Output == nil || *price.Output != 1.2 {
+		t.Fatalf("price=%+v", price)
 	}
-	bad := filepath.Join(t.TempDir(), "bad.json")
-	if err := os.WriteFile(bad, []byte(`{"pricing":{}}`), 0600); err != nil {
+}
+
+func TestConfigurePricesAcceptsCustomCommandLineRates(t *testing.T) {
+	flags, currency, source, version, input, output, cacheRead, cacheWrite := pricingTestFlags(t, "--pricing-currency", "CNY", "--pricing-source", "provider-docs", "--pricing-version", "2026-09-20", "--pricing-input", "2.5", "--pricing-output", "7.5", "--pricing-cache-read", "0.5", "--pricing-cache-write", "1")
+	prices, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *input, *output, *cacheRead, *cacheWrite)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadPricingFile(bad); err == nil {
-		t.Fatal("accepted pricing file without prices")
+	price := prices["custom-model"]
+	if price.Currency != "CNY" || price.Source != "provider-docs" || price.Version != "2026-09-20" || price.Input == nil || *price.Input != 2.5 || price.Output == nil || *price.Output != 7.5 || price.CacheRead == nil || *price.CacheRead != .5 || price.CacheWrite == nil || *price.CacheWrite != 1 {
+		t.Fatalf("price=%+v", price)
 	}
+}
+
+func TestConfigurePricesRequiresCustomRatesForNonPreset(t *testing.T) {
+	flags, currency, source, version, input, output, cacheRead, cacheWrite := pricingTestFlags(t)
+	if _, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *input, *output, *cacheRead, *cacheWrite); err == nil || !strings.Contains(err.Error(), "pricing is required") {
+		t.Fatalf("error=%v", err)
+	}
+	flags, currency, source, version, input, output, cacheRead, cacheWrite = pricingTestFlags(t, "--pricing-input", "1")
+	if _, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *input, *output, *cacheRead, *cacheWrite); err == nil || !strings.Contains(err.Error(), "requires --pricing-input and --pricing-output") {
+		t.Fatalf("partial error=%v", err)
+	}
+}
+
+func TestConfigureDoesNotAcceptPricingFile(t *testing.T) {
+	if err := configure([]string{"--pricing-file", "pricing.json"}, os.Stdout, os.Stderr); err == nil {
+		t.Fatal("configure still accepts --pricing-file")
+	}
+}
+
+func pricingTestFlags(t *testing.T, args ...string) (*flag.FlagSet, *string, *string, *string, *float64, *float64, *float64, *float64) {
+	t.Helper()
+	flags := flag.NewFlagSet("pricing-test", flag.ContinueOnError)
+	currency := flags.String("pricing-currency", "USD", "")
+	source := flags.String("pricing-source", "manual-cli", "")
+	version := flags.String("pricing-version", "manual", "")
+	input := flags.Float64("pricing-input", 0, "")
+	output := flags.Float64("pricing-output", 0, "")
+	cacheRead := flags.Float64("pricing-cache-read", 0, "")
+	cacheWrite := flags.Float64("pricing-cache-write", 0, "")
+	if err := flags.Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return flags, currency, source, version, input, output, cacheRead, cacheWrite
 }

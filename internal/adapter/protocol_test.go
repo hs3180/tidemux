@@ -6,25 +6,16 @@ import (
 	"time"
 )
 
-func TestBuiltInDeepSeekPricingFollowsOfficialSchedule(t *testing.T) {
-	cases := []struct {
-		name                  string
-		at                    string
-		input, output, cached float64
-	}{
-		{"weekday peak first window", "2026-09-21T02:00:00Z", 0.30, 1.20, 0.006},
-		{"weekday peak second window", "2026-09-21T08:00:00Z", 0.30, 1.20, 0.006},
-		{"weekday off peak", "2026-09-21T05:00:00Z", 0.15, 0.60, 0.003},
-		{"weekend off peak", "2026-09-20T08:00:00Z", 0.15, 0.60, 0.003},
-	}
+func TestBuiltInDeepSeekPricingUsesPeakPreset(t *testing.T) {
+	cases := []string{"2026-09-21T02:00:00Z", "2026-09-21T05:00:00Z", "2026-09-20T08:00:00Z"}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			at, err := time.Parse(time.RFC3339, tc.at)
+		t.Run(tc, func(t *testing.T) {
+			at, err := time.Parse(time.RFC3339, tc)
 			if err != nil {
 				t.Fatal(err)
 			}
 			p, ok := BuiltInPrice("https://api.deepseek.com/anthropic/v1", "deepseek-flash", at)
-			if !ok || *p.Input != tc.input || *p.Output != tc.output || *p.CacheRead != tc.cached {
+			if !ok || p.Version != "deepseek-v4-pricing-2026-08-16-peak" || *p.Input != .30 || *p.Output != 1.20 || *p.CacheRead != .006 {
 				t.Fatalf("price=%+v ok=%v", p, ok)
 			}
 		})
