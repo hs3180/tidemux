@@ -44,8 +44,20 @@ collects the upstream key without echoing it:
 In another terminal:
 
 ```sh
+./tidemux claude
+```
+
+When using a non-default profile, add `--config`:
+
+```sh
 ./tidemux claude --config "$HOME/.config/tidemux/anthropic.json"
 ```
+
+The Claude launcher supplies `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`,
+`ANTHROPIC_MODEL`, and `CLAUDE_CODE_SIMPLE` in the child environment. It does
+not pass the model as a client-specific flag. The gateway remains a separate
+process started with `tidemux serve`; this command only performs the local
+credential/model preflight and launches Claude Code.
 
 ## Profiles and credentials
 
@@ -69,6 +81,11 @@ and lets the macOS `security` utility request an unlock password when needed.
 TideMux does not read that password. Lookup is retried after the check; a missing
 credential still requires `configure`. Without a controlling terminal, the error
 explains how to retry interactively.
+
+Client launch is an environment handoff rather than a Unix pipe. Claude Code
+needs a bidirectional streaming HTTP endpoint and an interactive TTY; the same
+environment-based boundary can be reused by future clients without coupling
+them to a shell pipeline.
 
 ## Provider compatibility
 
