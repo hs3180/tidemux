@@ -17,7 +17,7 @@ tidemux serve
 To configure a budget without editing JSON, use the interactive budget TUI:
 
 ```sh
-tidemux budget --config "$HOME/Library/Application Support/TideMux/config.json"
+tidemux budget
 ```
 
 For scripting or direct changes, provide only the fields to update:
@@ -28,6 +28,10 @@ tidemux budget \
   --budget-weekly 0.01 \
   --pricing-file examples/deepseek-pricing-off-peak.json
 ```
+
+Both commands automatically use the user profile at
+`~/Library/Application Support/TideMux/config.json`. The optional `--config`
+flag is only for managing an alternate profile.
 
 Use `--budget-mode alert|soft|hard`, `--budget-currency`, and
 `--budget-alert-threshold` to adjust individual fields. Use `--disable` to

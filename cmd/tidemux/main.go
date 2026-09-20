@@ -21,7 +21,7 @@ import (
 
 const (
 	version = "0.1.0"
-	usage   = "usage: tidemux <serve|doctor|ledger> --config <path>\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux budget [--config path] [--budget-5h amount] [--budget-weekly amount]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
+	usage   = "usage: tidemux <serve|doctor|ledger> [--config path]\n       tidemux configure --preset deepseek [--protocol anthropic]\n       tidemux budget [--budget-5h amount] [--budget-weekly amount]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
 func main() {
