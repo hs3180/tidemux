@@ -39,6 +39,11 @@ remove budget enforcement. A budget without matching pricing is rejected
 before any configuration is written; TideMux never estimates cost from a
 fallback amount.
 
+The budget schema is intentionally not migrated from earlier pre-release
+profiles. If an existing profile contains conflicting legacy budget fields,
+replace it with the new schema using `tidemux budget` or recreate it with
+`tidemux configure --replace`.
+
 1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
    `deepseek-flash`. At **API key (hidden)**, paste your DeepSeek key and press Enter.
    Nothing appears while entering the key; this is expected.

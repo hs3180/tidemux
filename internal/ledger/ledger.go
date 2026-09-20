@@ -87,18 +87,7 @@ func (l *Ledger) initBudget(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var legacy int
-	if err := l.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='budget_reservations'`).Scan(&legacy); err != nil {
-		return err
-	}
-	if legacy == 0 {
-		return nil
-	}
-	_, err = l.db.ExecContext(ctx, `INSERT OR IGNORE INTO budget_charges (request_id,audit_id,charged_at_ms,currency,charged_amount,state)
- SELECT request_id,audit_id,reserved_at_ms,currency,charged_amount,
- CASE WHEN state='settled' THEN 'settled' ELSE 'unknown' END
- FROM budget_reservations`)
-	return err
+	return nil
 }
 
 // Close releases the local database handle.

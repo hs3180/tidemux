@@ -114,6 +114,10 @@ charge is not guessed and later budget requests are blocked with
 `budget_usage_unknown`. A request for a model without a matching price is rejected with
 `budget_pricing_unconfigured` before upstream transmission.
 
+Pre-release budget tables and fields are not migrated automatically. A profile
+using the old budget schema must be replaced with the new configuration before
+the budget feature can be used.
+
 ## Legacy data
 
 `ledger_requests`, `ledger_events` and their old `Summarize` view remain for
