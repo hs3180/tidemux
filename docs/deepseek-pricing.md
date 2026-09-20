@@ -13,11 +13,17 @@ in USD per one million tokens. They are not currency conversions from another pr
 Peak hours are Monday through Friday, **01:00–04:00 and 06:00–10:00 UTC**.
 All other hours are off-peak. Check the linked source for subsequent changes.
 
-## Configure an estimate
+## Automatic estimate
 
-Choose the [off-peak fragment](../examples/deepseek-pricing-off-peak.json) or
-[peak fragment](../examples/deepseek-pricing-peak.json) for the relevant period.
-These files contain only a `prices` object; they are not complete gateway configurations.
+When `base_url` uses the official `api.deepseek.com` hostname and the model is
+`deepseek-flash` (including the two accepted legacy aliases), TideMux applies
+the schedule automatically at request start. Explicit `prices` entries still
+override the built-in schedule. Third-party compatible endpoints must provide
+their own explicit prices.
+
+For a manual override, choose the [off-peak fragment](../examples/deepseek-pricing-off-peak.json) or
+[peak fragment](../examples/deepseek-pricing-peak.json). These files contain
+only a `prices` object; they are not complete gateway configurations.
 
 1. Stop the gateway and back up your local configuration at
    `~/Library/Application Support/TideMux/config.json`.
@@ -33,13 +39,13 @@ The entry records USD, the official source URL and the verification date/period.
 The same entry supports both API protocols for this model. Cache-hit pricing maps
 to `cache_read_per_million`; no separate cache-write price is invented.
 
-**TideMux does not automatically switch rates by time of day.** A running gateway
-keeps the configured price until restarted with an updated configuration. Estimates
-for requests crossing into another pricing period may differ from actual charges;
-keep prices unset if you cannot select the applicable rates reliably. Successful
-historical records retain their original price snapshots.
+The built-in schedule uses the request start time and stores the selected rate
+in each successful audit's price snapshot. Successful historical records retain
+their original price snapshots. DeepSeek may change prices; update TideMux if
+the official schedule changes.
 
-`configure --preset deepseek` selects the endpoint/model and credentials; it does
-not silently enable a fixed price schedule. Other models and third-party resellers
-require their own verified rates. See [accounting](accounting.md) for unknown costs,
-cache handling and the distinction between estimates and provider invoices.
+`configure --preset deepseek` selects the endpoint/model and credentials, and the
+official endpoint automatically receives the built-in schedule. Other models
+and third-party resellers require their own verified rates. See [accounting](accounting.md)
+for unknown costs, cache handling and the distinction between estimates and
+provider invoices.

@@ -153,7 +153,11 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 		}
 	}
 	a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens = usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite
-	if price, ok := c.Prices[model]; ok {
+	price, ok := c.Prices[model]
+	if !ok {
+		price, ok = BuiltInPrice(c.BaseURL, model, started)
+	}
+	if ok {
 		a.Currency = price.Currency
 		a.PriceSnapshot, _ = json.Marshal(price)
 		a.EstimatedCost = price.Estimate(c.Protocol, usage)
