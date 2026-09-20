@@ -91,7 +91,10 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return err
 	}
-	budgetPolicy := ledger.BudgetPolicy{Currency: *budgetCurrency, FiveHourLimit: *budget5h, WeeklyLimit: *budgetWeekly, AlertThreshold: *budgetThreshold, Mode: *budgetMode}
+	budgetPolicy := ledger.BudgetPolicy{}
+	if *budget5h > 0 || *budgetWeekly > 0 {
+		budgetPolicy = ledger.BudgetPolicy{Currency: *budgetCurrency, FiveHourLimit: *budget5h, WeeklyLimit: *budgetWeekly, AlertThreshold: *budgetThreshold, Mode: *budgetMode}
+	}
 	c := gateway.Config{Budget: budgetPolicy, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
