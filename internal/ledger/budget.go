@@ -40,9 +40,10 @@ type BudgetDecision struct {
 }
 
 // CheckBudget checks rolling five-hour and seven-day windows using settled
-// charges only. It intentionally does not reserve a guessed amount.
-func (l *Ledger) CheckBudget(ctx context.Context, p BudgetPolicy, confirmed bool, now time.Time) (BudgetDecision, error) {
-	if p.Validate() != nil {
+// charges only. It persists a zero-value pending attempt so a process restart
+// cannot lose an in-flight request; pending attempts do not act as a reserve.
+func (l *Ledger) CheckBudget(ctx context.Context, requestID string, p BudgetPolicy, confirmed bool, now time.Time) (BudgetDecision, error) {
+	if requestID == "" || p.Validate() != nil {
 		return BudgetDecision{}, errors.New("invalid budget policy")
 	}
 	nowMS := now.UnixMilli()
@@ -76,6 +77,12 @@ func (l *Ledger) CheckBudget(ctx context.Context, p BudgetPolicy, confirmed bool
 	if p.Mode == "soft" && (over || warning) && !confirmed {
 		return BudgetDecision{}, errors.New("budget_confirmation_required")
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,currency,charged_amount,state) VALUES (?,?,?,?,?,?)`, requestID, "", nowMS, p.Currency, 0, "pending"); err != nil {
+		return BudgetDecision{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return BudgetDecision{}, err
+	}
 	return BudgetDecision{Warning: warning}, nil
 }
 
@@ -92,9 +99,16 @@ func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, cur
 		state = "settled"
 		amount = *cost
 	}
-	_, err = l.db.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,currency,charged_amount,state) VALUES (?,?,?,?,?,?)`, requestID, auditID, chargedAt.UnixMilli(), currency, amount, state)
+	result, err := l.db.ExecContext(ctx, `UPDATE budget_charges SET audit_id=?,charged_at_ms=?,currency=?,charged_amount=?,state=? WHERE request_id=?`, auditID, chargedAt.UnixMilli(), currency, amount, state, requestID)
 	if err != nil {
 		return fmt.Errorf("record budget charge: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("record budget charge result: %w", err)
+	} else if affected == 0 {
+		if _, err := l.db.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,currency,charged_amount,state) VALUES (?,?,?,?,?,?)`, requestID, auditID, chargedAt.UnixMilli(), currency, amount, state); err != nil {
+			return fmt.Errorf("record budget charge insert: %w", err)
+		}
 	}
 	return nil
 }

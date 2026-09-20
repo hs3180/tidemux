@@ -148,7 +148,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reservationID := ""
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
 		reservationID = newRequestID()
-		decision, err := h.ledger.CheckBudget(r.Context(), h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
+		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
 		if err != nil {
 			code := "budget_reservation_failed"
 			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {

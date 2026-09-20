@@ -82,12 +82,13 @@ func (l *Ledger) initBudget(ctx context.Context) error {
 	_, err := l.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS budget_charges (
  request_id TEXT PRIMARY KEY, audit_id TEXT, charged_at_ms INTEGER NOT NULL,
  currency TEXT NOT NULL, charged_amount REAL NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('settled','unknown')));
+ state TEXT NOT NULL CHECK(state IN ('pending','settled','unknown')));
  CREATE INDEX IF NOT EXISTS budget_charge_period ON budget_charges(currency,charged_at_ms);`)
 	if err != nil {
 		return err
 	}
-	return nil
+	_, err = l.db.ExecContext(ctx, `UPDATE budget_charges SET state='unknown' WHERE state='pending'`)
+	return err
 }
 
 // Close releases the local database handle.

@@ -37,7 +37,7 @@ func TestBudgetHardLimitUsesSettledCharges(t *testing.T) {
 	defer l.Close()
 	p := BudgetPolicy{Currency: "USD", FiveHourLimit: 2, WeeklyLimit: 3, AlertThreshold: .8, Mode: "hard"}
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-	if _, err := l.CheckBudget(context.Background(), p, false, now); err != nil {
+	if _, err := l.CheckBudget(context.Background(), "one", p, false, now); err != nil {
 		t.Fatal(err)
 	}
 	in, out := int64(1), int64(1)
@@ -48,7 +48,7 @@ func TestBudgetHardLimitUsesSettledCharges(t *testing.T) {
 	if err := l.RecordBudgetCharge(context.Background(), "one", "audit", "USD", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.CheckBudget(context.Background(), p, false, now); err == nil || err.Error() != "budget_hard_limit" {
+	if _, err := l.CheckBudget(context.Background(), "two", p, false, now); err == nil || err.Error() != "budget_hard_limit" {
 		t.Fatalf("err=%v", err)
 	}
 }
@@ -64,7 +64,7 @@ func TestUnknownUsageBlocksFutureBudgetRequests(t *testing.T) {
 	if err := l.RecordBudgetCharge(context.Background(), "one", "missing-audit", "USD", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.CheckBudget(context.Background(), p, false, now); err == nil || err.Error() != "budget_usage_unknown" {
+	if _, err := l.CheckBudget(context.Background(), "two", p, false, now); err == nil || err.Error() != "budget_usage_unknown" {
 		t.Fatalf("err=%v", err)
 	}
 }
@@ -85,10 +85,34 @@ func TestBudgetSoftRequiresConfirmation(t *testing.T) {
 	if err := l.RecordBudgetCharge(context.Background(), "one", "audit", "USD", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.CheckBudget(context.Background(), p, false, now); err == nil || err.Error() != "budget_confirmation_required" {
+	if _, err := l.CheckBudget(context.Background(), "two", p, false, now); err == nil || err.Error() != "budget_confirmation_required" {
 		t.Fatalf("err=%v", err)
 	}
-	if decision, err := l.CheckBudget(context.Background(), p, true, now); err != nil || !decision.Warning {
+	if decision, err := l.CheckBudget(context.Background(), "two", p, true, now); err != nil || !decision.Warning {
 		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+}
+
+func TestPendingBudgetChargeBecomesUnknownAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	l, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := BudgetPolicy{Currency: "USD", FiveHourLimit: 10, WeeklyLimit: 10, AlertThreshold: .8, Mode: "hard"}
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	if _, err := l.CheckBudget(context.Background(), "in-flight", p, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	l, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if _, err := l.CheckBudget(context.Background(), "next", p, false, now); err == nil || err.Error() != "budget_usage_unknown" {
+		t.Fatalf("err=%v", err)
 	}
 }

@@ -114,6 +114,11 @@ charge is not guessed and later budget requests are blocked with
 `budget_usage_unknown`. A request for a model without a matching price is rejected with
 `budget_pricing_unconfigured` before upstream transmission.
 
+Budget admission persists a zero-value pending attempt before the upstream call.
+It is not a reserve and does not count toward the amount. If the process exits
+before settlement, restart converts the pending attempt to `unknown`, so the
+request cannot disappear from budget accounting.
+
 Pre-release budget tables and fields are not migrated automatically. A profile
 using the old budget schema must be replaced with the new configuration before
 the budget feature can be used.
