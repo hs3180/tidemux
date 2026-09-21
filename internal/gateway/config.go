@@ -50,6 +50,7 @@ func (s SMTPConfig) Validate() error {
 type Config struct {
 	Budget              ledger.BudgetPolicy      `json:"budget,omitempty"`
 	Reconciliation      ReconciliationConfig     `json:"reconciliation,omitempty"`
+	ReportSchedule      ReportSchedule           `json:"report_schedule,omitempty"`
 	SMTP                SMTPConfig               `json:"smtp,omitempty"`
 	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits              adapter.Limits           `json:"limits,omitempty"`
@@ -96,8 +97,14 @@ func (c Config) Validate() error {
 	if err := c.Reconciliation.Validate(); err != nil {
 		return err
 	}
+	if err := c.ReportSchedule.Validate(); err != nil {
+		return err
+	}
 	if err := c.SMTP.Validate(); err != nil {
 		return err
+	}
+	if c.ReportSchedule.EffectiveChannel() == "smtp" && c.ReportSchedule != (ReportSchedule{}) && c.SMTP == (SMTPConfig{}) {
+		return errors.New("report_schedule smtp channel requires smtp configuration")
 	}
 	if err := c.ModelCapabilities.Validate(); err != nil {
 		return err

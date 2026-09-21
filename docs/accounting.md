@@ -341,10 +341,20 @@ rather than a plaintext secret in JSON:
 }
 ```
 
-Run the generate/deliver commands from a user-owned macOS `launchd` job at the
-desired daily time. If the machine is offline or asleep, launchd will run it at
-its next opportunity; TideMux records only the actual generated report and does
-not fabricate a missed balance snapshot.
+The initial `tidemux configure` flow asks for an optional daily notification
+time in local time. The same setting can be managed from the command line:
+
+```sh
+tidemux report schedule --time 09:00
+tidemux report schedule --disable
+```
+
+TideMux stores the schedule in `report_schedule` and installs a private,
+per-profile user `launchd` agent. The agent runs `tidemux report notify`, which
+generates the current local-day report, exports the clickable HTML report and
+delivers the configured notification. If the Mac is asleep or offline,
+`launchd` runs the job at its next opportunity; TideMux records only the actual
+generated report and does not fabricate a missed balance snapshot.
 
 ## Legacy data
 

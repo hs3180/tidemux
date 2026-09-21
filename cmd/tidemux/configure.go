@@ -52,6 +52,8 @@ func configure(args []string, stdout, stderr *os.File) error {
 	budgetCurrency := flags.String("budget-currency", "USD", "budget currency")
 	budgetMode := flags.String("budget-mode", "hard", "budget mode: alert, soft or hard")
 	budgetThreshold := flags.Float64("budget-alert-threshold", 0.8, "budget alert threshold from 0 to 1")
+	notificationTime := flags.String("notification-time", "", "daily report notification time in local time (HH:MM); empty disables it")
+	notificationChannel := flags.String("notification-channel", "macos", "daily report notification channel: macos or smtp")
 	pricingCurrency := flags.String("pricing-currency", "USD", "pricing currency")
 	pricingSource := flags.String("pricing-source", "manual-cli", "pricing source or provider reference")
 	pricingVersion := flags.String("pricing-version", "manual", "pricing version or verification date")
@@ -82,6 +84,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 			*model = "deepseek-flash"
 		}
 	}
+	if flagWasSet(flags, "notification-channel") && (!flagWasSet(flags, "notification-time") || strings.TrimSpace(*notificationTime) == "") {
+		return errors.New("--notification-channel requires a non-empty --notification-time")
+	}
 	if *baseURL == "" || *model == "" {
 		return errors.New("use configure --preset deepseek-flash, or provide --protocol, --base-url and --model")
 	}
@@ -100,7 +105,15 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if *budget5h > 0 || *budgetWeekly > 0 {
 		budgetPolicy = ledger.BudgetPolicy{Currency: *budgetCurrency, FiveHourLimit: *budget5h, WeeklyLimit: *budgetWeekly, AlertThreshold: *budgetThreshold, Mode: *budgetMode}
 	}
-	c := gateway.Config{Budget: budgetPolicy, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	schedule := gateway.ReportSchedule{}
+	if flagWasSet(flags, "notification-time") && strings.TrimSpace(*notificationTime) != "" {
+		normalized, err := gateway.NormalizeReportScheduleTime(*notificationTime)
+		if err != nil {
+			return err
+		}
+		schedule = gateway.ReportSchedule{Time: normalized, Channel: *notificationChannel}
+	}
+	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}
@@ -122,6 +135,21 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if c.Budget != (ledger.BudgetPolicy{}) {
 		fmt.Fprintf(stdout, "Budget: %g %s / 5h, %g %s / 7d (%s mode)\n", c.Budget.FiveHourLimit, c.Budget.Currency, c.Budget.WeeklyLimit, c.Budget.Currency, c.Budget.Mode)
 	}
+	if !flagWasSet(flags, "notification-time") {
+		schedule, err = promptReportSchedule(tty, tty)
+		if err != nil {
+			return err
+		}
+		c.ReportSchedule = schedule
+		if err := c.Validate(); err != nil {
+			return err
+		}
+	}
+	if c.ReportSchedule != (gateway.ReportSchedule{}) {
+		fmt.Fprintf(stdout, "Daily report notification: %s (%s, local time)\n", c.ReportSchedule.Time, c.ReportSchedule.EffectiveChannel())
+	} else {
+		fmt.Fprintln(stdout, "Daily report notification: disabled")
+	}
 	fmt.Fprint(tty, "API key (hidden; paste then press Enter): ")
 	secret, err := term.ReadPassword(int(tty.Fd()))
 	fmt.Fprintln(tty)
@@ -135,6 +163,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 	}()
 	if err = saveConfiguration(abs, c, string(secret), *replace, gateway.MacOSKeychain{}); err != nil {
 		return err
+	}
+	if _, err := syncReportSchedule(abs, c.ReportSchedule); err != nil {
+		return fmt.Errorf("configuration saved, but scheduled notification setup failed: %w", err)
 	}
 	fmt.Fprintln(stdout, "Configured. API key and generated gateway token are stored in macOS Keychain.")
 	if *replace {

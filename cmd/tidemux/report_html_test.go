@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"os"
@@ -174,6 +175,59 @@ func TestReportZeroRequestCostIsZero(t *testing.T) {
 	}
 	if got := reportCostText(ledger.DailyReport{RequestCount: 0}); got != "0" {
 		t.Fatalf("zero-request notification cost = %q, want 0", got)
+	}
+}
+
+func TestReportNotifyUsesConfiguredSchedule(t *testing.T) {
+	dir := t.TempDir()
+	ledgerPath := filepath.Join(dir, "ledger.db")
+	configPath := filepath.Join(dir, "config.json")
+	config := map[string]any{
+		"protocol": "openai", "base_url": "https://example.com/v1", "model": "model", "upstream_id": "test",
+		"listen_addr": "127.0.0.1:8787", "max_in_flight": 1, "ledger_path": ledgerPath,
+		"upstream_keychain":     map[string]string{"service": "test.provider", "account": "default"},
+		"access_token_keychain": map[string]string{"service": "test.gateway", "account": "default"},
+		"report_schedule":       map[string]string{"time": "09:00", "channel": "macos"},
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notifyCapture := filepath.Join(dir, "notify-args")
+	if err := os.WriteFile(filepath.Join(fakeBin, "terminal-notifier"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TIDEMUX_NOTIFY_CAPTURE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TIDEMUX_NOTIFY_CAPTURE", notifyCapture)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := runReportTest(t, "report", "notify", "--config", configPath)
+	if err != nil {
+		t.Fatalf("notify failed: %v; output=%s", err, output)
+	}
+	if !strings.Contains(string(output), `"channel":"macos"`) || !strings.Contains(string(output), `"status":"sent"`) {
+		t.Fatalf("unexpected notify output: %s", output)
+	}
+	args, err := os.ReadFile(notifyCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsReportNotificationArgs(strings.Split(strings.TrimSpace(string(args)), "\n"), defaultReportPath(ledgerPath)) {
+		t.Fatalf("notification did not target the generated report: %s", args)
+	}
+	store, err := ledger.Open(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reports, err := store.ListDailyReports(context.Background(), 1)
+	if err != nil || len(reports) != 1 || reports[0].Timezone != "Local" {
+		t.Fatalf("reports=%+v err=%v", reports, err)
 	}
 }
 

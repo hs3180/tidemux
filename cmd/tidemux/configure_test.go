@@ -169,6 +169,13 @@ func TestConfigureRejectsOldDeepSeekPresetName(t *testing.T) {
 	}
 }
 
+func TestConfigureRejectsChannelWithoutNotificationTime(t *testing.T) {
+	err := configure([]string{"--preset", "deepseek-flash", "--notification-time", "", "--notification-channel", "smtp"}, os.Stdout, os.Stderr)
+	if err == nil || !strings.Contains(err.Error(), "non-empty --notification-time") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func pricingTestFlags(t *testing.T, args ...string) (*flag.FlagSet, *string, *string, *string, *float64, *float64, *float64) {
 	t.Helper()
 	flags := flag.NewFlagSet("pricing-test", flag.ContinueOnError)

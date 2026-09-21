@@ -56,7 +56,7 @@ func (l *Ledger) initReports(ctx context.Context) error {
 }
 
 func (l *Ledger) GenerateDailyReport(ctx context.Context, day time.Time, timezone string, budget ReportBudget) (DailyReport, error) {
-	loc, err := time.LoadLocation(timezone)
+	loc, err := loadReportLocation(timezone)
 	if err != nil {
 		return DailyReport{}, errors.New("invalid report timezone")
 	}
@@ -86,7 +86,7 @@ func (l *Ledger) DailyReportSeries(ctx context.Context, through time.Time, timez
 	if days < 1 || days > 3660 {
 		return nil, errors.New("report days must be 1..3660")
 	}
-	loc, err := time.LoadLocation(timezone)
+	loc, err := loadReportLocation(timezone)
 	if err != nil {
 		return nil, errors.New("invalid report timezone")
 	}
@@ -100,6 +100,13 @@ func (l *Ledger) DailyReportSeries(ctx context.Context, through time.Time, timez
 		reports = append(reports, r)
 	}
 	return reports, nil
+}
+
+func loadReportLocation(timezone string) (*time.Location, error) {
+	if timezone == "Local" {
+		return time.Local, nil
+	}
+	return time.LoadLocation(timezone)
 }
 
 func reportDay(day time.Time, loc *time.Location) time.Time {

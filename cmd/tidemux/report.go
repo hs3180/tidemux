@@ -25,7 +25,10 @@ func report(args []string, stdout, stderr *os.File) error {
 		return errors.New(usage)
 	}
 	command := args[0]
-	if command != "generate" && command != "list" && command != "export" && command != "open" && command != "deliver" && command != "retry" {
+	if command == "schedule" {
+		return scheduleCommand(args[1:], stdout, stderr)
+	}
+	if command != "generate" && command != "list" && command != "export" && command != "open" && command != "deliver" && command != "retry" && command != "notify" {
 		return errors.New(usage)
 	}
 	flags := flag.NewFlagSet("report "+command, flag.ContinueOnError)
@@ -41,7 +44,13 @@ func report(args []string, stdout, stderr *os.File) error {
 	days := flags.Int("days", 30, "number of days in an HTML export")
 	output := flags.String("output", "", "HTML export path (default: ledger directory/reports/latest.html)")
 	openReport := flags.Bool("open", false, "open an HTML export in the default browser")
-	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *configPath == "" {
+	if err := flags.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 || *configPath == "" {
 		return errors.New(usage)
 	}
 	c, err := gateway.LoadConfig(*configPath)
@@ -68,7 +77,7 @@ func report(args []string, stdout, stderr *os.File) error {
 		return json.NewEncoder(stdout).Encode(rows)
 	}
 	if command == "generate" {
-		loc, err := time.LoadLocation(*timezone)
+		loc, err := reportLocation(*timezone)
 		if err != nil {
 			return errors.New("invalid report timezone")
 		}
@@ -93,7 +102,7 @@ func report(args []string, stdout, stderr *os.File) error {
 		if *days < 1 || *days > 3660 {
 			return errors.New("report export requires --days 1..3660")
 		}
-		loc, err := time.LoadLocation(*timezone)
+		loc, err := reportLocation(*timezone)
 		if err != nil {
 			return errors.New("invalid report timezone")
 		}
@@ -109,6 +118,23 @@ func report(args []string, stdout, stderr *os.File) error {
 			return err
 		}
 		return json.NewEncoder(stdout).Encode(result)
+	}
+	if command == "notify" {
+		selectedChannel := *channel
+		if !flagWasSet(flags, "channel") {
+			if c.ReportSchedule == (gateway.ReportSchedule{}) {
+				return errors.New("scheduled notifications are not configured")
+			}
+			selectedChannel = c.ReportSchedule.EffectiveChannel()
+		}
+		if selectedChannel != "macos" && selectedChannel != "smtp" {
+			return errors.New("notification channel must be macos or smtp")
+		}
+		notifyTimezone := "Local"
+		if flagWasSet(flags, "timezone") {
+			notifyTimezone = *timezone
+		}
+		return notifyReport(stdout, l, c, selectedChannel, notifyTimezone)
 	}
 	if *id < 1 || (*channel != "macos" && *channel != "smtp") {
 		return errors.New(usage)
@@ -142,7 +168,7 @@ func report(args []string, stdout, stderr *os.File) error {
 	}
 	var reportPath string
 	if *channel == "macos" {
-		loc, e := time.LoadLocation(selected.Timezone)
+		loc, e := reportLocation(selected.Timezone)
 		if e != nil {
 			err = errors.New("invalid persisted report timezone")
 		} else {
@@ -173,6 +199,37 @@ func report(args []string, stdout, stderr *os.File) error {
 		return errors.New(code)
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": selected.ID, "channel": *channel, "status": status})
+}
+
+func reportLocation(timezone string) (*time.Location, error) {
+	if timezone == "Local" {
+		return time.Local, nil
+	}
+	return time.LoadLocation(timezone)
+}
+
+func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, timezone string) error {
+	through := time.Now()
+	report, err := l.GenerateDailyReport(context.Background(), through, timezone, ledger.ReportBudget{})
+	if err != nil {
+		return err
+	}
+	export, err := exportHTMLReport(context.Background(), l, defaultReportPath(c.LedgerPath), timezone, through, 30, ledger.ReportBudget{}, false)
+	if err != nil {
+		return err
+	}
+	status, code := "sent", ""
+	if err := deliverReport(channel, c, report, export.Path); err != nil {
+		status, code = "failed", "delivery_failed"
+		if recordErr := l.RecordDelivery(context.Background(), report.ID, channel, status, code); recordErr != nil {
+			return recordErr
+		}
+		return errors.New(code)
+	}
+	if err := l.RecordDelivery(context.Background(), report.ID, channel, status, code); err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": report.ID, "channel": channel, "status": status})
 }
 
 func deliverReport(channel string, c gateway.Config, r ledger.DailyReport, reportPath string) error {

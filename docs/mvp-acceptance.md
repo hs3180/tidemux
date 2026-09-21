@@ -28,9 +28,10 @@ build remains archived as a historical baseline.
   provider's current prices; when usage is absent, configured pricing enables a
   clearly marked local content estimate, while requests without a usable price
   remain unknown.
-- Interactive configure: PTY covers automatic unlock, no unnecessary prompt,
-  wrong-password/cancellation stop, hidden API key input and no plaintext config;
-  rollback is tested. Real isolated Keychain writes/read-back preserve existing items.
+- Interactive configure: PTY covers automatic unlock, the daily report notification
+  time prompt, no unnecessary prompt, wrong-password/cancellation stop, hidden API
+  key input and no plaintext config; rollback is tested. Real isolated Keychain
+  writes/read-back preserve existing items.
 - Built CLI process tests for both protocols, temporary Keychain double,
   HTTP request, ledger usage/cost query and clean shutdown.
 - `CGO_ENABLED=0 go test ./...`, `go vet ./...`, and `go test -race ./...` pass on
