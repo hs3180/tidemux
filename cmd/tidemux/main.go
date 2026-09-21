@@ -29,7 +29,7 @@ commands:
   provider    add and manage upstream providers
   gateway     configure gateway-wide settings
   billing     inspect local usage and cost records (--details for requests)
-  report      generate, view or deliver usage reports
+  report      generate, view, deliver reports, and configure webhook delivery
               use --diagnostics [--json] for recent local rejections
   claude      launch Claude Code through the gateway
   kilo        launch Kilo CLI through the gateway

@@ -119,6 +119,26 @@ func TestScheduleCommandRejectsInvalidTimeWithoutChangingConfig(t *testing.T) {
 	}
 }
 
+func TestScheduleCommandSupportsWebhookChannel(t *testing.T) {
+	path := writeWebhookScheduleTestConfig(t)
+	var calls []gateway.ReportSchedule
+	sync := func(_ string, schedule gateway.ReportSchedule) (string, error) {
+		calls = append(calls, schedule)
+		return "/tmp/tidemux-test-report.plist", nil
+	}
+	if err := scheduleCommandWithSync([]string{"--config", path, "--time", "09:05", "--channel", "webhook"}, os.Stdout, os.Stderr, sync); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := gateway.ReportSchedule{Time: "09:05", Channel: "webhook"}
+	if configured.ReportSchedule != want || len(calls) != 1 || calls[0] != want {
+		t.Fatalf("schedule=%+v calls=%+v", configured.ReportSchedule, calls)
+	}
+}
+
 func TestRenderReportLaunchAgentEscapesArguments(t *testing.T) {
 	plist := string(renderReportLaunchAgent("label", "/tmp/tide&mux", "/tmp/config<one>.json", 9, 7))
 	for _, want := range []string{"<key>Hour</key><integer>9</integer>", "<key>Minute</key><integer>7</integer>", "/tmp/tide&amp;mux", "/tmp/config&lt;one&gt;.json"} {
@@ -176,6 +196,27 @@ func writeScheduleTestConfig(t *testing.T) string {
 		UpstreamKeychain:    gateway.KeychainReference{Service: "test.provider", Account: "default"},
 		AccessTokenKeychain: gateway.KeychainReference{Service: "test.gateway", Account: "default"},
 		MaxInFlight:         1, LedgerPath: filepath.Join(dir, "ledger.db"),
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeWebhookScheduleTestConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	config := gateway.Config{
+		ListenAddr: "127.0.0.1:8787", Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model", UpstreamID: "test",
+		UpstreamKeychain:    gateway.KeychainReference{Service: "test.provider", Account: "default"},
+		AccessTokenKeychain: gateway.KeychainReference{Service: "test.gateway", Account: "default"},
+		MaxInFlight:         1, LedgerPath: filepath.Join(dir, "ledger.db"),
+		ReportWebhook: gateway.ReportWebhookConfig{Provider: "generic", Keychain: gateway.KeychainReference{Service: "webhook", Account: "default"}},
 	}
 	data, err := json.Marshal(config)
 	if err != nil {

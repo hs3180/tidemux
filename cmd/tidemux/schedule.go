@@ -72,6 +72,7 @@ func scheduleCommandWithSync(args []string, stdout, stderr *os.File, sync report
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")
 	timeValue := flags.String("time", "", "daily notification time in local time (HH:MM)")
+	channel := flags.String("channel", "macos", "notification channel: macos or webhook")
 	disable := flags.Bool("disable", false, "disable scheduled notifications")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -106,11 +107,17 @@ func scheduleCommandWithSync(args []string, stdout, stderr *os.File, sync report
 	if strings.TrimSpace(*timeValue) == "" {
 		return errors.New("report schedule requires --time HH:MM or --disable")
 	}
+	if *channel != "macos" && *channel != "webhook" {
+		return errors.New("report schedule channel must be macos or webhook")
+	}
+	if *channel == "webhook" && current.ReportWebhook == (gateway.ReportWebhookConfig{}) {
+		return errors.New("webhook schedule requires tidemux report webhook --provider ...")
+	}
 	normalized, err := gateway.NormalizeReportScheduleTime(*timeValue)
 	if err != nil {
 		return err
 	}
-	schedule := gateway.ReportSchedule{Time: normalized, Channel: "macos"}
+	schedule := gateway.ReportSchedule{Time: normalized, Channel: *channel}
 	candidate := current
 	candidate.ReportSchedule = schedule
 	if err := candidate.Validate(); err != nil {
@@ -123,7 +130,7 @@ func scheduleCommandWithSync(args []string, stdout, stderr *os.File, sync report
 	if err != nil {
 		return fmt.Errorf("schedule saved in configuration, but launchd setup failed: %w", err)
 	}
-	fmt.Fprintf(stdout, "Daily report notification scheduled at %s (macOS Notification Center, local time)\n", schedule.Time)
+	fmt.Fprintf(stdout, "Daily report notification scheduled at %s (%s, local time)\n", schedule.Time, schedule.EffectiveChannel())
 	if plistPath != "" {
 		fmt.Fprintf(stdout, "LaunchAgent: %s\n", plistPath)
 	}
