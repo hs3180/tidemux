@@ -3,7 +3,27 @@ package adapter
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestBuiltInDeepSeekPricingUsesPeakPreset(t *testing.T) {
+	cases := []string{"2026-09-21T02:00:00Z", "2026-09-21T05:00:00Z", "2026-09-20T08:00:00Z"}
+	for _, tc := range cases {
+		t.Run(tc, func(t *testing.T) {
+			at, err := time.Parse(time.RFC3339, tc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, ok := BuiltInPrice("https://api.deepseek.com/anthropic/v1", "deepseek-flash", at)
+			if !ok || p.Version != "deepseek-v4-pricing-2026-08-16-peak" || *p.InputCacheMiss != .30 || *p.Output != 1.20 || *p.InputCacheHit != .006 {
+				t.Fatalf("price=%+v ok=%v", p, ok)
+			}
+		})
+	}
+	if _, ok := BuiltInPrice("https://proxy.example/v1", "deepseek-flash", time.Now()); ok {
+		t.Fatal("enabled built-in price for a third-party endpoint")
+	}
+}
 
 func TestUsageAndPricing(t *testing.T) {
 	cases := []struct {
@@ -13,15 +33,10 @@ func TestUsageAndPricing(t *testing.T) {
 	}{
 		{"openai", `{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":4}}`, 10, 2, 24e-6},
 		{"openai", `{"prompt_tokens":10,"completion_tokens":2,"prompt_cache_hit_tokens":4,"prompt_cache_miss_tokens":6}`, 10, 2, 24e-6},
-		{"anthropic", `{"input_tokens":6,"output_tokens":2,"cache_read_input_tokens":4,"cache_creation_input_tokens":3}`, 13, 2, 36e-6},
+		{"anthropic", `{"input_tokens":6,"output_tokens":2,"cache_read_input_tokens":4,"cache_creation_input_tokens":3}`, 13, 2, 30e-6},
 	}
-	p := Price{Currency: "USD", Source: "test", Version: "1", Input: ptr(2.0), Output: ptr(4.0), CacheRead: ptr(1.0), CacheWrite: ptr(4.0)}
+	p := Price{Currency: "USD", Source: "test", Version: "1", InputCacheMiss: ptr(2.0), InputCacheHit: ptr(1.0), Output: ptr(4.0)}
 	for _, c := range cases {
-		if c.protocol == "openai" {
-			p.CacheWrite = nil
-		} else {
-			p.CacheWrite = ptr(4.0)
-		}
 		u, err := ParseUsage(c.protocol, []byte(c.body))
 		if err != nil {
 			t.Fatal(err)
@@ -38,10 +53,27 @@ func TestUsageAndPricing(t *testing.T) {
 func TestUnknownUsageAndPartialCacheRemainUnknown(t *testing.T) {
 	for _, body := range []string{`null`, `{}`, `{"prompt_tokens":10}`, `{"prompt_tokens":-1,"completion_tokens":2}`, `{"prompt_tokens":10,"completion_tokens":2,"prompt_cache_hit_tokens":3,"prompt_cache_miss_tokens":2}`} {
 		u, _ := ParseUsage("openai", []byte(body))
-		p := Price{Input: ptr(1.0), Output: ptr(1.0), CacheRead: ptr(1.0)}
+		p := Price{InputCacheMiss: ptr(1.0), InputCacheHit: ptr(1.0), Output: ptr(1.0)}
 		if p.Estimate("openai", u) != nil {
 			t.Fatalf("unknown cost inferred for %s", body)
 		}
+	}
+}
+func TestUnknownCacheSplitRequiresEqualInputRates(t *testing.T) {
+	u := TokenUsage{Input: ptr[int64](10), Output: ptr[int64](2)}
+	differential := Price{InputCacheHit: ptr[float64](1), InputCacheMiss: ptr[float64](2), Output: ptr[float64](4)}
+	if differential.Estimate("openai", u) != nil {
+		t.Fatal("estimated cost without a cache split")
+	}
+	equal := Price{InputCacheHit: ptr[float64](2), InputCacheMiss: ptr[float64](2), Output: ptr[float64](4)}
+	cost := equal.Estimate("openai", u)
+	if cost == nil || *cost < 28e-6-1e-12 || *cost > 28e-6+1e-12 {
+		t.Fatalf("cost=%v", cost)
+	}
+	u.CacheRead = ptr[int64](8)
+	u.CacheWrite = ptr[int64](3)
+	if equal.Estimate("openai", u) != nil {
+		t.Fatal("estimated cost for inconsistent cache usage")
 	}
 }
 func TestStrictRequests(t *testing.T) {

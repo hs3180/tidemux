@@ -30,13 +30,15 @@ elif a[0]=='delete-generic-password':
  key=a[a.index('-s')+1]+'/'+a[a.index('-a')+1];d.pop(key,None);p.write_text(json.dumps(d))
 else:sys.exit(2)
 ''');(fake/'security').chmod(0o700)
+    (fake/'launchctl').write_text('#!/bin/sh\nexit 0\n');(fake/'launchctl').chmod(0o700)
     for mode in ['unlocked','success','failure','cancel']:
-        db=root/(mode+'-secrets.json');config=root/mode/'config.json'
-        env=dict(os.environ,PATH=str(fake)+':'+os.environ['PATH'],TIDEMUX_TEST_KEYCHAIN_DB=str(db),TIDEMUX_TEST_UNLOCK=mode)
+        db=root/(mode+'-secrets.json');user_directory=root/mode/'user'
+        config=user_directory/'Library'/'Application Support'/'TideMux'/'config.json'
+        env=dict(os.environ,HOME=str(user_directory),PATH=str(fake)+':'+os.environ['PATH'],TIDEMUX_TEST_KEYCHAIN_DB=str(db),TIDEMUX_TEST_UNLOCK=mode)
         secret=b'synthetic-pty-secret-not-real';password=b'synthetic-login-password'
         pid,fd=pty.fork()
-        if pid==0:os.execve(binary,[binary,'configure','--preset','deepseek','--config',str(config)],env)
-        captured=b'';sent=False;unlocked=False;deadline=time.monotonic()+15;status=None
+        if pid==0:os.execve(binary,[binary,'configure','--preset','deepseek-flash'],env)
+        captured=b'';sent=False;schedule_sent=False;unlocked=False;deadline=time.monotonic()+15;status=None
         try:
             while time.monotonic()<deadline:
                 ready,_,_=select.select([fd],[],[],0.1)
@@ -46,6 +48,8 @@ else:sys.exit(2)
                     captured+=chunk
                     if not unlocked and b'System unlock password:' in captured:
                         time.sleep(0.05);os.write(fd,b'\x03' if mode=='cancel' else password+b'\n');unlocked=True
+                    if not schedule_sent and b'Daily report notification time' in captured:
+                        time.sleep(0.05);os.write(fd,b'08:30\n' if mode=='success' else b'\n');schedule_sent=True
                     if not sent and b'API key (hidden' in captured:
                         time.sleep(0.05);os.write(fd,secret+b'\n');sent=True
                 done,result=os.waitpid(pid,os.WNOHANG)
@@ -62,9 +66,15 @@ else:sys.exit(2)
         else:
             assert status==0, 'configure failed with synthetic Keychain'
             assert unlocked==(mode=='success'), 'unnecessary or missing unlock prompt'
+            assert schedule_sent, 'missing daily report notification prompt'
             c=json.loads(config.read_text());assert secret.decode() not in config.read_text()
             assert c['model']=='deepseek-flash' and c['base_url']=='https://api.deepseek.com'
+            if mode=='success':assert c['report_schedule']=={'time':'08:30','channel':'macos'}
+            else:assert c.get('report_schedule',{})=={}
+            price=c['prices']['deepseek-flash'];assert price['version']=='deepseek-v4-pricing-2026-08-16-peak' and price['input_cache_hit_per_million']==0.006 and price['input_cache_miss_per_million']==0.3 and price['output_per_million']==1.2
             assert config.stat().st_mode & 0o777 == 0o600
             values=json.loads(db.read_text());assert len(values)==2 and secret.decode() in values.values()
             assert 'Local checks passed' in captured.decode()
+            assert 'Inspect: tidemux billing\r\n' in captured.decode()
+            assert 'tidemux ledger' not in captured.decode()
         print('PTY configure passed: '+mode)

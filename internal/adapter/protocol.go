@@ -287,20 +287,19 @@ func Request(protocol string, data []byte, defaultModel string) ([]byte, string,
 
 type TokenUsage struct{ Input, Output, CacheRead, CacheWrite *int64 }
 type Price struct {
-	Currency   string   `json:"currency"`
-	Source     string   `json:"source"`
-	Version    string   `json:"version"`
-	Input      *float64 `json:"input_per_million"`
-	Output     *float64 `json:"output_per_million"`
-	CacheRead  *float64 `json:"cache_read_per_million,omitempty"`
-	CacheWrite *float64 `json:"cache_write_per_million,omitempty"`
+	Currency       string   `json:"currency"`
+	Source         string   `json:"source"`
+	Version        string   `json:"version"`
+	InputCacheHit  *float64 `json:"input_cache_hit_per_million"`
+	InputCacheMiss *float64 `json:"input_cache_miss_per_million"`
+	Output         *float64 `json:"output_per_million"`
 }
 
 func (p Price) Validate() error {
-	if len(p.Currency) != 3 || strings.ToUpper(p.Currency) != p.Currency || strings.TrimSpace(p.Source) == "" || strings.TrimSpace(p.Version) == "" || p.Input == nil || p.Output == nil {
-		return errors.New("pricing requires currency, source, version, input and output rates")
+	if len(p.Currency) != 3 || strings.ToUpper(p.Currency) != p.Currency || strings.TrimSpace(p.Source) == "" || strings.TrimSpace(p.Version) == "" || p.InputCacheHit == nil || p.InputCacheMiss == nil || p.Output == nil {
+		return errors.New("pricing requires currency, source, version, input cache hit, input cache miss and output rates")
 	}
-	for _, x := range []*float64{p.Input, p.Output, p.CacheRead, p.CacheWrite} {
+	for _, x := range []*float64{p.InputCacheHit, p.InputCacheMiss, p.Output} {
 		if x != nil && (*x < 0 || math.IsNaN(*x) || math.IsInf(*x, 0)) {
 			return errors.New("invalid price")
 		}
@@ -400,35 +399,36 @@ func ParseUsage(protocol string, data []byte) (TokenUsage, error) {
 	}
 	return u, nil
 }
-func (p Price) Estimate(protocol string, u TokenUsage) *float64 {
-	if u.Input == nil || u.Output == nil || p.Input == nil || p.Output == nil {
+func (p Price) Estimate(_ string, u TokenUsage) *float64 {
+	if u.Input == nil || u.Output == nil || *u.Input < 0 || *u.Output < 0 || p.InputCacheHit == nil || p.InputCacheMiss == nil || p.Output == nil {
 		return nil
 	}
-	input := *u.Input
+	cacheRead := int64(0)
+	if u.CacheRead != nil {
+		if *u.CacheRead < 0 {
+			return nil
+		}
+		cacheRead = *u.CacheRead
+	}
+	if u.CacheWrite != nil && (*u.CacheWrite < 0 || cacheRead > *u.Input || *u.CacheWrite > *u.Input-cacheRead) {
+		return nil
+	}
+	if cacheRead > *u.Input {
+		return nil
+	}
 	cost := float64(*u.Output) * *p.Output
-	for _, pair := range []struct {
-		n    *int64
-		rate *float64
-	}{{u.CacheRead, p.CacheRead}, {u.CacheWrite, p.CacheWrite}} {
-		// Unknown breakdown with differential rates cannot produce a trustworthy cost.
-		if pair.n == nil {
-			if pair.rate != nil && *pair.rate != *p.Input {
-				return nil
-			}
-			continue
+	if u.CacheRead == nil {
+		if *p.InputCacheHit != *p.InputCacheMiss {
+			return nil
 		}
-		if *pair.n > 0 {
-			if pair.rate == nil {
-				return nil
-			}
-			cost += float64(*pair.n) * *pair.rate
-			input -= *pair.n
-		}
+		cost += float64(*u.Input) * *p.InputCacheMiss
+	} else {
+		// Cache creation/write tokens remain in total input and therefore use
+		// the input-cache-miss rate; there is no separate write price.
+		cacheMiss := *u.Input - cacheRead
+		cost += float64(cacheRead)*(*p.InputCacheHit) + float64(cacheMiss)*(*p.InputCacheMiss)
 	}
-	if input < 0 {
-		return nil
-	}
-	cost = (cost + float64(input)**p.Input) / 1e6
+	cost /= 1e6
 	if math.IsInf(cost, 0) || math.IsNaN(cost) {
 		return nil
 	}

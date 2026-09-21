@@ -5,11 +5,18 @@ import (
 	"strings"
 )
 
-// CallOptions contains the only client-supplied protocol header forwarded.
+// CallOptions contains client request metadata used for forwarding and local
+// accounting. SessionID is never forwarded upstream.
 // Credentials and API version always come from the gateway configuration.
-type CallOptions struct{ AnthropicBeta string }
+type CallOptions struct {
+	AnthropicBeta string
+	SessionID     string
+}
 
 func (o CallOptions) Validate(protocol string) error {
+	if len(o.SessionID) > 256 || strings.ContainsAny(o.SessionID, "\r\n\x00") {
+		return errors.New("invalid_session_id")
+	}
 	if o.AnthropicBeta == "" {
 		return nil
 	}

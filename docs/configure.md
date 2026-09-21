@@ -9,14 +9,51 @@ Neither secret is accepted as a command-line argument or written into JSON.
 Run the installed CLI (or replace `tidemux` with `./tidemux` for an extracted binary):
 
 ```sh
-tidemux configure --preset deepseek
+tidemux configure --preset deepseek-flash
 tidemux doctor
 tidemux serve
 ```
 
+To configure a budget without editing JSON, use the interactive budget TUI:
+
+```sh
+tidemux budget
+```
+
+For scripting or direct changes, provide only the fields to update:
+
+```sh
+tidemux budget \
+  --budget-5h 0.001 \
+  --budget-weekly 0.01
+```
+
+Both commands automatically use the user profile at
+`~/Library/Application Support/TideMux/config.json`. The optional `--config`
+flag is only for managing an alternate profile.
+
+Use `--budget-mode alert|soft|hard`, `--budget-currency`, and
+`--budget-alert-threshold` to adjust individual fields. Use `--disable` to
+remove budget enforcement. A budget without matching pricing is rejected
+before any configuration is written; TideMux never estimates cost from a
+fallback amount.
+
+`budget` only changes budget limits. Pricing is selected when the provider API
+key is configured, so changing a budget never changes the rates used for
+accounting.
+
+The budget schema is intentionally not migrated from earlier pre-release
+profiles. If an existing profile contains conflicting legacy budget fields,
+replace it with the new schema using `tidemux budget` or recreate it with
+`tidemux configure --replace`.
+
 1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
-   `deepseek-flash`. At **API key (hidden)**, paste your DeepSeek key and press Enter.
-   Nothing appears while entering the key; this is expected.
+   `deepseek-flash`. Before the **API key (hidden)** prompt, TideMux asks for a
+   daily report notification time in local time (`HH:MM`). Enter a time to enable
+   scheduled notifications, or press Enter to leave them disabled. At the API-key
+   prompt, paste your DeepSeek key and press Enter. Nothing appears while entering
+   the key; this is expected. When enabled, TideMux installs a private per-profile
+   macOS LaunchAgent for the notification.
 2. It generates a gateway token, stores both credentials under unique accounts
    in your login Keychain, creates the state directory, and saves a mode-0600
    configuration containing only references. It verifies read-back and directory
@@ -29,8 +66,37 @@ Default files:
 - Config: `~/Library/Application Support/TideMux/config.json`
 - Ledger: `~/Library/Application Support/TideMux/ledger.db`
 
-The CLI resolves its default path; manually supplied JSON paths still need
-absolute paths (no `~` expansion). Query requests with `tidemux ledger`.
+The CLI uses this local configuration automatically. Paths stored inside JSON
+must be absolute (`~` is not expanded). Use `tidemux billing` for a readable summary
+of your local ledger for the current calendar month in your computer's local
+timezone. Billing reads `ledger_path` from the default configuration above and
+keeps that existing database location. Add `--details` to inspect its request
+records. The output shows exact RFC3339 date bounds; `--from` and `--to` select
+another period. Add `--json` for structured
+output, or `--download billing.csv` to save the selected period's billing details.
+
+The notification choice can also be supplied on the initial configure command:
+
+```sh
+tidemux configure --preset deepseek-flash --notification-time 09:00
+```
+
+The time uses the Mac's local timezone, and scheduled notifications use macOS
+Notification Center.
+
+To change the schedule of an existing profile without replacing its API-key
+references:
+
+```sh
+tidemux report schedule --time 09:00
+tidemux report schedule --disable
+```
+
+Use `--config /absolute/path/to/profile.json` for a non-default profile. The
+schedule command updates the JSON atomically, keeps a mode-0600 backup, and
+loads or unloads the corresponding user LaunchAgent. `tidemux report notify`
+is the LaunchAgent entry point; it generates the current local-day report,
+delivers it, and records the delivery result.
 
 ## If the login keychain is locked
 
@@ -42,8 +108,9 @@ There is no separate command to copy or rerun.
    (usually your Mac login password), **not** your API key. Input is hidden.
    The system utility reads this password directly; TideMux never receives it
    and never passes it through a command argument, environment variable or file.
-2. After unlocking, TideMux displays **API key (hidden)**. Paste the API key here
-   and press Enter. These are two different prompts for two different secrets.
+2. After unlocking, TideMux asks for the optional daily notification time and then
+   displays **API key (hidden)**. Paste the API key here and press Enter. These are
+   separate prompts for the schedule setting and the upstream secret.
 3. Wrong password, cancellation or an unavailable keychain stops setup before
    collecting the API key or changing configuration. Press Control-C to cancel.
 
@@ -54,18 +121,20 @@ that keychain's password. TideMux does not reset keychains or request admin acce
 
 ## DeepSeek via Anthropic format
 
-Use a separate profile so the first configuration remains available:
+To switch the current local gateway to Anthropic format, stop it with Control-C
+and replace the local configuration:
 
 ```sh
-tidemux configure --preset deepseek --protocol anthropic \
-  --config "$HOME/Library/Application Support/TideMux/anthropic.json"
-tidemux serve --config "$HOME/Library/Application Support/TideMux/anthropic.json"
+tidemux configure --preset deepseek-flash --protocol anthropic --replace
+tidemux doctor
+tidemux serve
 ```
 
-Stop the other server first: both profiles default to port 8787. This selects
+This selects
 `https://api.deepseek.com/anthropic/v1`; the gateway appends `/messages`.
-Paste the same DeepSeek API key when prompted. Each profile gets separate
-Keychain references and a local gateway token.
+Paste your DeepSeek API key when prompted. TideMux creates new Keychain references
+and a local gateway token, and backs up the previous configuration. For a first
+setup with Anthropic format, omit `--replace`.
 
 ## Any other compatible API
 
@@ -73,22 +142,32 @@ Keychain references and a local gateway token.
 tidemux configure --protocol openai \
   --base-url https://your-provider.example/v1 \
   --model your-model-id \
-  --config "$HOME/Library/Application Support/TideMux/custom.json"
+  --pricing-input-cache-hit 1 \
+  --pricing-input-cache-miss 2 \
+  --pricing-output 4 \
+  --pricing-currency USD
 ```
 
 Use `--protocol anthropic` for an Anthropic-format API. Include the endpoint's
-version/path prefix. Model IDs are not limited to a preset. `--max-in-flight 2`
-changes the explicit concurrency cap. Inspect other options with
+version/path prefix. Model IDs are not limited to a preset. Prices are per
+million tokens. The three rates are input cache hit, input cache miss and output;
+`--pricing-currency` defaults to `USD`, while source and version default to
+`manual-cli` and `manual`. `--max-in-flight 2` changes the explicit concurrency cap.
+To replace an existing local setup,
+stop the gateway first and add `--replace`. Inspect other options with
 `tidemux configure --help`.
 
-## Update an existing profile
+## Update the current local configuration
 
 By default the command refuses to overwrite an existing file. To intentionally
 replace it, stop the server and repeat the configure command with `--replace`.
 New Keychain accounts are generated; old credentials and ledger data are retained
-so other profiles are not broken. Remove unused old entries later in Keychain
-Access if desired. A failed setup rolls back newly saved entries; the previous
-configuration remains in place.
+in place. The command replaces the configuration as a whole, including the
+provider pricing selected alongside the new API key. Before restarting, review
+the new pricing and limits against the saved backup, and keep the existing
+`ledger_path` so billing continues to read your history.
+Remove unused old entries later in Keychain Access if desired. A failed setup
+rolls back newly saved entries; the previous configuration remains in place.
 
 ## Connect clients and test
 
@@ -107,11 +186,12 @@ python3 scripts/verify_live.py \
   --disable-thinking --output /tmp/tidemux-live-openai.json
 ```
 
-A verified price entry is needed to finish cost reconciliation. `configure`
-intentionally does not guess current prices: until you add them, ledger cost
-is `null`. The helper can report successful usage reconciliation but stop at
-unknown cost. For `deepseek-flash`, use the [official English USD pricing examples](deepseek-pricing.md).
-See [pricing and live verification](demo.md). Never repeat a live
+The configured provider profile always carries its pricing. `configure --preset
+deepseek-flash` uses TideMux's fixed peak DeepSeek preset. For another provider,
+pass `--pricing-input-cache-hit`, `--pricing-input-cache-miss`, and
+`--pricing-output` when setting the API key; use `--pricing-source` and
+`--pricing-version` for the verified reference. See [pricing and live
+verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.
 
 ## Request limits (0.1.0)
@@ -140,21 +220,25 @@ An upstream timeout before streaming returns 504 `upstream_timeout`; after
 streaming starts it emits a safe SSE error. The attempt is recorded as an error
 with unknown usage/cost, rather than a successful response or user cancellation.
 
-## Local rejection diagnostics (0.1.0)
+## Local rejection diagnostics
 
 ```sh
-./tidemux ledger --diagnostics --config /path/to/config.json
+tidemux doctor --diagnostics
+
+# Structured output for tools:
+tidemux doctor --diagnostics --json
 ```
 
 Rejected authentication, unsupported routes, oversized bodies and invalid
 requests receive `X-TideMux-Request-ID`. Match that ID against the independent
-`local_diagnostics` table or this command's JSON output. Each record contains
-only a timestamp, protocol, normalized method/endpoint category, HTTP status and
-safe error code. Original URLs, query strings, headers, unknown field names and
-message contents are not stored.
+`local_diagnostics` table or this command's output. The default is a readable
+table of the latest 100 local rejections; `--json` returns those records as a JSON
+array. Each record contains only a timestamp, protocol, normalized method/endpoint
+category, HTTP status and safe error code. Original URLs, query strings, headers,
+unknown field names and message contents are not stored.
 
 These rows are not upstream attempts and do not contribute to token/cost totals.
-The ordinary `ledger` command continues to show upstream attempt records. If
+Use `billing --details` for upstream attempt records. If
 writing a local diagnostic fails, the response is 500 `local_diagnostic_failed`
 with the generated ID; no upstream call was made. The new table is additive and
 does not modify existing 0.1.0 request records.
@@ -184,7 +268,7 @@ The gateway's byte limits are separate from model token capabilities.
 On the Anthropic route, TideMux forwards valid `anthropic-beta` feature lists from
 the client. Multiple header values are joined with commas; invalid or oversized
 lists are rejected locally with `invalid_beta_header`. Beta support is decided by
-the upstream provider. The API version always comes from the TideMux profile;
+the upstream provider. The API version always comes from the local configuration;
 client authentication headers and unrelated custom headers are not forwarded.
 
 ## Configuration rollback
@@ -196,9 +280,9 @@ If backup creation fails, the existing configuration is not replaced and newly
 created credentials are cleaned up. A setup-time change to the configuration is
 also rejected instead of overwriting that change.
 
-To roll back, stop the gateway using the replacement profile and start the desired
-binary with `serve --config /path/to/config.json.backup-<id>`, using the exact backup
-name. Preserve the new profile before restoring the backup to the original path.
-The ledger path comes from the selected configuration; backing up a configuration
+To roll back, stop the gateway and preserve the current configuration. Restore
+the chosen backup to `~/Library/Application Support/TideMux/config.json`, then
+run `tidemux doctor` and `tidemux serve`. The ledger path comes from that local
+configuration; backing up a configuration
 does not snapshot its SQLite ledger. The full packaged-binary/data rollback check
 remains part of release acceptance.

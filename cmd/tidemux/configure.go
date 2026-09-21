@@ -16,7 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/gateway"
+	"github.com/hs3180/tidemux/internal/ledger"
 	"golang.org/x/term"
 )
 
@@ -36,15 +38,27 @@ func defaultConfigPath() string {
 func configure(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("configure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	preset := flags.String("preset", "", "optional preset: deepseek")
+	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	protocol := flags.String("protocol", "openai", "openai or anthropic")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
-	listen := flags.String("listen", "127.0.0.1:8787", "loopback IP:port; use different ports for simultaneous protocol profiles")
+	listen := flags.String("listen", "127.0.0.1:8787", "loopback IP:port")
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
 	contextTokens := flags.Int64("context-tokens", 0, "verified upstream context window; zero means unknown")
 	outputTokens := flags.Int64("output-tokens", 0, "verified upstream output ceiling; zero means unknown")
+	budget5h := flags.Float64("budget-5h", 0, "rolling five-hour budget in the pricing currency; zero disables it")
+	budgetWeekly := flags.Float64("budget-weekly", 0, "rolling seven-day budget in the pricing currency; zero disables it")
+	budgetCurrency := flags.String("budget-currency", "USD", "budget currency")
+	budgetMode := flags.String("budget-mode", "hard", "budget mode: alert, soft or hard")
+	budgetThreshold := flags.Float64("budget-alert-threshold", 0.8, "budget alert threshold from 0 to 1")
+	notificationTime := flags.String("notification-time", "", "daily report notification time in local time (HH:MM); empty disables it")
+	pricingCurrency := flags.String("pricing-currency", "USD", "pricing currency")
+	pricingSource := flags.String("pricing-source", "manual-cli", "pricing source or provider reference")
+	pricingVersion := flags.String("pricing-version", "manual", "pricing version or verification date")
+	pricingInputCacheHit := flags.Float64("pricing-input-cache-hit", 0, "cache-hit input price per million tokens")
+	pricingInputCacheMiss := flags.Float64("pricing-input-cache-miss", 0, "cache-miss input price per million tokens")
+	pricingOutput := flags.Float64("pricing-output", 0, "output price per million tokens")
 	replace := flags.Bool("replace", false, "replace configuration using new Keychain references (old credentials retained)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -55,10 +69,10 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected configure argument")
 	}
-	if *preset != "" && *preset != "deepseek" {
+	if *preset != "" && *preset != "deepseek-flash" {
 		return errors.New("unknown preset; use --base-url and --model for any compatible provider")
 	}
-	if *preset == "deepseek" {
+	if *preset == "deepseek-flash" {
 		if *baseURL == "" {
 			*baseURL = "https://api.deepseek.com"
 			if *protocol == "anthropic" {
@@ -70,7 +84,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 	}
 	if *baseURL == "" || *model == "" {
-		return errors.New("use configure --preset deepseek, or provide --protocol, --base-url and --model")
+		return errors.New("use configure --preset deepseek-flash, or provide --protocol, --base-url and --model")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("configure requires macOS Keychain")
@@ -79,12 +93,28 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return errors.New("invalid config path")
 	}
-	c := gateway.Config{ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	prices, err := configurePrices(flags, *preset, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+	if err != nil {
+		return err
+	}
+	budgetPolicy := ledger.BudgetPolicy{}
+	if *budget5h > 0 || *budgetWeekly > 0 {
+		budgetPolicy = ledger.BudgetPolicy{Currency: *budgetCurrency, FiveHourLimit: *budget5h, WeeklyLimit: *budgetWeekly, AlertThreshold: *budgetThreshold, Mode: *budgetMode}
+	}
+	schedule := gateway.ReportSchedule{}
+	if flagWasSet(flags, "notification-time") && strings.TrimSpace(*notificationTime) != "" {
+		normalized, err := gateway.NormalizeReportScheduleTime(*notificationTime)
+		if err != nil {
+			return err
+		}
+		schedule = gateway.ReportSchedule{Time: normalized, Channel: "macos"}
+	}
+	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}
 	if _, err = os.Lstat(abs); err == nil && !*replace {
-		return errors.New("config already exists; use --replace to create new credentials or --config for another profile")
+		return errors.New("config already exists; use --replace to update it with new credentials")
 	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
@@ -98,6 +128,24 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Protocol: %s\nAPI root: %s\nModel: %s\nConfig: %s\n", c.Protocol, c.BaseURL, c.Model, abs)
+	if c.Budget != (ledger.BudgetPolicy{}) {
+		fmt.Fprintf(stdout, "Budget: %g %s / 5h, %g %s / 7d (%s mode)\n", c.Budget.FiveHourLimit, c.Budget.Currency, c.Budget.WeeklyLimit, c.Budget.Currency, c.Budget.Mode)
+	}
+	if !flagWasSet(flags, "notification-time") {
+		schedule, err = promptReportSchedule(tty, tty)
+		if err != nil {
+			return err
+		}
+		c.ReportSchedule = schedule
+		if err := c.Validate(); err != nil {
+			return err
+		}
+	}
+	if c.ReportSchedule != (gateway.ReportSchedule{}) {
+		fmt.Fprintf(stdout, "Daily report notification: %s (%s, local time)\n", c.ReportSchedule.Time, c.ReportSchedule.EffectiveChannel())
+	} else {
+		fmt.Fprintln(stdout, "Daily report notification: disabled")
+	}
 	fmt.Fprint(tty, "API key (hidden; paste then press Enter): ")
 	secret, err := term.ReadPassword(int(tty.Fd()))
 	fmt.Fprintln(tty)
@@ -112,13 +160,53 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err = saveConfiguration(abs, c, string(secret), *replace, gateway.MacOSKeychain{}); err != nil {
 		return err
 	}
+	if _, err := syncReportSchedule(abs, c.ReportSchedule); err != nil {
+		return fmt.Errorf("configuration saved, but scheduled notification setup failed: %w", err)
+	}
 	fmt.Fprintln(stdout, "Configured. API key and generated gateway token are stored in macOS Keychain.")
 	if *replace {
 		fmt.Fprintln(stdout, "If a config was replaced, its exact backup is beside it as <config>.backup-<id>; old Keychain items are retained.")
 	}
-	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Prices remain unknown until configured.")
-	fmt.Fprintf(stdout, "Next: tidemux serve --config %q\nInspect: tidemux ledger --config %q\n", abs, abs)
+	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Pricing is stored with this provider profile.")
+	defaultPath, _ := filepath.Abs(defaultConfigPath())
+	if abs == defaultPath {
+		fmt.Fprintln(stdout, "Next: tidemux serve\nInspect: tidemux billing")
+	} else {
+		fmt.Fprintf(stdout, "Next: tidemux serve --config %q\n", abs)
+	}
 	return nil
+}
+
+func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, source, version string, inputCacheHit, inputCacheMiss, output float64) (map[string]adapter.Price, error) {
+	prices := map[string]adapter.Price{}
+	if preset == "deepseek-flash" {
+		if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
+			prices[model] = price
+		}
+	}
+	pricingFlags := []string{"pricing-currency", "pricing-source", "pricing-version", "pricing-input-cache-hit", "pricing-input-cache-miss", "pricing-output"}
+	if !flagWasSet(flags, pricingFlags...) {
+		if len(prices) == 0 {
+			return nil, errors.New("pricing is required; use --pricing-input-cache-hit, --pricing-input-cache-miss and --pricing-output")
+		}
+		return prices, nil
+	}
+	if !flagWasSet(flags, "pricing-input-cache-hit") || !flagWasSet(flags, "pricing-input-cache-miss") || !flagWasSet(flags, "pricing-output") {
+		return nil, errors.New("custom pricing requires --pricing-input-cache-hit, --pricing-input-cache-miss and --pricing-output")
+	}
+	price := adapter.Price{
+		Currency:       currency,
+		Source:         source,
+		Version:        version,
+		InputCacheHit:  &inputCacheHit,
+		InputCacheMiss: &inputCacheMiss,
+		Output:         &output,
+	}
+	if err := price.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid custom pricing: %w", err)
+	}
+	prices[model] = price
+	return prices, nil
 }
 func saveConfiguration(path string, c gateway.Config, secret string, replace bool, store secretWriter) error {
 	if strings.TrimSpace(secret) == "" || strings.ContainsAny(secret, "\r\n\x00") {

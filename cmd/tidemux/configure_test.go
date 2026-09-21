@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/hs3180/tidemux/internal/gateway"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hs3180/tidemux/internal/gateway"
 )
 
 type memorySecrets struct {
@@ -118,4 +120,66 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 	if len(secrets.values) != 4 {
 		t.Fatal("old credentials removed")
 	}
+}
+
+func TestConfigurePricesUsesPeakDeepSeekPreset(t *testing.T) {
+	flags, currency, source, version, cacheHit, cacheMiss, output := pricingTestFlags(t)
+	prices, err := configurePrices(flags, "deepseek-flash", "https://api.deepseek.com", "deepseek-flash", *currency, *source, *version, *cacheHit, *cacheMiss, *output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	price := prices["deepseek-flash"]
+	if price.Version != "deepseek-v4-pricing-2026-08-16-peak" || price.InputCacheMiss == nil || *price.InputCacheMiss != .3 || price.Output == nil || *price.Output != 1.2 || price.InputCacheHit == nil || *price.InputCacheHit != .006 {
+		t.Fatalf("price=%+v", price)
+	}
+}
+
+func TestConfigurePricesAcceptsCustomCommandLineRates(t *testing.T) {
+	flags, currency, source, version, cacheHit, cacheMiss, output := pricingTestFlags(t, "--pricing-currency", "CNY", "--pricing-source", "provider-docs", "--pricing-version", "2026-09-20", "--pricing-input-cache-hit", "0.5", "--pricing-input-cache-miss", "2.5", "--pricing-output", "7.5")
+	prices, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	price := prices["custom-model"]
+	if price.Currency != "CNY" || price.Source != "provider-docs" || price.Version != "2026-09-20" || price.InputCacheMiss == nil || *price.InputCacheMiss != 2.5 || price.InputCacheHit == nil || *price.InputCacheHit != .5 || price.Output == nil || *price.Output != 7.5 {
+		t.Fatalf("price=%+v", price)
+	}
+}
+
+func TestConfigurePricesRequiresCustomRatesForNonPreset(t *testing.T) {
+	flags, currency, source, version, cacheHit, cacheMiss, output := pricingTestFlags(t)
+	if _, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output); err == nil || !strings.Contains(err.Error(), "pricing is required") {
+		t.Fatalf("error=%v", err)
+	}
+	flags, currency, source, version, cacheHit, cacheMiss, output = pricingTestFlags(t, "--pricing-input-cache-miss", "1")
+	if _, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output); err == nil || !strings.Contains(err.Error(), "requires --pricing-input-cache-hit, --pricing-input-cache-miss and --pricing-output") {
+		t.Fatalf("partial error=%v", err)
+	}
+}
+
+func TestConfigureDoesNotAcceptPricingFile(t *testing.T) {
+	if err := configure([]string{"--pricing-file", "pricing.json"}, os.Stdout, os.Stderr); err == nil {
+		t.Fatal("configure still accepts --pricing-file")
+	}
+}
+
+func TestConfigureRejectsOldDeepSeekPresetName(t *testing.T) {
+	if err := configure([]string{"--preset", "deepseek"}, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "unknown preset") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func pricingTestFlags(t *testing.T, args ...string) (*flag.FlagSet, *string, *string, *string, *float64, *float64, *float64) {
+	t.Helper()
+	flags := flag.NewFlagSet("pricing-test", flag.ContinueOnError)
+	currency := flags.String("pricing-currency", "USD", "")
+	source := flags.String("pricing-source", "manual-cli", "")
+	version := flags.String("pricing-version", "manual", "")
+	cacheHit := flags.Float64("pricing-input-cache-hit", 0, "")
+	cacheMiss := flags.Float64("pricing-input-cache-miss", 0, "")
+	output := flags.Float64("pricing-output", 0, "")
+	if err := flags.Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return flags, currency, source, version, cacheHit, cacheMiss, output
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
@@ -174,6 +175,65 @@ func TestValidationNeverCallsUpstream(t *testing.T) {
 				t.Fatal("unauthorized")
 			}
 		})
+	}
+}
+
+func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .5, Mode: "hard"}
+	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		if i == 0 && out.Code != 200 {
+			t.Fatalf("first=%d", out.Code)
+		}
+		if i == 1 && out.Code != 200 {
+			t.Fatalf("second=%d %s", out.Code, out.Body.String())
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls=%d", calls)
+	}
+}
+
+func testPrice() adapter.Price {
+	input, output := 1.0, 1.0
+	return adapter.Price{Currency: "USD", Source: "test", Version: "1", InputCacheHit: &input, InputCacheMiss: &input, Output: &output}
+}
+
+func TestBudgetRejectsUnpricedRequestedModel(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .5, Mode: "hard"}
+	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := `{"model":"other-model","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != 503 || !strings.Contains(out.Body.String(), "budget_pricing_unconfigured") {
+		t.Fatalf("code=%d body=%s", out.Code, out.Body.String())
+	}
+	if calls != 0 {
+		t.Fatalf("upstream calls=%d", calls)
 	}
 }
 func TestRedirectDoesNotLeakCredentials(t *testing.T) {

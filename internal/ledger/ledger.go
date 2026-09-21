@@ -6,6 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -71,7 +74,78 @@ func Open(path string) (*Ledger, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := l.initBudget(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := l.initReconciliation(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := l.initReports(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return l, nil
+}
+
+func (l *Ledger) initBudget(ctx context.Context) error {
+	_, err := l.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS budget_charges (
+ request_id TEXT PRIMARY KEY, audit_id TEXT, charged_at_ms INTEGER NOT NULL,
+ currency TEXT NOT NULL, charged_amount REAL NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('pending','settled','unknown')));
+ CREATE INDEX IF NOT EXISTS budget_charge_period ON budget_charges(currency,charged_at_ms);`)
+	if err != nil {
+		return err
+	}
+	_, err = l.db.ExecContext(ctx, `UPDATE budget_charges SET state='unknown' WHERE state='pending'`)
+	return err
+}
+
+// OpenReadOnly opens an existing database without creating it or migrating its
+// schema. SQLite may create WAL coordination sidecars when reading a WAL database.
+// A gateway must initialize automatic reconciliation before querying.
+func OpenReadOnly(path string) (*Ledger, error) {
+	l, err := OpenAuditReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	var initialized int
+	if err = l.db.QueryRow(`SELECT COUNT(*) FROM reconciliation_schema WHERE version=1`).Scan(&initialized); err != nil || initialized != 1 {
+		l.Close()
+		return nil, errors.New("automatic reconciliation is not initialized; start the gateway first")
+	}
+	return l, nil
+}
+
+// OpenAuditReadOnly opens an existing database without creating or migrating
+// schemas. It also supports historical audit and diagnostic databases that
+// predate automatic reconciliation. SQLite may update WAL coordination sidecars.
+func OpenAuditReadOnly(path string) (*Ledger, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ledger path: %w", err)
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return nil, fmt.Errorf("open existing ledger: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("ledger path must be a regular file")
+	}
+	uri := url.URL{Scheme: "file", Path: absolute}
+	query := url.Values{"mode": []string{"ro"}, "_pragma": []string{"query_only(1)", "busy_timeout(5000)"}}
+	uri.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", uri.String())
+	if err != nil {
+		return nil, fmt.Errorf("open read-only ledger: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read existing ledger: %w", err)
+	}
+	return &Ledger{db: db}, nil
 }
 
 // Close releases the local database handle.

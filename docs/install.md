@@ -47,3 +47,10 @@ tidemux version
 
 Add the PATH line to `~/.zshrc` for new terminals. Return to the
 [quick start](../README.md#quick-start) to configure your provider and client.
+
+For clickable daily-report notifications, install the small macOS notification
+helper once:
+
+```sh
+brew install terminal-notifier
+```

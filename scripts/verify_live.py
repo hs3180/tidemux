@@ -22,7 +22,7 @@ def main():
         with urllib.request.urlopen(request,timeout=130) as response:
             request_id=response.headers.get('X-TideMux-Request-ID');payload=json.load(response)
     except Exception:
-        raise SystemExit('Live request failed; inspect tidemux ledger for a safe error code. No raw response printed.')
+        raise SystemExit('Live request failed; inspect tidemux billing --details or tidemux doctor --diagnostics for a safe error code. No raw response printed.')
     db=sqlite3.connect('file:'+str(pathlib.Path(c['ledger_path']).resolve())+'?mode=ro',uri=True)
     row=db.execute('SELECT record_json FROM request_audit WHERE id=?',(request_id,)).fetchone();db.close()
     if not row:raise SystemExit('No matching audit record')
@@ -33,11 +33,9 @@ def main():
         if input_count is not None:input_count+=u.get('cache_read_input_tokens',0)+u.get('cache_creation_input_tokens',0)
     if audit['status']!='ok' or input_count is None or output_count is None or input_count!=audit['input_tokens'] or output_count!=audit['output_tokens']:raise SystemExit('Live usage reconciliation failed')
     if audit['estimated_cost'] is None:raise SystemExit('Usage reconciled, but estimated cost is unknown. Configure verified model pricing and repeat only when authorized.')
-    p=audit['price_snapshot'];base=input_count;expected=output_count*p['output_per_million']
-    for field,rate in [('cache_read_tokens','cache_read_per_million'),('cache_write_tokens','cache_write_per_million')]:
-        n=audit.get(field)
-        if n:base-=n;expected+=n*p[rate]
-    expected=(expected+base*p['input_per_million'])/1e6
+    p=audit['price_snapshot'];cache_read=audit.get('cache_read_tokens') or 0
+    input_cache_miss=input_count-cache_read
+    expected=(output_count*p['output_per_million']+cache_read*p['input_cache_hit_per_million']+input_cache_miss*p['input_cache_miss_per_million'])/1e6
     if abs(expected-audit['estimated_cost'])>1e-10:raise SystemExit('Cost arithmetic mismatch')
     output=pathlib.Path(args.output)
     if output.exists():raise SystemExit('Evidence already exists; will not overwrite')

@@ -5,15 +5,15 @@
 - macOS arm64 gateway for OpenAI-compatible and Anthropic-compatible APIs.
 - Direct Claude Code, Kilo CLI and Hermes launchers, streaming and tools, secure
   Keychain setup, explicit concurrency, local diagnostics and usage accounting.
-- Homebrew and verified archive installation; English documentation and DeepSeek
-  USD price examples. See the protocol matrix for supported features.
+- Homebrew and verified archive installation; English documentation and a
+  DeepSeek USD peak price preset. See the protocol matrix for supported features.
 
 Earlier entries below describe local development builds, not separate public releases.
 
 ## 0.1.0 English-language polish
 
-- Add verified DeepSeek English/USD price fragments for peak and off-peak usage;
-  document the explicit rate selection required by the current estimator.
+- Add the verified DeepSeek English/USD peak preset and CLI-configured custom
+  pricing; document that pricing is selected with the provider API key.
 
 - Use English throughout CLI prompts and test fixtures; clarify international
   contribution conventions and provider/currency neutrality.

@@ -35,6 +35,11 @@ func TestServeProcessBothProtocols(t *testing.T) {
 	os.WriteFile(filepath.Join(binDir, "security"), []byte("#!/bin/sh\ncase \"$*\" in *test.gateway*) printf 'local-secret';; *) printf 'upstream-secret';; esac\n"), 0700)
 	for _, protocol := range []string{"openai", "anthropic"} {
 		t.Run(protocol, func(t *testing.T) {
+			userDirectory := t.TempDir()
+			configDirectory := filepath.Join(userDirectory, "Library", "Application Support", "TideMux")
+			if err := os.MkdirAll(configDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if protocol == "anthropic" {
 					if r.Header.Get("x-api-key") != "upstream-secret" {
@@ -49,12 +54,14 @@ func TestServeProcessBothProtocols(t *testing.T) {
 				}
 			}))
 			defer upstream.Close()
-			config := map[string]any{"listen_addr": "127.0.0.1:0", "protocol": protocol, "base_url": upstream.URL + "/v1", "model": "test-model", "upstream_id": "mock", "anthropic_version": "2023-06-01", "upstream_keychain": map[string]string{"service": "test.provider", "account": "default"}, "access_token_keychain": map[string]string{"service": "test.gateway", "account": "default"}, "max_in_flight": 1, "ledger_path": filepath.Join(dir, protocol+".db"), "prices": map[string]any{"test-model": map[string]any{"currency": "USD", "source": "test-fixture", "version": "1", "input_per_million": 2, "output_per_million": 4}}}
+			config := map[string]any{"listen_addr": "127.0.0.1:0", "protocol": protocol, "base_url": upstream.URL + "/v1", "model": "test-model", "upstream_id": "mock", "anthropic_version": "2023-06-01", "upstream_keychain": map[string]string{"service": "test.provider", "account": "default"}, "access_token_keychain": map[string]string{"service": "test.gateway", "account": "default"}, "max_in_flight": 1, "ledger_path": filepath.Join(dir, protocol+".db"), "prices": map[string]any{"test-model": map[string]any{"currency": "USD", "source": "test-fixture", "version": "1", "input_cache_hit_per_million": 2, "input_cache_miss_per_million": 2, "output_per_million": 4}}}
 			data, _ := json.Marshal(config)
-			path := filepath.Join(dir, protocol+".json")
-			os.WriteFile(path, data, 0600)
+			path := filepath.Join(configDirectory, "config.json")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
 			cmd := exec.Command(binary, "serve", "--config", path)
-			cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+			cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "HOME="+userDirectory)
 			stdout, err := cmd.StdoutPipe()
 			if err != nil {
 				t.Fatal(err)
@@ -108,17 +115,24 @@ func TestServeProcessBothProtocols(t *testing.T) {
 			case <-time.After(12 * time.Second):
 				t.Fatal("shutdown timeout")
 			}
-			query := exec.Command(binary, "ledger", "--config", path)
+			query := exec.Command(binary, "billing", "--details", "--json", "--from", "1970-01-01T00:00:00.001Z")
+			query.Env = append(os.Environ(), "HOME="+userDirectory)
 			out, err := query.CombinedOutput()
 			if err != nil {
-				t.Fatalf("ledger %s %v", out, err)
+				t.Fatalf("billing %s %v", out, err)
 			}
-			var rows []struct {
-				Status        string   `json:"status"`
-				EstimatedCost *float64 `json:"estimated_cost"`
-				Protocol      string   `json:"protocol"`
+			var report struct {
+				Requests []struct {
+					Status        string   `json:"status"`
+					EstimatedCost *float64 `json:"estimated_cost"`
+					Protocol      string   `json:"protocol"`
+				} `json:"requests"`
 			}
-			if json.Unmarshal(out, &rows) != nil || len(rows) != 1 || rows[0].Status != "ok" || rows[0].EstimatedCost == nil || rows[0].Protocol != protocol {
+			if err := json.Unmarshal(out, &report); err != nil {
+				t.Fatalf("billing JSON: %s: %v", out, err)
+			}
+			rows := report.Requests
+			if len(rows) != 1 || rows[0].Status != "ok" || rows[0].EstimatedCost == nil || rows[0].Protocol != protocol {
 				t.Fatalf("records %s", out)
 			}
 			if *rows[0].EstimatedCost < 13.999e-6 || *rows[0].EstimatedCost > 14.001e-6 {

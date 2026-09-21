@@ -20,7 +20,7 @@ verified. See [installation](install.md) for release downloads and Homebrew.
 ## Recommended: configure with the CLI
 
 ```sh
-./tidemux configure --preset deepseek
+./tidemux configure --preset deepseek-flash
 ./tidemux doctor
 ./tidemux serve
 ```
@@ -41,7 +41,10 @@ In Keychain Access create two generic-password items:
 | `com.tidemux.gateway` | `default` | A different locally generated secret for gateway clients |
 
 Copy [OpenAI config](../examples/openai.json) or
-[Anthropic config](../examples/anthropic.json) to `tidemux.json`. Set:
+[Anthropic config](../examples/anthropic.json) to
+`~/Library/Application Support/TideMux/config.json`, with file permissions 0600.
+If a configuration already exists, stop the gateway and back it up before
+replacing it. Set:
 
 - `base_url`: the exact API root **including its version/prefix**, for example
   `https://your-endpoint.example/api/v1`. TideMux appends `/chat/completions` or
@@ -49,7 +52,9 @@ Copy [OpenAI config](../examples/openai.json) or
   except for numeric loopback HTTP. URLs cannot contain credentials/query/fragment.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
-- `ledger_path`: an absolute path in an existing writable directory; `~` is not expanded.
+- `ledger_path`: the existing local ledger location, or for a first setup the
+  absolute path to `~/Library/Application Support/TideMux/ledger.db` with your
+  home directory written out. The directory must exist; `~` is not expanded in JSON.
 - `max_in_flight`: 1–1024. Start with 1; this caps simultaneous upstream calls.
 - `anthropic_version`: explicit protocol version for Anthropic, example `2023-06-01`.
 
@@ -57,8 +62,8 @@ Do not put credentials in JSON, terminal history, logs, or source control.
 Old `deepseek_*` configs are rejected; migrate to the generic example explicitly.
 
 ```sh
-./tidemux doctor --config ./tidemux.json
-./tidemux serve --config ./tidemux.json
+./tidemux doctor
+./tidemux serve
 ```
 
 `doctor` checks local config, Keychain retrieval and ledger-directory write
@@ -78,38 +83,56 @@ Configure your HTTP client with the local gateway token (not the upstream key):
 See [protocol support](protocols.md) for accepted fields. The response keeps
 upstream JSON and adds `X-TideMux-Request-ID` for audit correlation.
 
+Inspect the local ledger with:
+
 ```sh
-./tidemux ledger --config ./tidemux.json
+./tidemux billing
+./tidemux billing --details
 ```
 
-This prints the 100 most recent audit records as JSON without retrieving keys.
-`null` token/count/cost means unknown. Cancellation is not evidence of zero
-upstream billing. If the gateway reports `audit_failed_do_not_retry_blindly`,
-the provider may already have executed the call; inspect storage and upstream
-usage before retrying. TideMux does not automatically retry any call.
+The first command shows a readable billing summary; the second shows its request
+audit details. Billing reads the existing `ledger_path` from the default local
+configuration used by the gateway. Both views default to the current
+calendar month in the computer's local timezone and display exact RFC3339 bounds.
+Use `--from` and `--to` for another period; if either is supplied, the missing
+boundary is open. Add `--json`
+for structured output or use `--download billing.csv` to save the selected period's
+stored billing details. These queries do not retrieve keys or contact the provider.
+Use `doctor --diagnostics` for recent local rejections, adding `--json` for tools.
 
-## Optional pricing
+Unknown token counts or costs remain unknown (`null` in JSON); a `cost_source`
+of `local_estimated_cache_prefix` identifies a transparent local estimate rather
+than provider-reported usage. Cancellation is not evidence of zero upstream
+billing. If the gateway reports `audit_failed_do_not_retry_blindly`, the
+provider may already have executed the call; inspect storage and upstream usage
+before retrying. TideMux does not automatically retry any call.
 
-For `deepseek-flash`, use the [DeepSeek USD pricing examples](deepseek-pricing.md),
-which distinguish peak and off-peak rates from the English official price list.
-The generic example below is only for explaining the configuration format.
+## Pricing
 
-Add a `prices` object keyed by exact request model ID. Rates are **per million
-tokens**, in an explicit three-letter currency, with your verified source and
-version. The following numbers are synthetic and must not be used as real rates:
+Pricing is selected together with the provider API key by `configure`. The
+DeepSeek preset stores the fixed peak rates automatically. For another provider,
+set rates on the same command; rates are **per million tokens**:
 
-```json
-{"prices":{"your-model":{
-  "currency":"USD","source":"synthetic-example-only","version":"example-1",
-  "input_per_million":2,"output_per_million":4,
-  "cache_read_per_million":1,"cache_write_per_million":3
-}}}
+```sh
+tidemux configure --protocol openai \
+  --base-url https://provider.example/v1 \
+  --model your-model \
+  --pricing-input-cache-hit 1 \
+  --pricing-input-cache-miss 2 \
+  --pricing-output 4 \
+  --pricing-currency USD
 ```
 
-Missing prices produce unknown cost. Positive cached usage requires the
-corresponding price. Unknown cache breakdown with differential rates also produces
-unknown cost. Estimates are token arithmetic, not provider invoices; request fees,
-service-tier adjustments, tool fees and taxes are outside this model.
+Use `--pricing-currency`, `--pricing-source`, and `--pricing-version` when the
+defaults (`USD`, `manual-cli`, and `manual`) are not appropriate. `budget` only
+changes limits and does not accept or modify pricing.
+
+Missing prices produce unknown cost. Positive provider-reported cached usage
+requires the corresponding price. Unknown provider cache breakdowns can use the
+local content estimator when a session and pricing are available; otherwise the
+cost remains unknown. Estimates are token arithmetic, not provider invoices;
+request fees, service-tier adjustments, tool fees and taxes are outside this
+model.
 
 ## Live verification
 
@@ -117,12 +140,17 @@ With `serve` running, a verified price entry configured, and authorization to ma
 one minimal request, run from the source root:
 
 ```sh
-python3 scripts/verify_live.py --config ./tidemux.json --output /tmp/tidemux-live-openai.json
+python3 scripts/verify_live.py \
+  --config "$HOME/Library/Application Support/TideMux/config.json" \
+  --output /tmp/tidemux-live-openai.json
 ```
 
 For `deepseek-flash`, add `--disable-thinking`. For models requiring
 `max_completion_tokens`, add `--openai-token-limit-field max_completion_tokens`.
-Use a separate Anthropic config/evidence file for the other protocol. The helper
+To verify the other protocol, stop the gateway, switch the local configuration
+using `configure` with that protocol's API settings and `--replace`, and restore
+the verified price settings from the saved backup before restarting. Use a
+separate evidence file for that authorized run. The helper
 reads the local token into memory, makes one request, and checks response usage
 against the persisted record and recomputes cost. It does not print/save the
 prompt, response content or key. Review sanitized evidence before sharing it.
@@ -131,7 +159,7 @@ prompt, response content or key. Review sanitized evidence before sharing it.
 
 New records are in `request_audit` and `audit_events`, committed together.
 Legacy `ledger_requests`/`ledger_events` tables are preserved, not reinterpreted;
-`ledger` shows only the new audit format. Back up the database while the service
-is stopped before switching versions. Removing the binary does not delete the
+`billing --details` shows the current audit format. Back up the database while the
+service is stopped before switching versions. Removing the binary does not delete the
 configured database, JSON file, or Keychain entries. Remove those separately only
 when you intentionally want to erase your local state.
