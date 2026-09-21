@@ -39,11 +39,27 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		_ = l.Close()
 		return nil, nil, err
 	}
-	return &handler{config: c, ledger: l, sessions: sessions, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: adapter.NewPromptCache(), Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, func() error {
+	cache := adapter.NewPromptCache()
+	clients := make(map[string]*adapter.Client)
+	for _, protocol := range configuredProtocols(c) {
+		baseURL := c.BaseURL
+		if protocol == "anthropic" && c.AnthropicBaseURL != "" {
+			baseURL = c.AnthropicBaseURL
+		}
+		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: baseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: cache, Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}
+	}
+	return &handler{config: c, ledger: l, sessions: sessions, clients: clients}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()
 	}, nil
+}
+
+func configuredProtocols(c Config) []string {
+	if c.Protocol == "both" {
+		return []string{"openai", "anthropic"}
+	}
+	return []string{c.Protocol}
 }
 func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
 	h, closeLedger, err := NewHandler(c, client)
@@ -62,10 +78,10 @@ type handler struct {
 	config   Config
 	ledger   *ledger.Ledger
 	sessions *limiter.SessionLimiter
-	client   *adapter.Client
+	clients  map[string]*adapter.Client
 }
 
-func (h *handler) fail(w http.ResponseWriter, status int, code string) {
+func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string) {
 	kind := "api_error"
 	switch status {
 	case 400, 413:
@@ -79,23 +95,35 @@ func (h *handler) fail(w http.ResponseWriter, status int, code string) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if h.config.Protocol == "anthropic" {
+	if protocol == "anthropic" {
 		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": code}})
 	} else {
 		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": code, "type": kind, "code": code, "param": nil}})
 	}
 }
+
+func (h *handler) protocolForRequest(r *http.Request) string {
+	if h.config.Protocol != "both" {
+		return h.config.Protocol
+	}
+	if r.URL.Path == "/v1/messages" || strings.HasPrefix(r.URL.Path, "/v1/messages/") {
+		return "anthropic"
+	}
+	return "openai"
+}
+
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	protocol := h.protocolForRequest(r)
 	a := sha256.Sum256([]byte(r.Header.Get("Authorization")))
 	b := sha256.Sum256([]byte("Bearer " + h.config.AccessToken))
 	valid := subtle.ConstantTimeCompare(a[:], b[:]) == 1
-	if h.config.Protocol == "anthropic" {
+	if protocol == "anthropic" {
 		a = sha256.Sum256([]byte(r.Header.Get("x-api-key")))
 		b = sha256.Sum256([]byte(h.config.AccessToken))
 		valid = valid || subtle.ConstantTimeCompare(a[:], b[:]) == 1
 	}
 	if !valid {
-		h.reject(w, r, 401, "invalid_api_key")
+		h.reject(w, r, protocol, 401, "invalid_api_key")
 		return
 	}
 	modelList := r.URL.Path == "/v1/models" || r.URL.Path == "/models"
@@ -104,13 +132,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if modelDetail {
 			modelID := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
 			if modelID != h.config.Model {
-				h.reject(w, r, 404, "model_not_found")
+				h.reject(w, r, protocol, 404, "model_not_found")
 				return
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		model := map[string]any{"id": h.config.Model, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
-		if h.config.Protocol == "anthropic" {
+		if protocol == "anthropic" {
 			model = map[string]any{"id": h.config.Model, "type": "model", "display_name": h.config.Model}
 			h.config.ModelCapabilities.addToModel(model)
 			if modelDetail {
@@ -129,34 +157,34 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := "/v1/chat/completions"
-	if h.config.Protocol == "anthropic" {
+	if protocol == "anthropic" {
 		path = "/v1/messages"
 	}
 	if r.URL.Path != path || r.Method != "POST" {
-		h.reject(w, r, 404, "unsupported_endpoint")
+		h.reject(w, r, protocol, 404, "unsupported_endpoint")
 		return
 	}
 	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
-	if err := options.Validate(h.config.Protocol); err != nil {
-		h.reject(w, r, 400, err.Error())
+	if err := options.Validate(protocol); err != nil {
+		h.reject(w, r, protocol, 400, err.Error())
 		return
 	}
 	defer r.Body.Close()
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.config.Limits.Effective().RequestBytes))
 	if err != nil {
-		h.reject(w, r, 413, "request_too_large")
+		h.reject(w, r, protocol, 413, "request_too_large")
 		return
 	}
-	body, model, err := adapter.Request(h.config.Protocol, data, h.config.Model)
+	body, model, err := adapter.Request(protocol, data, h.config.Model)
 	if err != nil {
-		h.reject(w, r, 400, err.Error())
+		h.reject(w, r, protocol, 400, err.Error())
 		return
 	}
 	if options.SessionID == "" {
-		options.SessionID = adapter.SessionID(h.config.Protocol, body)
+		options.SessionID = adapter.SessionID(protocol, body)
 	}
-	if err := options.Validate(h.config.Protocol); err != nil {
-		h.reject(w, r, 400, "invalid_session_id")
+	if err := options.Validate(protocol); err != nil {
+		h.reject(w, r, protocol, 400, "invalid_session_id")
 		return
 	}
 	var mode struct {
@@ -167,7 +195,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.config.MaxActiveSessions > 0 && !persistentSession {
 		options.SessionID, err = newRequestID()
 		if err != nil {
-			h.reject(w, r, 500, "request_id_failed")
+			h.reject(w, r, protocol, 500, "request_id_failed")
 			return
 		}
 	}
@@ -175,25 +203,30 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, limiter.ErrActiveSessionLimit) {
 			w.Header().Set("Retry-After", "1")
-			h.reject(w, r, 429, limiter.ErrActiveSessionLimit.Error())
+			h.reject(w, r, protocol, 429, limiter.ErrActiveSessionLimit.Error())
 			return
 		}
-		h.reject(w, r, 400, "invalid_session_id")
+		h.reject(w, r, protocol, 400, "invalid_session_id")
 		return
 	}
 	retainSession := false
 	defer func() { lease.Release(retainSession) }()
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
 		if _, ok := h.config.Prices[model]; !ok {
-			h.reject(w, r, 503, "budget_pricing_unconfigured")
+			h.reject(w, r, protocol, 503, "budget_pricing_unconfigured")
 			return
 		}
+	}
+	client := h.clients[protocol]
+	if client == nil {
+		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
+		return
 	}
 	reservationID := ""
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
 		reservationID, err = newRequestID()
 		if err != nil {
-			h.reject(w, r, 500, "request_id_failed")
+			h.reject(w, r, protocol, 500, "request_id_failed")
 			return
 		}
 		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
@@ -202,7 +235,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {
 				code = err.Error()
 			}
-			h.reject(w, r, 429, code)
+			h.reject(w, r, protocol, 429, code)
 			return
 		}
 		if decision.Warning {
@@ -233,7 +266,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lease.TouchOutput()
 			return nil
 		}
-		terminal, id, err := h.client.CallWithOptions(r.Context(), body, model, send, options)
+		terminal, id, err := client.CallWithOptions(r.Context(), body, model, send, options)
 		settle(id)
 		if err == nil {
 			send(id, terminal)
@@ -247,18 +280,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if id != "" {
 				w.Header().Set("X-TideMux-Request-ID", id)
 			}
-			h.fail(w, ce.Status, ce.Code)
+			h.fail(w, ce.Status, ce.Code, protocol)
 			return
 		}
 		payload := map[string]any{"error": map[string]string{"type": "api_error", "message": ce.Code}}
-		if h.config.Protocol == "anthropic" {
+		if protocol == "anthropic" {
 			payload["type"] = "error"
 		}
 		encoded, _ := json.Marshal(payload)
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
 		return
 	}
-	response, id, err := h.client.CallWithOptions(r.Context(), body, model, nil, options)
+	response, id, err := client.CallWithOptions(r.Context(), body, model, nil, options)
 	settle(id)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)
@@ -266,9 +299,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ce *adapter.CallError
 		if errors.As(err, &ce) {
-			h.fail(w, ce.Status, ce.Code)
+			h.fail(w, ce.Status, ce.Code, protocol)
 		} else {
-			h.fail(w, 500, "internal_error")
+			h.fail(w, 500, "internal_error", protocol)
 		}
 		return
 	}
@@ -288,10 +321,10 @@ func newRequestID() (string, error) {
 	return hex.EncodeToString(nonce), nil
 }
 
-func (h *handler) reject(w http.ResponseWriter, r *http.Request, status int, code string) {
+func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string, status int, code string) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
-		h.fail(w, 500, "request_id_failed")
+		h.fail(w, 500, "request_id_failed", protocol)
 		return
 	}
 	id := hex.EncodeToString(nonce)
@@ -309,9 +342,9 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, status int, cod
 	case "/v1/models", "/models":
 		endpoint = "models"
 	}
-	if err := h.client.Ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: time.Now().UnixMilli(), Protocol: h.config.Protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code}); err != nil {
-		h.fail(w, 500, "local_diagnostic_failed")
+	if err := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: time.Now().UnixMilli(), Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code}); err != nil {
+		h.fail(w, 500, "local_diagnostic_failed", protocol)
 		return
 	}
-	h.fail(w, status, code)
+	h.fail(w, status, code, protocol)
 }

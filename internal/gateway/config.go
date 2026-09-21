@@ -39,6 +39,7 @@ type Config struct {
 	ListenAddr                      string                   `json:"listen_addr"`
 	Protocol                        string                   `json:"protocol"`
 	BaseURL                         string                   `json:"base_url"`
+	AnthropicBaseURL                string                   `json:"anthropic_base_url,omitempty"`
 	Model                           string                   `json:"model"`
 	UpstreamID                      string                   `json:"upstream_id"`
 	APIVersion                      string                   `json:"anthropic_version,omitempty"`
@@ -98,17 +99,18 @@ func (c Config) Validate() error {
 	if !ip.IsLoopback() && host != "0.0.0.0" {
 		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
-	if c.Protocol != "openai" && c.Protocol != "anthropic" {
-		return errors.New("protocol must be openai or anthropic")
+	if c.Protocol != "openai" && c.Protocol != "anthropic" && c.Protocol != "both" {
+		return errors.New("protocol must be openai, anthropic or both")
 	}
-	u, err := url.Parse(c.BaseURL)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
-		return errors.New("base_url must be an API root without credentials, query or fragment")
+	if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
+		return err
 	}
-	if u.Scheme != "https" {
-		ip := net.ParseIP(u.Hostname())
-		if u.Scheme != "http" || ip == nil || !ip.IsLoopback() {
-			return errors.New("base_url requires HTTPS, except loopback HTTP")
+	if c.AnthropicBaseURL != "" {
+		if c.Protocol != "both" {
+			return errors.New("anthropic_base_url requires protocol both")
+		}
+		if err := validateBaseURL(c.AnthropicBaseURL, "anthropic_base_url"); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
@@ -126,7 +128,7 @@ func (c Config) Validate() error {
 	if len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n") {
 		return errors.New("upstream_id must be a short non-secret label")
 	}
-	if c.Protocol == "anthropic" {
+	if c.Protocol == "anthropic" || c.Protocol == "both" {
 		if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
 			return errors.New("anthropic_version must be YYYY-MM-DD")
 		}
@@ -155,6 +157,20 @@ func (c Config) Validate() error {
 		}
 		if err := p.Validate(); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateBaseURL(value, name string) error {
+	u, err := url.Parse(value)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return errors.New(name + " must be an API root without credentials, query or fragment")
+	}
+	if u.Scheme != "https" {
+		ip := net.ParseIP(u.Hostname())
+		if u.Scheme != "http" || ip == nil || !ip.IsLoopback() {
+			return errors.New(name + " requires HTTPS, except loopback HTTP")
 		}
 	}
 	return nil

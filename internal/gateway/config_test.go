@@ -57,6 +57,22 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "0.0.0.0") {
 		t.Fatalf("specific LAN listener validation error=%v", err)
 	}
+	both := c
+	both.Protocol = "both"
+	both.AnthropicBaseURL = "https://anthropic.example/v1"
+	if err := both.Validate(); err != nil {
+		t.Fatalf("both-protocol config rejected: %v", err)
+	}
+	badBoth := both
+	badBoth.AnthropicBaseURL = "http://example.com/v1"
+	if badBoth.Validate() == nil {
+		t.Fatal("non-loopback Anthropic URL accepted")
+	}
+	badSingle := c
+	badSingle.AnthropicBaseURL = "https://anthropic.example/v1"
+	if badSingle.Validate() == nil {
+		t.Fatal("Anthropic URL accepted for single protocol")
+	}
 	for _, body := range []string{`{"deepseek_api_key":"secret"}`, `{} {}`, `{"protocol":"openai","protocol":"anthropic"}`} {
 		p := filepath.Join(t.TempDir(), "config.json")
 		os.WriteFile(p, []byte(body), 0600)

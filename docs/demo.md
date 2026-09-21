@@ -53,6 +53,10 @@ replacing it. Set:
 - `listen_addr`: defaults to `127.0.0.1:4000` for loopback-only access. Set it
   to exactly `0.0.0.0:4000` to bind all IPv4 interfaces; other non-loopback IPs
   are rejected.
+- `protocol`: `openai`, `anthropic` or `both`. With `both`, `/v1/chat/completions`
+  uses `base_url` and `/v1/messages` uses `anthropic_base_url` when set, otherwise
+  the same root.
+- `anthropic_base_url`: optional second API root for `protocol: both`.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
 - `ledger_path`: the existing local ledger location, or for a first setup the

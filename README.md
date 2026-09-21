@@ -93,8 +93,11 @@ For client invocation options and setup details, see [client setup](docs/clients
 ## Compatibility
 
 **0.1.1** supports Chat Completions and Messages, one upstream and protocol per
-instance. The three CLIs have passed DeepSeek file read/edit/test and continued
-conversation workflows. You can configure other compatible providers, though they have not been tested.
+instance. The 0.2.0 development line adds an optional `protocol: both` mode so
+one gateway can expose both native routes while sharing credentials and ledger.
+The three CLIs have passed DeepSeek file read/edit/test and continued
+conversation workflows. You can configure other compatible providers, though
+they have not been tested.
 
 Responses API, protocol conversion, images/audio and IDE extensions are outside
 this release's scope. See [tested clients](docs/client-compatibility.md) and

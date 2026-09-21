@@ -2,7 +2,8 @@
 
 The original 0.1.0 supported text/non-streaming requests. The 0.1.1 release
 extends that baseline as below. Release acceptance covers three CLIs.
-Each process uses one configured upstream protocol/root. No provider/model
+Each process uses one configured upstream root. It may expose one protocol or,
+with `protocol: "both"`, both native routes at the same time. No provider/model
 whitelist or cross-protocol conversion is applied.
 
 | Feature | OpenAI compatible | Anthropic compatible |
@@ -19,6 +20,11 @@ whitelist or cross-protocol conversion is applied.
 | Reasoning | `reasoning_content`, `reasoning_effort`, compatible thinking toggle | Thinking modes/display; signed and redacted history blocks |
 | Formatting | `response_format` text/json_object/json_schema | `output_config` effort/schema |
 | Client metadata | `stream_options`, parallel tool calls | `metadata.user_id`, cache_control, context_management object |
+
+With `protocol: "both"`, `/v1/chat/completions` selects the OpenAI upstream
+root and `/v1/messages` selects the Anthropic root. `anthropic_base_url` is
+optional; when omitted, the configured `base_url` is reused. Credentials,
+gateway authentication, model identity and the local ledger remain shared.
 
 Explicit parameters are retained; provider acceptance is not inferred from the
 model name. Anthropic-compatible system-role messages within the message list
