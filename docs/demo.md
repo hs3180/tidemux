@@ -56,6 +56,8 @@ replacing it. Set:
   absolute path to `~/Library/Application Support/TideMux/ledger.db` with your
   home directory written out. The directory must exist; `~` is not expanded in JSON.
 - `max_in_flight`: 1–1024. Start with 1; this caps simultaneous upstream calls.
+- `max_active_sessions`: optional 0–4096 cap for distinct logical sessions;
+  zero disables it. New sessions receive HTTP 429 after the cap is reached.
 - `anthropic_version`: explicit protocol version for Anthropic, example `2023-06-01`.
 
 Do not put credentials in JSON, terminal history, logs, or source control.

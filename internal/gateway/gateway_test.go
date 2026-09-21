@@ -207,6 +207,101 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 	}
 }
 
+func TestActiveSessionLimitRejectsNewSessionsAndAllowsExistingSession(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.MaxInFlight = 4
+	c.MaxActiveSessions = 1
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	request := func(session string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		req.Header.Set("X-TideMux-Session-ID", session)
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		return out
+	}
+	if out := request("session-a"); out.Code != 200 {
+		t.Fatalf("first request = %d: %s", out.Code, out.Body.String())
+	}
+	rejected := request("session-b")
+	if rejected.Code != 429 || rejected.Header().Get("Retry-After") != "1" || !strings.Contains(rejected.Body.String(), "active_session_limit") {
+		t.Fatalf("rejected request = %d/%s/%s", rejected.Code, rejected.Header().Get("Retry-After"), rejected.Body.String())
+	}
+	if out := request("session-a"); out.Code != 200 {
+		t.Fatalf("existing session = %d: %s", out.Code, out.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want 2", calls)
+	}
+}
+
+func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
+	for _, scenario := range []string{"failed", "stream"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if scenario == "failed" && calls == 1 {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				if scenario == "stream" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n")
+					return
+				}
+				io.WriteString(w, responseBody("openai"))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+			c.MaxActiveSessions = 1
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			request := func(session string, stream bool) *httptest.ResponseRecorder {
+				body := requestBody("openai")
+				if stream {
+					body = strings.TrimSuffix(body, "}") + `,"stream":true}`
+				}
+				req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer local-secret")
+				req.Header.Set("X-TideMux-Session-ID", session)
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				return out
+			}
+			first := request("session-a", scenario == "stream")
+			wantFirst := 502
+			if scenario == "stream" {
+				wantFirst = 200
+			}
+			if first.Code != wantFirst {
+				t.Fatalf("first request = %d: %s", first.Code, first.Body.String())
+			}
+			second := request("session-b", scenario == "stream")
+			if second.Code != 200 {
+				t.Fatalf("second request = %d: %s", second.Code, second.Body.String())
+			}
+			if calls != 2 {
+				t.Fatalf("upstream calls = %d, want 2", calls)
+			}
+		})
+	}
+}
+
 func testPrice() adapter.Price {
 	input, output := 1.0, 1.0
 	return adapter.Price{Currency: "USD", Source: "test", Version: "1", InputCacheHit: &input, InputCacheMiss: &input, Output: &output}

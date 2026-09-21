@@ -32,8 +32,15 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	}
 	stopReconciliation := startStatementSync(c, l)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	return &handler{config: c, ledger: l, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: adapter.NewPromptCache(), Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, func() error {
+	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions)
+	if err != nil {
 		stopReconciliation()
+		_ = l.Close()
+		return nil, nil, err
+	}
+	return &handler{config: c, ledger: l, sessions: sessions, client: &adapter.Client{Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: adapter.NewPromptCache(), Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}}, func() error {
+		stopReconciliation()
+		sessions.Close()
 		return l.Close()
 	}, nil
 }
@@ -51,9 +58,10 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 }
 
 type handler struct {
-	config Config
-	ledger *ledger.Ledger
-	client *adapter.Client
+	config   Config
+	ledger   *ledger.Ledger
+	sessions *limiter.SessionLimiter
+	client   *adapter.Client
 }
 
 func (h *handler) fail(w http.ResponseWriter, status int, code string) {
@@ -150,6 +158,30 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, 400, "invalid_session_id")
 		return
 	}
+	var mode struct {
+		Stream bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &mode)
+	persistentSession := strings.TrimSpace(options.SessionID) != ""
+	if h.config.MaxActiveSessions > 0 && !persistentSession {
+		options.SessionID, err = newRequestID()
+		if err != nil {
+			h.reject(w, r, 500, "request_id_failed")
+			return
+		}
+	}
+	lease, err := h.sessions.Acquire(r.Context(), options.SessionID)
+	if err != nil {
+		if errors.Is(err, limiter.ErrActiveSessionLimit) {
+			w.Header().Set("Retry-After", "1")
+			h.reject(w, r, 429, limiter.ErrActiveSessionLimit.Error())
+			return
+		}
+		h.reject(w, r, 400, "invalid_session_id")
+		return
+	}
+	retainSession := false
+	defer func() { lease.Release(retainSession) }()
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
 		if _, ok := h.config.Prices[model]; !ok {
 			h.reject(w, r, 503, "budget_pricing_unconfigured")
@@ -181,10 +213,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, h.config.Budget.Currency, time.Now())
 		}
 	}
-	var mode struct {
-		Stream bool `json:"stream"`
-	}
-	json.Unmarshal(body, &mode)
 	if mode.Stream {
 		sent := false
 		send := func(id string, frame []byte) error {
@@ -239,6 +267,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	retainSession = persistentSession && !mode.Stream
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(response)

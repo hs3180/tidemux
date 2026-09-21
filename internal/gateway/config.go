@@ -45,6 +45,7 @@ type Config struct {
 	UpstreamKeychain    KeychainReference        `json:"upstream_keychain"`
 	AccessTokenKeychain KeychainReference        `json:"access_token_keychain"`
 	MaxInFlight         int                      `json:"max_in_flight"`
+	MaxActiveSessions   int                      `json:"max_active_sessions,omitempty"`
 	LedgerPath          string                   `json:"ledger_path"`
 	Prices              map[string]adapter.Price `json:"prices,omitempty"`
 	APIKey              string                   `json:"-"`
@@ -127,6 +128,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxInFlight < 1 || c.MaxInFlight > 1024 {
 		return errors.New("max_in_flight must be 1..1024")
+	}
+	if c.MaxActiveSessions < 0 || c.MaxActiveSessions > 4096 {
+		return errors.New("max_active_sessions must be 0..4096")
 	}
 	if strings.TrimSpace(c.LedgerPath) == "" {
 		return errors.New("ledger_path is required")
