@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
@@ -243,6 +244,64 @@ func TestActiveSessionLimitRejectsNewSessionsAndAllowsExistingSession(t *testing
 	}
 	if calls != 2 {
 		t.Fatalf("upstream calls = %d, want 2", calls)
+	}
+}
+
+func TestActiveSessionConfiguredLimitEndToEnd(t *testing.T) {
+	providerCalls := 0
+	providerSessions := []string{}
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls++
+		providerSessions = append(providerSessions, r.Header.Get(adapter.SessionIDHeader))
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer provider.Close()
+
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), provider.URL)
+	c.MaxInFlight = 2
+	c.MaxActiveSessions = 1
+	c.ActiveSessionIdleTimeoutSeconds = 1
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	gatewayServer := httptest.NewServer(h)
+	defer gatewayServer.Close()
+
+	request := func(session string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, gatewayServer.URL+endpoint("openai"), strings.NewReader(requestBody("openai")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer local-secret")
+		req.Header.Set(adapter.SessionIDHeader, session)
+		resp, err := gatewayServer.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	if status := request("session-a"); status != http.StatusOK {
+		t.Fatalf("first request status = %d", status)
+	}
+	if status := request("session-b"); status != http.StatusTooManyRequests {
+		t.Fatalf("blocked request status = %d", status)
+	}
+	if providerCalls != 1 || len(providerSessions) != 1 || providerSessions[0] != "session-a" {
+		t.Fatalf("provider calls=%d sessions=%v", providerCalls, providerSessions)
+	}
+
+	time.Sleep(1200 * time.Millisecond)
+	if status := request("session-b"); status != http.StatusOK {
+		t.Fatalf("request after configured idle timeout status = %d", status)
+	}
+	if providerCalls != 2 || len(providerSessions) != 2 || providerSessions[1] != "session-b" {
+		t.Fatalf("provider calls after expiry=%d sessions=%v", providerCalls, providerSessions)
 	}
 }
 
