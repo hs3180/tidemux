@@ -135,7 +135,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, 404, "unsupported_endpoint")
 		return
 	}
-	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get("X-TideMux-Session-ID"))}
+	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
 	if err := options.Validate(h.config.Protocol); err != nil {
 		h.reject(w, r, 400, err.Error())
 		return

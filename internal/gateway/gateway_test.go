@@ -302,6 +302,35 @@ func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
 	}
 }
 
+func TestSessionIDIsForwardedToProvider(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get(adapter.SessionIDHeader); got != "provider-session" {
+					t.Errorf("provider session header = %q", got)
+				}
+				io.WriteString(w, responseBody(protocol))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+			c.Protocol = protocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(requestBody(protocol)))
+			req.Header.Set("Authorization", "Bearer local-secret")
+			req.Header.Set(adapter.SessionIDHeader, "provider-session")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+		})
+	}
+}
+
 func testPrice() adapter.Price {
 	input, output := 1.0, 1.0
 	return adapter.Price{Currency: "USD", Source: "test", Version: "1", InputCacheHit: &input, InputCacheMiss: &input, Output: &output}

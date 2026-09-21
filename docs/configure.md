@@ -101,7 +101,7 @@ delivers it, and records the delivery result.
 ## Active session limit (0.2.0)
 
 Use `--max-active-sessions` during `configure` to cap distinct logical sessions
-for the local gateway token:
+for the local gateway:
 
 ```sh
 tidemux configure --preset deepseek-flash --max-active-sessions 20
@@ -114,7 +114,10 @@ non-streaming session remains active until it is idle for the built-in timeout;
 streaming sessions release their slot when the stream completes or is canceled.
 New sessions receive HTTP 429 with the stable error code
 `active_session_limit` and `Retry-After: 1` when the cap is reached. The limit
-is process-local and should be configured separately on each gateway instance.
+is a top-level, gateway-wide setting: it applies to all sessions handled by the
+process, not to an individual model or request. When a session ID is present, it
+is forwarded upstream in the `X-TideMux-Session-ID` header. In a multi-process
+deployment, each gateway instance enforces its own configured cap.
 
 ## If the login keychain is locked
 

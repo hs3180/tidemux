@@ -5,8 +5,13 @@ import (
 	"strings"
 )
 
+// SessionIDHeader is the stable gateway/provider boundary for a logical
+// conversation identifier. Providers may ignore the header, but compatible
+// upstreams can use it for their own session affinity or accounting.
+const SessionIDHeader = "X-TideMux-Session-ID"
+
 // CallOptions contains client request metadata used for forwarding and local
-// accounting. SessionID is never forwarded upstream.
+// accounting. SessionID is forwarded upstream using SessionIDHeader.
 // Credentials and API version always come from the gateway configuration.
 type CallOptions struct {
 	AnthropicBeta string

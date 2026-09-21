@@ -145,6 +145,9 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 			req.Header.Set("anthropic-beta", options.AnthropicBeta)
 		}
 	}
+	if options.SessionID != "" {
+		req.Header.Set(SessionIDHeader, options.SessionID)
+	}
 	client := http.Client{}
 	if c.HTTP != nil {
 		client = *c.HTTP
