@@ -72,7 +72,6 @@ func scheduleCommandWithSync(args []string, stdout, stderr *os.File, sync report
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")
 	timeValue := flags.String("time", "", "daily notification time in local time (HH:MM)")
-	channel := flags.String("channel", "", "notification channel: macos or smtp")
 	disable := flags.Bool("disable", false, "disable scheduled notifications")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -92,8 +91,8 @@ func scheduleCommandWithSync(args []string, stdout, stderr *os.File, sync report
 		return err
 	}
 	if *disable {
-		if flagWasSet(flags, "time", "channel") {
-			return errors.New("--disable cannot be combined with --time or --channel")
+		if flagWasSet(flags, "time") {
+			return errors.New("--disable cannot be combined with --time")
 		}
 		if err := replaceReportScheduleConfig(path, gateway.ReportSchedule{}); err != nil {
 			return err
@@ -111,11 +110,7 @@ func scheduleCommandWithSync(args []string, stdout, stderr *os.File, sync report
 	if err != nil {
 		return err
 	}
-	selectedChannel := strings.TrimSpace(*channel)
-	if selectedChannel == "" {
-		selectedChannel = current.ReportSchedule.EffectiveChannel()
-	}
-	schedule := gateway.ReportSchedule{Time: normalized, Channel: selectedChannel}
+	schedule := gateway.ReportSchedule{Time: normalized, Channel: "macos"}
 	candidate := current
 	candidate.ReportSchedule = schedule
 	if err := candidate.Validate(); err != nil {
@@ -128,7 +123,7 @@ func scheduleCommandWithSync(args []string, stdout, stderr *os.File, sync report
 	if err != nil {
 		return fmt.Errorf("schedule saved in configuration, but launchd setup failed: %w", err)
 	}
-	fmt.Fprintf(stdout, "Daily report notification scheduled at %s (%s, local time)\n", schedule.Time, schedule.EffectiveChannel())
+	fmt.Fprintf(stdout, "Daily report notification scheduled at %s (macOS Notification Center, local time)\n", schedule.Time)
 	if plistPath != "" {
 		fmt.Fprintf(stdout, "LaunchAgent: %s\n", plistPath)
 	}

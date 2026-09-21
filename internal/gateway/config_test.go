@@ -85,6 +85,7 @@ func TestReportScheduleValidation(t *testing.T) {
 	}
 	for _, schedule := range []ReportSchedule{
 		{Time: "09:00", Channel: "invalid"},
+		{Time: "09:00", Channel: "smtp"},
 		{Time: "", Channel: "macos"},
 	} {
 		if err := schedule.Validate(); err == nil {
@@ -93,17 +94,5 @@ func TestReportScheduleValidation(t *testing.T) {
 	}
 	if got := (ReportSchedule{Time: "09:00"}).EffectiveChannel(); got != "macos" {
 		t.Fatalf("default channel=%q", got)
-	}
-}
-
-func TestReportScheduleSMTPRequiresConfiguration(t *testing.T) {
-	c := testConfig("l.db", "https://example.com/prefix/v1")
-	c.ReportSchedule = ReportSchedule{Time: "09:00", Channel: "smtp"}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "requires smtp configuration") {
-		t.Fatalf("error=%v", err)
-	}
-	c.SMTP = SMTPConfig{Host: "smtp.example.com", Port: 587, From: "from@example.com", To: "to@example.com", Keychain: KeychainReference{Service: "smtp", Account: "default"}}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("configured SMTP schedule rejected: %v", err)
 	}
 }

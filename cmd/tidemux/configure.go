@@ -53,7 +53,6 @@ func configure(args []string, stdout, stderr *os.File) error {
 	budgetMode := flags.String("budget-mode", "hard", "budget mode: alert, soft or hard")
 	budgetThreshold := flags.Float64("budget-alert-threshold", 0.8, "budget alert threshold from 0 to 1")
 	notificationTime := flags.String("notification-time", "", "daily report notification time in local time (HH:MM); empty disables it")
-	notificationChannel := flags.String("notification-channel", "macos", "daily report notification channel: macos or smtp")
 	pricingCurrency := flags.String("pricing-currency", "USD", "pricing currency")
 	pricingSource := flags.String("pricing-source", "manual-cli", "pricing source or provider reference")
 	pricingVersion := flags.String("pricing-version", "manual", "pricing version or verification date")
@@ -84,9 +83,6 @@ func configure(args []string, stdout, stderr *os.File) error {
 			*model = "deepseek-flash"
 		}
 	}
-	if flagWasSet(flags, "notification-channel") && (!flagWasSet(flags, "notification-time") || strings.TrimSpace(*notificationTime) == "") {
-		return errors.New("--notification-channel requires a non-empty --notification-time")
-	}
 	if *baseURL == "" || *model == "" {
 		return errors.New("use configure --preset deepseek-flash, or provide --protocol, --base-url and --model")
 	}
@@ -111,7 +107,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		if err != nil {
 			return err
 		}
-		schedule = gateway.ReportSchedule{Time: normalized, Channel: *notificationChannel}
+		schedule = gateway.ReportSchedule{Time: normalized, Channel: "macos"}
 	}
 	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {

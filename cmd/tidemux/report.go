@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/smtp"
 	"net/url"
 	"os"
 	"os/exec"
@@ -36,7 +35,7 @@ func report(args []string, stdout, stderr *os.File) error {
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")
 	day := flags.String("date", "", "report date (YYYY-MM-DD)")
 	id := flags.Int64("id", 0, "report ID")
-	channel := flags.String("channel", "macos", "macos or smtp")
+	channel := flags.String("channel", "macos", "macos")
 	timezone := flags.String("timezone", "UTC", "IANA report timezone")
 	budgetCurrency := flags.String("budget-currency", "", "currency of optional daily reporting limit")
 	dailyBudget := flags.Float64("daily-budget", 0, "optional daily reporting limit; does not enforce requests")
@@ -127,8 +126,8 @@ func report(args []string, stdout, stderr *os.File) error {
 			}
 			selectedChannel = c.ReportSchedule.EffectiveChannel()
 		}
-		if selectedChannel != "macos" && selectedChannel != "smtp" {
-			return errors.New("notification channel must be macos or smtp")
+		if selectedChannel != "macos" {
+			return errors.New("notification channel must be macos")
 		}
 		notifyTimezone := "Local"
 		if flagWasSet(flags, "timezone") {
@@ -136,7 +135,7 @@ func report(args []string, stdout, stderr *os.File) error {
 		}
 		return notifyReport(stdout, l, c, selectedChannel, notifyTimezone)
 	}
-	if *id < 1 || (*channel != "macos" && *channel != "smtp") {
+	if *id < 1 || *channel != "macos" {
 		return errors.New(usage)
 	}
 	reports, err := l.ListDailyReports(context.Background(), 3660)
@@ -186,7 +185,7 @@ func report(args []string, stdout, stderr *os.File) error {
 		}
 	}
 	if err == nil {
-		err = deliverReport(*channel, c, *selected, reportPath)
+		err = deliverReport(*channel, *selected, reportPath)
 	}
 	status, code := "sent", ""
 	if err != nil {
@@ -219,7 +218,7 @@ func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, 
 		return err
 	}
 	status, code := "sent", ""
-	if err := deliverReport(channel, c, report, export.Path); err != nil {
+	if err := deliverReport(channel, report, export.Path); err != nil {
 		status, code = "failed", "delivery_failed"
 		if recordErr := l.RecordDelivery(context.Background(), report.ID, channel, status, code); recordErr != nil {
 			return recordErr
@@ -232,25 +231,12 @@ func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, 
 	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": report.ID, "channel": channel, "status": status})
 }
 
-func deliverReport(channel string, c gateway.Config, r ledger.DailyReport, reportPath string) error {
+func deliverReport(channel string, r ledger.DailyReport, reportPath string) error {
 	subject, body := fmt.Sprintf("TideMux %s usage report", r.Day), reportText(r)
 	if channel == "macos" {
 		return notifyMacOS(subject, body, reportPath)
 	}
-	if c.SMTP == (gateway.SMTPConfig{}) {
-		return errors.New("smtp is not configured")
-	}
-	secret, err := gateway.MacOSKeychain{}.Lookup(context.Background(), c.SMTP.Keychain)
-	if err != nil {
-		return errors.New("smtp Keychain item unavailable")
-	}
-	parts := strings.SplitN(secret, ":", 2)
-	if len(parts) != 2 {
-		return errors.New("smtp Keychain value must be username:password")
-	}
-	auth := smtp.PlainAuth("", parts[0], parts[1], c.SMTP.Host)
-	message := "To: " + c.SMTP.To + "\r\nFrom: " + c.SMTP.From + "\r\nSubject: " + subject + "\r\n\r\n" + body
-	return smtp.SendMail(c.SMTP.Host+":"+strconv.Itoa(c.SMTP.Port), auth, c.SMTP.From, []string{c.SMTP.To}, []byte(message))
+	return errors.New("notification channel must be macos")
 }
 
 func notifyMacOS(subject, body, reportPath string) error {

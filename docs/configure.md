@@ -81,9 +81,8 @@ The notification choice can also be supplied on the initial configure command:
 tidemux configure --preset deepseek-flash --notification-time 09:00
 ```
 
-The time uses the Mac's local timezone. The default channel is macOS Notification
-Center; `--notification-channel smtp` is available only when SMTP is already
-configured in the profile.
+The time uses the Mac's local timezone, and scheduled notifications use macOS
+Notification Center.
 
 To change the schedule of an existing profile without replacing its API-key
 references:

@@ -29,29 +29,11 @@ func (r KeychainReference) Validate(name string) error {
 type SecretLookup interface {
 	Lookup(context.Context, KeychainReference) (string, error)
 }
-type SMTPConfig struct {
-	Host     string            `json:"host,omitempty"`
-	Port     int               `json:"port,omitempty"`
-	From     string            `json:"from,omitempty"`
-	To       string            `json:"to,omitempty"`
-	Keychain KeychainReference `json:"keychain,omitempty"`
-}
-
-func (s SMTPConfig) Validate() error {
-	if s == (SMTPConfig{}) {
-		return nil
-	}
-	if strings.TrimSpace(s.Host) == "" || s.Port < 1 || s.Port > 65535 || strings.TrimSpace(s.From) == "" || strings.TrimSpace(s.To) == "" {
-		return errors.New("smtp requires host, port, from and to")
-	}
-	return s.Keychain.Validate("smtp keychain")
-}
 
 type Config struct {
 	Budget              ledger.BudgetPolicy      `json:"budget,omitempty"`
 	Reconciliation      ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule      ReportSchedule           `json:"report_schedule,omitempty"`
-	SMTP                SMTPConfig               `json:"smtp,omitempty"`
 	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits              adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr          string                   `json:"listen_addr"`
@@ -99,12 +81,6 @@ func (c Config) Validate() error {
 	}
 	if err := c.ReportSchedule.Validate(); err != nil {
 		return err
-	}
-	if err := c.SMTP.Validate(); err != nil {
-		return err
-	}
-	if c.ReportSchedule.EffectiveChannel() == "smtp" && c.ReportSchedule != (ReportSchedule{}) && c.SMTP == (SMTPConfig{}) {
-		return errors.New("report_schedule smtp channel requires smtp configuration")
 	}
 	if err := c.ModelCapabilities.Validate(); err != nil {
 		return err

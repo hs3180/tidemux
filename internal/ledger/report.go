@@ -49,7 +49,7 @@ func (l *Ledger) initReports(ctx context.Context) error {
  report_json TEXT NOT NULL, created_at_ms INTEGER NOT NULL, UNIQUE(day,timezone));
  CREATE TABLE IF NOT EXISTS report_deliveries (
  id INTEGER PRIMARY KEY AUTOINCREMENT, report_id INTEGER NOT NULL REFERENCES daily_reports(id),
- channel TEXT NOT NULL CHECK(channel IN ('macos','smtp')), status TEXT NOT NULL CHECK(status IN ('pending','sent','failed')),
+ channel TEXT NOT NULL CHECK(channel IN ('macos')), status TEXT NOT NULL CHECK(status IN ('pending','sent','failed')),
  attempts INTEGER NOT NULL, error_code TEXT NOT NULL, updated_at_ms INTEGER NOT NULL,
  UNIQUE(report_id,channel));`)
 	return err
@@ -161,7 +161,7 @@ func (l *Ledger) ListDailyReports(ctx context.Context, limit int) ([]DailyReport
 }
 
 func (l *Ledger) RecordDelivery(ctx context.Context, reportID int64, channel, status, code string) error {
-	if reportID < 1 || (channel != "macos" && channel != "smtp") || (status != "sent" && status != "failed") {
+	if reportID < 1 || channel != "macos" || (status != "sent" && status != "failed") {
 		return errors.New("invalid report delivery")
 	}
 	_, e := l.db.ExecContext(ctx, `INSERT INTO report_deliveries(report_id,channel,status,attempts,error_code,updated_at_ms) VALUES (?,?,?,?,?,?) ON CONFLICT(report_id,channel) DO UPDATE SET status=excluded.status,attempts=report_deliveries.attempts+1,error_code=excluded.error_code,updated_at_ms=excluded.updated_at_ms`, reportID, channel, status, 1, code, time.Now().UnixMilli())

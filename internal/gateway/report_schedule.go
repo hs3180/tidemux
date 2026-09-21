@@ -23,8 +23,8 @@ func (s ReportSchedule) Validate() error {
 	if _, err := NormalizeReportScheduleTime(s.Time); err != nil {
 		return err
 	}
-	if s.Channel != "" && s.Channel != "macos" && s.Channel != "smtp" {
-		return errors.New("report_schedule.channel must be macos or smtp")
+	if s.Channel != "" && s.Channel != "macos" {
+		return errors.New("report_schedule.channel must be macos")
 	}
 	return nil
 }
@@ -57,8 +57,5 @@ func (s ReportSchedule) HourMinute() (int, int, error) {
 }
 
 func (s ReportSchedule) EffectiveChannel() string {
-	if s.Channel == "" {
-		return "macos"
-	}
-	return s.Channel
+	return "macos"
 }

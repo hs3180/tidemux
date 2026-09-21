@@ -293,8 +293,8 @@ contains counts, token totals and local estimates. If reconciliation or budget
 tables exist, it reads those optional data sources without owning their migrations.
 Unavailable extensions are `null`, not zero. Use `--timezone` (default UTC) and,
 for a budget remainder, `--daily-budget N --budget-currency USD`; these are
-reporting inputs and do not enforce a gateway budget. It never includes request text, response
-text, API keys, or SMTP credentials.
+reporting inputs and do not enforce a gateway budget. It never includes request text,
+response text or API keys.
 
 For a calendar day with zero requests, estimated cost is shown as `0`; unknown
 cost is reserved for recorded requests whose cost cannot be estimated.
@@ -327,19 +327,9 @@ Without it, TideMux keeps using the built-in AppleScript notification and
 includes `tidemux report open` as the short fallback. `report retry` retries a
 recorded failed delivery. On the first clickable delivery, TideMux lets
 macOS ask for notification permission; if macOS reports that notifications
-are blocked, it opens the notification settings page automatically. Optional
-SMTP uses this config, with the Keychain item containing `username:password`
-rather than a plaintext secret in JSON:
-
-```json
-"smtp": {
-  "host": "smtp.example.com",
-  "port": 587,
-  "from": "tidemux@example.com",
-  "to": "you@example.com",
-  "keychain": {"service": "com.example.tidemux.smtp", "account": "default"}
-}
-```
+are blocked, it opens the notification settings page automatically. SMTP
+delivery is intentionally deferred; this release supports macOS
+Notification Center only.
 
 The initial `tidemux configure` flow asks for an optional daily notification
 time in local time. The same setting can be managed from the command line:
