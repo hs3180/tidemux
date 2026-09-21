@@ -1,18 +1,35 @@
-# Local release acceptance — 0.1.0
+# Release acceptance — 0.1.1
 
-## Local repair status
+## Candidate status
 
-The local 0.1.0 release includes dual-protocol streaming, tools, CLI launchers,
-configurable limits, model discovery and local diagnostics. Claude Code, Kilo CLI
-and Hermes passed installed file read/edit/test workflows and continuation in a
-new client process. See [client acceptance](client-compatibility.md) for tested
-versions and protocol boundaries. VS Code extension compatibility is out of scope.
+The 0.1.1 release combines the merged budget, reconciliation and daily-report
+features. It includes dual-protocol streaming, tools, CLI launchers, configurable
+limits, model discovery, local diagnostics, usage reports and macOS scheduled
+notifications. SMTP and webhook delivery are intentionally deferred.
+
+The final acceptance run covers source tests, packaged arm64 artifacts, installer
+behavior, client handoff, onboarding PTY flows, report generation/delivery and
+dependency notices. Claude Code, Kilo CLI and Hermes passed installed file
+read/edit/test workflows and continuation in a new client process. See [client
+acceptance](client-compatibility.md) for tested versions and protocol boundaries.
+VS Code extension compatibility is out of scope.
 
 Package checksums/SBOM, Homebrew install/rollback, configuration/data compatibility,
-and installed CLI usage/price reconciliation passed. Final documentation changes
-do not alter the tested runtime. Assets retain version 0.1.0 and use a commit/build
-suffix and hash; BUILD.txt identifies the exact source. The original text-only
-build remains archived as a historical baseline.
+and installed CLI usage/price reconciliation are release gates. Final documentation
+changes do not alter the tested runtime. BUILD.txt identifies the exact source
+commit and build metadata for every artifact.
+
+## Automated release gates
+
+The final candidate is checked with:
+
+- `gofmt -l cmd internal` returning no files;
+- `go test ./...`, `CGO_ENABLED=0 go test ./...`, `go vet ./...` and
+  `go test -race ./...`;
+- `python3 scripts/test_install.py`, `python3 scripts/test_client_commands.py`,
+  `python3 scripts/test_configure_pty.py` and `python3 scripts/licenses.py`;
+- `python3 scripts/release.py`, checksum verification and packaged-binary
+  version/installation smoke checks.
 
 ## Original installed baseline: locally verified
 

@@ -1,7 +1,7 @@
-# Client connections (0.1.0 repair)
+# Client connections (0.1.1)
 
 Use `tidemux <client>` to start an installed client with TideMux settings.
-The direct commands replace the earlier `connect` interface. VS Code extension compatibility is outside the 0.1.0 scope.
+The direct commands replace the earlier `connect` interface. VS Code extension compatibility is outside the 0.1.1 scope.
 Each gateway process uses one protocol and one profile. Start `serve` before
 launching a client. The client command checks authenticated model discovery, reads only the
 local gateway credential from Keychain, and passes it in the child environment.
@@ -100,4 +100,4 @@ management behavior; those capabilities depend on the chosen provider/model.
 ## Experimental implementation
 
 The existing `tidemux kilo-ide` command is retained as experimental code. VS Code
-extension compatibility is not part of 0.1.0 acceptance or a pending release gate.
+extension compatibility is not part of 0.1.1 acceptance or a pending release gate.

@@ -1,7 +1,7 @@
 # Local demo
 
 Requires macOS, Keychain Access and a non-streaming text-capable OpenAI or
-Anthropic compatible endpoint. The local release is `0.1.0`.
+Anthropic compatible endpoint. The release is `0.1.1`.
 
 ## Build or extract
 

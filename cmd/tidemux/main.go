@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version = "0.1.0"
+	version = "0.1.1"
 	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek-flash [--protocol anthropic] [--notification-time HH:MM]\n       tidemux configure --base-url URL --model ID --pricing-input-cache-hit amount --pricing-input-cache-miss amount --pricing-output amount [--notification-time HH:MM]\n       tidemux budget [--budget-5h amount] [--budget-weekly amount]\n       tidemux report <generate|list|export|open|deliver|retry|schedule|notify> [--config <path>] [options]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
