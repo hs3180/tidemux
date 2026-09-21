@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.1 — 2026-09-21
+
+- Add independent daily usage reports with JSON history, private self-contained
+  HTML exports and delivery tracking, without storing request or response bodies.
+- Add macOS Notification Center delivery, clickable report opening through
+  `terminal-notifier` when available, permission recovery guidance and retry
+  tracking for failed deliveries.
+- Add first-run TUI guidance and CLI controls for a local-time daily notification
+  schedule, backed by a private per-profile macOS LaunchAgent and `report notify`.
+- Add conservative five-hour/seven-day budget controls and automatic local
+  reconciliation of normalized supplier statements to the public release line.
+- Refresh the 0.1.1 arm64 release procedure, installer defaults, acceptance
+  evidence and dependency/license packaging. SMTP and webhook delivery remain
+  deferred to follow-up issues.
+
 ## 0.1.0 — initial public release
 
 - macOS arm64 gateway for OpenAI-compatible and Anthropic-compatible APIs.

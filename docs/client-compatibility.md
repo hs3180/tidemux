@@ -1,8 +1,8 @@
-# Client compatibility — 0.1.0 repair
+# Client compatibility — 0.1.1
 
 Verified on macOS arm64 on 2026-09-11 with real DeepSeek `deepseek-flash`.
-The repair retains version 0.1.0; use BUILD.txt and binary SHA256 to distinguish
-it from the original text-only local release.
+The 0.1.1 release carries forward the verified client matrix from the 0.1.0
+repair; use BUILD.txt and binary SHA256 to identify the exact release artifact.
 
 | Client | Installed CLI read/edit/test | Persistent continuation | Status |
 | --- | --- | --- | --- |
@@ -10,7 +10,7 @@ it from the original text-only local release.
 | Kilo CLI 7.6.2 | Passed | Passed | CLI verified |
 | Hermes Agent 0.21.1 | Passed | Passed | CLI verified |
 
-VS Code extension compatibility is outside the 0.1.0 release scope. Existing
+VS Code extension compatibility is outside the 0.1.1 release scope. Existing
 experimental code and historical development evidence are retained, without
 a pending IDE acceptance requirement.
 

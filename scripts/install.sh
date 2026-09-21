@@ -8,7 +8,7 @@ fail() { printf '%s\n' "tidemux: $*" >&2; exit 1; }
 major=$(sw_vers -productVersion | cut -d . -f 1)
 [ "$major" -ge 15 ] || fail 'macOS 15 or newer is required.'
 
-version=${TIDEMUX_VERSION:-0.1.0}
+version=${TIDEMUX_VERSION:-0.1.1}
 case "$version" in ''|*[!0-9A-Za-z._-]*) fail 'Invalid TIDEMUX_VERSION.' ;; esac
 install_dir=${TIDEMUX_INSTALL_DIR:-"$HOME/.local/bin"}
 base="https://github.com/hs3180/tidemux/releases/download/v$version"

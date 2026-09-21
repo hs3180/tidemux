@@ -1,6 +1,6 @@
 # Installation
 
-TideMux 0.1.0 targets macOS 15+ on Apple Silicon. Install your coding client
+TideMux 0.1.1 targets macOS 15+ on Apple Silicon. Install your coding client
 separately; TideMux does not install Claude Code, Kilo CLI or Hermes Agent.
 
 ## Homebrew (recommended)
@@ -19,10 +19,10 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Install without Homebrew
 
-Install version 0.1.0:
+Install version 0.1.1:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.1.0/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.1.1/scripts/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
