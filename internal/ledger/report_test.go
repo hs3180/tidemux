@@ -60,6 +60,9 @@ func TestDailyReportSeriesIsChronologicalAndDoesNotPersist(t *testing.T) {
 	if reports[0].RequestCount != 1 || reports[1].RequestCount != 0 || reports[2].RequestCount != 1 {
 		t.Fatalf("unexpected request counts: %+v", reports)
 	}
+	if reports[1].EstimatedCost == nil || *reports[1].EstimatedCost != 0 || reports[1].Currency != "" {
+		t.Fatalf("zero-request day cost = %+v, want known zero without currency", reports[1])
+	}
 	if reports[0].ID != 0 || reports[1].ID != 0 || reports[2].ID != 0 {
 		t.Fatalf("series unexpectedly persisted IDs: %+v", reports)
 	}

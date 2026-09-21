@@ -296,6 +296,9 @@ for a budget remainder, `--daily-budget N --budget-currency USD`; these are
 reporting inputs and do not enforce a gateway budget. It never includes request text, response
 text, API keys, or SMTP credentials.
 
+For a calendar day with zero requests, estimated cost is shown as `0`; unknown
+cost is reserved for recorded requests whose cost cannot be estimated.
+
 Create an offline, self-contained visual report with:
 
 ```sh

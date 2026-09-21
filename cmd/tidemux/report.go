@@ -253,10 +253,7 @@ func findTerminalNotifier() (string, bool) {
 }
 
 func reportText(r ledger.DailyReport) string {
-	cost := "unknown"
-	if r.EstimatedCost != nil {
-		cost = fmt.Sprintf("%.6f %s", *r.EstimatedCost, r.Currency)
-	}
+	cost := reportCostText(r)
 	mismatches, unmatched := "unknown", "unknown"
 	if r.TokenizerMismatches != nil {
 		mismatches = strconv.FormatInt(*r.TokenizerMismatches, 10)
@@ -266,4 +263,19 @@ func reportText(r ledger.DailyReport) string {
 	}
 	return fmt.Sprintf("Requests: %d; failures: %d; input tokens: %d; output tokens: %d; local estimated cost: %s; unknown local costs: %d; tokenizer mismatches: %s; unmatched statement lines: %s.", r.RequestCount, r.FailureCount, r.InputTokens, r.OutputTokens, cost, r.UnknownCostRequests, mismatches, unmatched)
 }
+
+func reportCostText(r ledger.DailyReport) string {
+	if r.RequestCount == 0 {
+		return "0"
+	}
+	if r.EstimatedCost == nil {
+		return "unknown"
+	}
+	cost := fmt.Sprintf("%.6f", *r.EstimatedCost)
+	if r.Currency != "" {
+		cost += " " + r.Currency
+	}
+	return cost
+}
+
 func appleQuote(s string) string { return "\"" + strings.ReplaceAll(s, "\"", "\\\"") + "\"" }

@@ -158,6 +158,25 @@ func TestReportExportWritesPrivateSelfContainedHTML(t *testing.T) {
 	}
 }
 
+func TestReportZeroRequestCostIsZero(t *testing.T) {
+	reports := []ledger.DailyReport{
+		{Day: "2026-09-12", Timezone: "UTC"},
+		{Day: "2026-09-13", Timezone: "UTC"},
+	}
+	model := buildReportHTMLModel(reports, time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
+	if model.EstimatedCost != "0" || model.HasUnknownCost || model.CostChartAvailable {
+		t.Fatalf("zero-request summary = %+v, want zero known cost without currency chart", model)
+	}
+	for _, row := range model.Rows {
+		if row.EstimatedCost != "0" || !row.CostKnown {
+			t.Fatalf("zero-request row = %+v, want known zero", row)
+		}
+	}
+	if got := reportCostText(ledger.DailyReport{RequestCount: 0}); got != "0" {
+		t.Fatalf("zero-request notification cost = %q, want 0", got)
+	}
+}
+
 func containsReportNotificationArgs(args []string, reportPath string) bool {
 	wantURL := (&url.URL{Scheme: "file", Path: reportPath}).String()
 	for i := 0; i+1 < len(args); i++ {

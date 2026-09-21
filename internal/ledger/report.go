@@ -117,7 +117,7 @@ func (l *Ledger) dailyReportAt(ctx context.Context, local time.Time, timezone st
 	if err != nil {
 		return r, err
 	}
-	if currency != "" {
+	if currency != "" || r.RequestCount == 0 {
 		r.EstimatedCost = &estimated
 		r.Currency = currency
 	}

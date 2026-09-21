@@ -206,7 +206,9 @@ func buildReportHTMLModel(reports []ledger.DailyReport, generatedAt time.Time) r
 	}
 	model.Currency = primaryCurrency
 	model.HasUnknownCost = model.UnknownCostRequests > 0
-	if knownCostRows == 0 {
+	if knownCostRows == 0 && model.TotalRequests == 0 {
+		model.EstimatedCost = "0"
+	} else if knownCostRows == 0 {
 		model.EstimatedCost = "unknown"
 	} else if multipleCurrencies {
 		model.EstimatedCost = "multiple currencies"
@@ -223,6 +225,8 @@ func buildReportHTMLModel(reports []ledger.DailyReport, generatedAt time.Time) r
 		}
 	} else if multipleCurrencies {
 		model.CostChartDescription = "Cost chart is hidden because the period contains multiple currencies."
+	} else if model.TotalRequests == 0 {
+		model.CostChartDescription = "No requests were recorded in this period."
 	} else {
 		model.CostChartDescription = "Cost chart is hidden because all costs are unknown."
 	}
@@ -240,7 +244,10 @@ func buildReportHTMLModel(reports []ledger.DailyReport, generatedAt time.Time) r
 			BudgetRemaining:     optionalFloat(report.BudgetRemaining),
 			Currency:            report.Currency,
 		}
-		if report.EstimatedCost == nil || report.Currency == "" {
+		if report.RequestCount == 0 {
+			row.EstimatedCost = "0"
+			row.CostKnown = true
+		} else if report.EstimatedCost == nil || report.Currency == "" {
 			row.EstimatedCost = "unknown"
 		} else {
 			row.EstimatedCost = fmt.Sprintf("%.6f %s", *report.EstimatedCost, report.Currency)
