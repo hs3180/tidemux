@@ -13,18 +13,20 @@ import (
 // error code by the gateway.
 var ErrActiveSessionLimit = errors.New("active_session_limit")
 
-const defaultSessionIdleTTL = 15 * time.Minute
+const defaultSessionIdleTTL = 5 * time.Minute
 
 type sessionEntry struct {
 	requests   int
-	lastActive time.Time
+	lastInput  time.Time
+	lastOutput time.Time
 	retain     bool
 }
 
 // SessionLimiter limits distinct logical sessions while allowing concurrent
 // requests belonging to an already admitted session. A successful non-stream
-// request keeps its session alive until the idle TTL; a streaming request
-// releases its session when the stream ends.
+// request keeps its session alive until the idle TTL; an in-flight request is
+// active while it has input or output activity. The idle check only expires a
+// retained session after both directions have been idle for the TTL.
 type SessionLimiter struct {
 	mu       sync.Mutex
 	max      int
@@ -36,19 +38,27 @@ type SessionLimiter struct {
 
 // SessionLease represents one request belonging to a logical session.
 type SessionLease struct {
-	limiter *SessionLimiter
-	id      string
-	once    sync.Once
+	limiter  *SessionLimiter
+	id       string
+	once     sync.Once
+	released bool
 }
 
-// NewSessionLimiter creates a limiter. A zero maximum disables the limit.
-func NewSessionLimiter(max int) (*SessionLimiter, error) {
+// NewSessionLimiter creates a limiter. A zero maximum disables the limit. A
+// zero idleTTL selects the five-minute default.
+func NewSessionLimiter(max int, idleTTL time.Duration) (*SessionLimiter, error) {
 	if max < 0 {
 		return nil, errors.New("active session limit cannot be negative")
 	}
+	if idleTTL < 0 {
+		return nil, errors.New("active session idle timeout cannot be negative")
+	}
+	if idleTTL == 0 {
+		idleTTL = defaultSessionIdleTTL
+	}
 	return &SessionLimiter{
 		max:      max,
-		idleTTL:  defaultSessionIdleTTL,
+		idleTTL:  idleTTL,
 		now:      time.Now,
 		sessions: make(map[string]*sessionEntry),
 	}, nil
@@ -85,8 +95,39 @@ func (l *SessionLimiter) Acquire(ctx context.Context, id string) (*SessionLease,
 		l.sessions[id] = entry
 	}
 	entry.requests++
-	entry.lastActive = now
+	entry.lastInput = now
 	return &SessionLease{limiter: l, id: id}, nil
+}
+
+// TouchInput records input activity for the leased logical session.
+func (l *SessionLease) TouchInput() {
+	l.touch(true)
+}
+
+// TouchOutput records output activity for the leased logical session.
+func (l *SessionLease) TouchOutput() {
+	l.touch(false)
+}
+
+func (l *SessionLease) touch(input bool) {
+	if l == nil || l.limiter == nil {
+		return
+	}
+	limiter := l.limiter
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if l.released {
+		return
+	}
+	entry, ok := limiter.sessions[l.id]
+	if !ok {
+		return
+	}
+	if input {
+		entry.lastInput = limiter.now()
+	} else {
+		entry.lastOutput = limiter.now()
+	}
 }
 
 // Release finishes a request. Retain should be true for a successful
@@ -100,6 +141,7 @@ func (l *SessionLease) Release(retain bool) {
 		limiter := l.limiter
 		limiter.mu.Lock()
 		defer limiter.mu.Unlock()
+		l.released = true
 		entry, ok := limiter.sessions[l.id]
 		if !ok {
 			return
@@ -109,7 +151,6 @@ func (l *SessionLease) Release(retain bool) {
 		}
 		if retain {
 			entry.retain = true
-			entry.lastActive = limiter.now()
 		}
 		if entry.requests == 0 && !entry.retain {
 			delete(limiter.sessions, l.id)
@@ -140,8 +181,14 @@ func (l *SessionLimiter) Stats() (limit, current int, rejected uint64) {
 
 func (l *SessionLimiter) expireLocked(now time.Time) {
 	for id, entry := range l.sessions {
-		if entry.requests == 0 && now.Sub(entry.lastActive) >= l.idleTTL {
+		if entry.requests == 0 && idleSinceBothDirections(entry, now, l.idleTTL) {
 			delete(l.sessions, id)
 		}
 	}
+}
+
+func idleSinceBothDirections(entry *sessionEntry, now time.Time, idleTTL time.Duration) bool {
+	inputIdle := entry.lastInput.IsZero() || now.Sub(entry.lastInput) >= idleTTL
+	outputIdle := entry.lastOutput.IsZero() || now.Sub(entry.lastOutput) >= idleTTL
+	return inputIdle && outputIdle
 }

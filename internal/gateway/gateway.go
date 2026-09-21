@@ -32,7 +32,8 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	}
 	stopReconciliation := startStatementSync(c, l)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions)
+	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second
+	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions, idleTTL)
 	if err != nil {
 		stopReconciliation()
 		_ = l.Close()
@@ -226,7 +227,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if _, err := w.Write(frame); err != nil {
 				return err
 			}
-			return http.NewResponseController(w).Flush()
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				return err
+			}
+			lease.TouchOutput()
+			return nil
 		}
 		terminal, id, err := h.client.CallWithOptions(r.Context(), body, model, send, options)
 		settle(id)
@@ -270,7 +275,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	retainSession = persistentSession && !mode.Stream
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
-	w.Write(response)
+	if n, _ := w.Write(response); n > 0 {
+		lease.TouchOutput()
+	}
 }
 
 func newRequestID() (string, error) {
