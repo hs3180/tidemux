@@ -26,7 +26,7 @@ const (
 commands:
   serve       start the local gateway
   doctor      check the configuration, Keychain and local state directory
-  configure   create or replace a provider configuration
+  provider    configure a provider or list its supported models
   billing     inspect local usage and cost records (--details for requests)
   budget      set the rolling budget limits
   report      generate, view or deliver usage reports
@@ -36,13 +36,14 @@ commands:
   hermes      launch Hermes Agent through the gateway
   version     print the TideMux version
 
-configuration examples:
-  tidemux configure --preset deepseek-flash [options]
-  tidemux configure --base-url URL --model ID [pricing options]
+provider examples:
+  tidemux provider configure --preset deepseek-flash [options]
+  tidemux provider configure --base-url URL --model ID [pricing options]
+  tidemux provider models [--json]
 
 common examples:
-  tidemux configure --preset deepseek-flash
-  tidemux configure --help
+  tidemux provider configure --preset deepseek-flash
+  tidemux provider --help
   tidemux serve --config /path/to/config.json
 
 The provider protocol is detected automatically from the configured API root.
@@ -65,6 +66,10 @@ func run(args []string, stdout, stderr *os.File) error {
 	if command == "claude" || command == "kilo" || command == "hermes" || command == "kilo-ide" {
 		return launch(args, stdout, stderr)
 	}
+	if command == "provider" {
+		return providerCommand(args[1:], stdout, stderr)
+	}
+	// Keep the original spelling as a compatibility alias for existing scripts.
 	if command == "configure" {
 		return configure(args[1:], stdout, stderr)
 	}

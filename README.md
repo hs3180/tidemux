@@ -36,7 +36,7 @@ Install your preferred client CLI. The example below uses **DeepSeek
 For Kilo CLI or Hermes Agent:
 
 ```sh
-tidemux configure --preset deepseek-flash
+tidemux provider configure --preset deepseek-flash
 ```
 
 The provider protocol is detected automatically from the configured API root.
@@ -44,7 +44,7 @@ For a provider's Anthropic-compatible API, pass that API root explicitly; do
 not select a protocol flag:
 
 ```sh
-tidemux configure --preset deepseek-flash \
+tidemux provider configure --preset deepseek-flash \
   --base-url https://api.deepseek.com/anthropic/v1
 ```
 

@@ -1,6 +1,6 @@
 # Configure TideMux from Terminal
 
-No manual Keychain Access setup is required. `configure` reads your provider
+No manual Keychain Access setup is required. `provider configure` reads your provider
 API key and optional gateway API key without echo. Leave the gateway prompt
 empty to generate a random credential, or enter a custom value. Neither secret
 is accepted as a command-line argument or written into JSON.
@@ -10,7 +10,7 @@ is accepted as a command-line argument or written into JSON.
 Run the installed CLI (or replace `tidemux` with `./tidemux` for an extracted binary):
 
 ```sh
-tidemux configure --preset deepseek-flash
+tidemux provider configure --preset deepseek-flash
 tidemux doctor
 tidemux serve
 ```
@@ -43,12 +43,24 @@ fallback amount.
 key is configured, so changing a budget never changes the rates used for
 accounting.
 
+To inspect the provider's supported models using the configured Keychain
+credential, run:
+
+```sh
+tidemux provider models
+tidemux provider models --json
+```
+
+This makes one read-only `GET /models` request and never sends a prompt. The
+response is bounded, deduplicated by model ID and reduced to safe IDs/display
+names; provider response details and credentials are not printed.
+
 The budget schema is intentionally not migrated from earlier pre-release
 profiles. If an existing profile contains conflicting legacy budget fields,
 replace it with the new schema using `tidemux budget` or recreate it with
-`tidemux configure --replace`.
+`tidemux provider configure --replace`.
 
-1. `configure` selects the provider API root and model. The DeepSeek preset
+1. `provider configure` selects the provider API root and model. The DeepSeek preset
    uses `https://api.deepseek.com` and `deepseek-flash`; TideMux automatically
    detects the provider protocol from that root. To use DeepSeek's Anthropic
    compatible API, override the root with
@@ -84,7 +96,7 @@ output, or `--download billing.csv` to save the selected period's billing detail
 The notification choice can also be supplied on the initial configure command:
 
 ```sh
-tidemux configure --preset deepseek-flash --notification-time 09:00
+tidemux provider configure --preset deepseek-flash --notification-time 09:00
 ```
 
 The time uses the Mac's local timezone, and scheduled notifications use macOS
@@ -97,7 +109,7 @@ the local network reach the gateway, select the external mode by setting the
 listen address to `0.0.0.0`:
 
 ```sh
-tidemux configure --preset deepseek-flash \
+tidemux provider configure --preset deepseek-flash \
   --listen 0.0.0.0:4000
 ```
 
@@ -134,11 +146,11 @@ delivers it, and records the delivery result.
 
 ## Active session limit (0.2.0)
 
-Use `--max-active-sessions` during `configure` to cap distinct logical sessions
+Use `--max-active-sessions` during `provider configure` to cap distinct logical sessions
 for the local gateway:
 
 ```sh
-tidemux configure --preset deepseek-flash \
+tidemux provider configure --preset deepseek-flash \
   --max-active-sessions 20 \
   --active-session-idle-timeout-seconds 300
 ```
@@ -162,7 +174,7 @@ deployment, each gateway instance enforces its own configured cap.
 
 ## If the login keychain is locked
 
-`configure` automatically starts the macOS `security unlock-keychain` password
+`provider configure` automatically starts the macOS `security unlock-keychain` password
 prompt in the current terminal, then continues the same setup after unlocking.
 There is no separate command to copy or rerun.
 
@@ -189,7 +201,7 @@ To switch the current local gateway to Anthropic format, stop it with Control-C
 and replace the local configuration:
 
 ```sh
-tidemux configure --preset deepseek-flash \
+tidemux provider configure --preset deepseek-flash \
   --base-url https://api.deepseek.com/anthropic/v1 --replace
 tidemux doctor
 tidemux serve
@@ -205,7 +217,7 @@ omit `--replace`.
 ## Any other compatible API
 
 ```sh
-tidemux configure \
+tidemux provider configure \
   --base-url https://your-provider.example/v1 \
   --model your-model-id \
   --pricing-input-cache-hit 1 \
@@ -222,7 +234,7 @@ tokens. The three rates are input cache hit, input cache miss and output;
 `manual-cli` and `manual`. `--max-in-flight 2` changes the explicit concurrency cap.
 To replace an existing local setup,
 stop the gateway first and add `--replace`. Inspect other options with
-`tidemux configure --help`.
+`tidemux provider configure --help`.
 
 ## Update the current local configuration
 
@@ -253,7 +265,7 @@ python3 scripts/verify_live.py \
   --disable-thinking --output /tmp/tidemux-live-openai.json
 ```
 
-The configured provider profile always carries its pricing. `configure --preset
+The configured provider profile always carries its pricing. `provider configure --preset
 deepseek-flash` uses TideMux's fixed peak DeepSeek preset. For another provider,
 pass `--pricing-input-cache-hit`, `--pricing-input-cache-miss`, and
 `--pricing-output` when setting the API key; use `--pricing-source` and
@@ -312,7 +324,7 @@ does not modify existing 0.1.0 request records.
 
 ## Declared model limits (0.1.0)
 
-Use `configure --context-tokens <n> --output-tokens <n>` when you have verified
+Use `provider configure --context-tokens <n> --output-tokens <n>` when you have verified
 these values with your provider, or set:
 
 ```json
@@ -340,7 +352,7 @@ client authentication headers and unrelated custom headers are not forwarded.
 
 ## Configuration rollback
 
-`configure --replace` saves an exact, mode-0600 copy of the previous configuration
+`provider configure --replace` saves an exact, mode-0600 copy of the previous configuration
 beside it as `<config>.backup-<unique-id>` before installing the replacement. Old
 Keychain items are retained, so that backup still references its original keys.
 If backup creation fails, the existing configuration is not replaced and newly

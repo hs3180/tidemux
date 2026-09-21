@@ -11,7 +11,7 @@ The upstream API key stays in the gateway.
 ## OpenAI client profile: Kilo CLI and Hermes
 
 ```sh
-./tidemux configure --preset deepseek-flash
+./tidemux provider configure --preset deepseek-flash
 ./tidemux serve
 ```
 
@@ -37,7 +37,7 @@ Create a provider profile with the Anthropic API root. The configure prompt
 collects the upstream key without echoing it:
 
 ```sh
-./tidemux configure --preset deepseek-flash \
+./tidemux provider configure --preset deepseek-flash \
   --base-url https://api.deepseek.com/anthropic/v1 \
   --listen 127.0.0.1:8788 --config "$HOME/.config/tidemux/anthropic.json"
 ./tidemux serve --config "$HOME/.config/tidemux/anthropic.json"

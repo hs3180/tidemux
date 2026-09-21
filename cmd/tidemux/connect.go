@@ -96,7 +96,7 @@ func launch(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		tty, ttyErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		if ttyErr != nil {
-			return errors.New("local gateway credential unavailable; run the client command in Terminal to unlock Keychain, or run configure if the credential is missing")
+			return errors.New("local gateway credential unavailable; run the client command in Terminal to unlock Keychain, or run provider configure if the credential is missing")
 		}
 		unlockErr := unlockKeychainIfNeeded(ctx, tty)
 		tty.Close()
@@ -105,7 +105,7 @@ func launch(args []string, stdout, stderr *os.File) error {
 		}
 		token, err = (gateway.MacOSKeychain{}).Lookup(ctx, c.AccessTokenKeychain)
 		if err != nil {
-			return errors.New("local gateway credential unavailable after Keychain check; run configure for this profile")
+			return errors.New("local gateway credential unavailable after Keychain check; run provider configure for this profile")
 		}
 	}
 	if strings.TrimSpace(token) == "" || strings.ContainsAny(token, "\r\n") {

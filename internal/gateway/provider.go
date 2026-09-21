@@ -45,6 +45,26 @@ func resolveProviderProtocol(c Config, httpClient *http.Client) (string, string,
 	return detected, apiVersion, nil
 }
 
+// ResolveProviderProtocol validates a provider configuration and fills in the
+// upstream protocol and Anthropic API version when they were configured for
+// automatic detection. It is shared by the gateway and read-only provider
+// inspection commands so they use the same protocol decision.
+func ResolveProviderProtocol(c Config, httpClient *http.Client) (Config, error) {
+	if err := c.Validate(); err != nil {
+		return Config{}, err
+	}
+	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
+	if err != nil {
+		return Config{}, err
+	}
+	c.Protocol = protocol
+	c.APIVersion = apiVersion
+	if err := c.Validate(); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
 // detectProviderProtocol identifies the upstream wire format without making a
 // billable model request. Official provider roots and explicit compatibility
 // paths are resolved locally; generic roots are inspected through GET /models.

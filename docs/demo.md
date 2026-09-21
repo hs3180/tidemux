@@ -20,7 +20,7 @@ verified. See [installation](install.md) for release downloads and Homebrew.
 ## Recommended: configure with the CLI
 
 ```sh
-./tidemux configure --preset deepseek-flash
+./tidemux provider configure --preset deepseek-flash
 ./tidemux doctor
 ./tidemux serve
 ```
@@ -132,7 +132,7 @@ DeepSeek preset stores the fixed peak rates automatically. For another provider,
 set rates on the same command; rates are **per million tokens**:
 
 ```sh
-tidemux configure \
+tidemux provider configure \
   --base-url https://provider.example/v1 \
   --model your-model \
   --pricing-input-cache-hit 1 \

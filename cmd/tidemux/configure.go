@@ -38,7 +38,7 @@ func defaultConfigPath() string {
 	return filepath.Join(home, "Library", "Application Support", "TideMux", "config.json")
 }
 func configure(args []string, stdout, stderr *os.File) error {
-	flags := flag.NewFlagSet("configure", flag.ContinueOnError)
+	flags := flag.NewFlagSet("provider configure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
@@ -84,7 +84,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 	}
 	if *baseURL == "" || *model == "" {
-		return errors.New("use configure --preset deepseek-flash, or provide --base-url and --model")
+		return errors.New("use provider configure --preset deepseek-flash, or provide --base-url and --model")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("configure requires macOS Keychain")
@@ -118,7 +118,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return errors.New("run configure in an interactive terminal; API keys are never accepted as command arguments")
+		return errors.New("run provider configure in an interactive terminal; API keys are never accepted as command arguments")
 	}
 	defer tty.Close()
 	if !term.IsTerminal(int(tty.Fd())) {

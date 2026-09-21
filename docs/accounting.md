@@ -331,7 +331,7 @@ are blocked, it opens the notification settings page automatically. SMTP
 delivery is intentionally deferred; this release supports macOS
 Notification Center only.
 
-The initial `tidemux configure` flow asks for an optional daily notification
+The initial `tidemux provider configure` flow asks for an optional daily notification
 time in local time. The same setting can be managed from the command line:
 
 ```sh

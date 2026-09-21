@@ -16,14 +16,14 @@ the price snapshot used when they were written.
 
 ## Configure with the API key
 
-`configure --preset deepseek-flash` stores the peak preset in the provider profile at
+`provider configure --preset deepseek-flash` stores the peak preset in the provider profile at
 the same time it stores the API key reference. The `budget` command never edits
 or asks for pricing.
 
-For a custom provider or a deliberate override, set rates on `configure`:
+For a custom provider or a deliberate override, set rates on `provider configure`:
 
 ```sh
-tidemux configure \
+tidemux provider configure \
   --base-url https://provider.example/v1 \
   --model your-model-id \
   --pricing-input-cache-hit 1 \

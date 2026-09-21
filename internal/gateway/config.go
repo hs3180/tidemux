@@ -66,7 +66,7 @@ func LoadConfig(path string) (Config, error) {
 		if json.Unmarshal(data, &raw) == nil {
 			for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
 				if _, ok := raw.Budget[key]; ok {
-					return c, errors.New("legacy budget fields conflict with the current schema; run tidemux budget or configure --replace")
+					return c, errors.New("legacy budget fields conflict with the current schema; run tidemux budget or provider configure --replace")
 				}
 			}
 		}
