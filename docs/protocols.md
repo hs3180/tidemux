@@ -10,7 +10,7 @@ whitelist or cross-protocol conversion is applied.
 | Inference endpoint | `/v1/chat/completions` | `/v1/messages` |
 | Upstream suffix | `/chat/completions` | `/messages` |
 | Upstream credential | Configured Bearer key | Configured `x-api-key` |
-| Protocol headers | Gateway-created headers | Configured version; validated client `anthropic-beta` |
+| Protocol headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, validated client `anthropic-beta`, and `X-TideMux-Session-ID` when present |
 | Model discovery | `/v1/models`, `/models`, and model detail | Same paths, Anthropic-shaped model objects |
 | Text | String or text blocks | String or text blocks; top-level system |
 | Tools | Function definitions, choices, call IDs, tool messages | Custom tools, choices, tool_use/tool_result blocks |
@@ -25,6 +25,11 @@ model name. Anthropic-compatible system-role messages within the message list
 are preserved, including position and cache markers. Claude's observed requests
 carry a mid-conversation-system beta declaration. Providers can reject this or
 other beta features; TideMux does not change system instructions into user text.
+
+The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
+configured provider unchanged. If active-session limiting is enabled and the
+client does not provide an ID, TideMux creates a request-scoped ID for the
+provider call.
 
 OpenAI `max_tokens` and `max_completion_tokens` are mutually exclusive. Anthropic
 requires `max_tokens`. Temperature, top_p and protocol-specific stop fields are
@@ -59,8 +64,10 @@ a different transport, creating separate auditable attempts.
 
 Defaults remain 1 MiB request, 8 MiB non-streaming response, 64 MiB SSE stream,
 1 MiB SSE event, and 60 seconds after concurrency admission. All are configurable
-through `limits`; see [configuration](configure.md). Queue waiting is cancelable
-and reported separately. Upstream redirects are not followed.
+through `limits`; see [configuration](configure.md). Retained active sessions use
+a five-minute input/output idle timeout by default, configurable independently.
+Queue waiting is cancelable and reported separately. Upstream redirects are not
+followed.
 
 Model limits are omitted unless explicitly configured under `model_capabilities`;
 they are declarations, not measured model capabilities. Authentication and

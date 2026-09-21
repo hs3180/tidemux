@@ -45,6 +45,8 @@ func configure(args []string, stdout, stderr *os.File) error {
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
 	listen := flags.String("listen", "127.0.0.1:8787", "loopback IP:port")
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
+	maxSessions := flags.Int("max-active-sessions", 0, "maximum active logical sessions; zero disables the limit")
+	sessionIdleTimeout := flags.Int("active-session-idle-timeout-seconds", 0, "idle time before releasing a retained session in seconds; zero uses the five-minute default")
 	contextTokens := flags.Int64("context-tokens", 0, "verified upstream context window; zero means unknown")
 	outputTokens := flags.Int64("output-tokens", 0, "verified upstream output ceiling; zero means unknown")
 	budget5h := flags.Float64("budget-5h", 0, "rolling five-hour budget in the pricing currency; zero disables it")
@@ -109,7 +111,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 		schedule = gateway.ReportSchedule{Time: normalized, Channel: "macos"}
 	}
-	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}

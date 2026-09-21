@@ -34,6 +34,20 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 			t.Errorf("accepted %s", url)
 		}
 	}
+	for _, value := range []int{-1, 4097} {
+		bad := c
+		bad.MaxActiveSessions = value
+		if bad.Validate() == nil {
+			t.Fatalf("accepted max_active_sessions=%d", value)
+		}
+	}
+	for _, value := range []int{-1, 86401} {
+		bad := c
+		bad.ActiveSessionIdleTimeoutSeconds = value
+		if bad.Validate() == nil {
+			t.Fatalf("accepted active_session_idle_timeout_seconds=%d", value)
+		}
+	}
 	bad := c
 	bad.ListenAddr = "0.0.0.0:8787"
 	if bad.Validate() == nil {

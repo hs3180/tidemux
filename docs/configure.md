@@ -98,6 +98,34 @@ loads or unloads the corresponding user LaunchAgent. `tidemux report notify`
 is the LaunchAgent entry point; it generates the current local-day report,
 delivers it, and records the delivery result.
 
+## Active session limit (0.2.0)
+
+Use `--max-active-sessions` during `configure` to cap distinct logical sessions
+for the local gateway:
+
+```sh
+tidemux configure --preset deepseek-flash \
+  --max-active-sessions 20 \
+  --active-session-idle-timeout-seconds 300
+```
+
+The default `0` for `max_active_sessions` disables this limit. The idle timeout
+defaults to 300 seconds (5 minutes); set
+`active_session_idle_timeout_seconds` to 1–86400 seconds to override it, or
+leave it at `0` to use the default. A session is identified by
+`X-TideMux-Session-ID` (or supported protocol metadata when available).
+Requests in an already admitted session share one slot. An in-flight request is
+active while it has input or output activity. A retained session is eligible for
+release only when no request is in flight and both input and output have been
+idle for the configured timeout. Streaming sessions release their slot when the
+stream completes or is canceled.
+New sessions receive HTTP 429 with the stable error code
+`active_session_limit` and `Retry-After: 1` when the cap is reached. The limit
+is a top-level, gateway-wide setting: it applies to all sessions handled by the
+process, not to an individual model or request. When a session ID is present, it
+is forwarded upstream in the `X-TideMux-Session-ID` header. In a multi-process
+deployment, each gateway instance enforces its own configured cap.
+
 ## If the login keychain is locked
 
 `configure` automatically starts the macOS `security unlock-keychain` password

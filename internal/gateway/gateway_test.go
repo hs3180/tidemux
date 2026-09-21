@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
@@ -204,6 +205,188 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("upstream calls=%d", calls)
+	}
+}
+
+func TestActiveSessionLimitRejectsNewSessionsAndAllowsExistingSession(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.MaxInFlight = 4
+	c.MaxActiveSessions = 1
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	request := func(session string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		req.Header.Set("X-TideMux-Session-ID", session)
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		return out
+	}
+	if out := request("session-a"); out.Code != 200 {
+		t.Fatalf("first request = %d: %s", out.Code, out.Body.String())
+	}
+	rejected := request("session-b")
+	if rejected.Code != 429 || rejected.Header().Get("Retry-After") != "1" || !strings.Contains(rejected.Body.String(), "active_session_limit") {
+		t.Fatalf("rejected request = %d/%s/%s", rejected.Code, rejected.Header().Get("Retry-After"), rejected.Body.String())
+	}
+	if out := request("session-a"); out.Code != 200 {
+		t.Fatalf("existing session = %d: %s", out.Code, out.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want 2", calls)
+	}
+}
+
+func TestActiveSessionConfiguredLimitEndToEnd(t *testing.T) {
+	providerCalls := 0
+	providerSessions := []string{}
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls++
+		providerSessions = append(providerSessions, r.Header.Get(adapter.SessionIDHeader))
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer provider.Close()
+
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), provider.URL)
+	c.MaxInFlight = 2
+	c.MaxActiveSessions = 1
+	c.ActiveSessionIdleTimeoutSeconds = 1
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	gatewayServer := httptest.NewServer(h)
+	defer gatewayServer.Close()
+
+	request := func(session string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, gatewayServer.URL+endpoint("openai"), strings.NewReader(requestBody("openai")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer local-secret")
+		req.Header.Set(adapter.SessionIDHeader, session)
+		resp, err := gatewayServer.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	if status := request("session-a"); status != http.StatusOK {
+		t.Fatalf("first request status = %d", status)
+	}
+	if status := request("session-b"); status != http.StatusTooManyRequests {
+		t.Fatalf("blocked request status = %d", status)
+	}
+	if providerCalls != 1 || len(providerSessions) != 1 || providerSessions[0] != "session-a" {
+		t.Fatalf("provider calls=%d sessions=%v", providerCalls, providerSessions)
+	}
+
+	time.Sleep(1200 * time.Millisecond)
+	if status := request("session-b"); status != http.StatusOK {
+		t.Fatalf("request after configured idle timeout status = %d", status)
+	}
+	if providerCalls != 2 || len(providerSessions) != 2 || providerSessions[1] != "session-b" {
+		t.Fatalf("provider calls after expiry=%d sessions=%v", providerCalls, providerSessions)
+	}
+}
+
+func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
+	for _, scenario := range []string{"failed", "stream"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if scenario == "failed" && calls == 1 {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				if scenario == "stream" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n")
+					return
+				}
+				io.WriteString(w, responseBody("openai"))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+			c.MaxActiveSessions = 1
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			request := func(session string, stream bool) *httptest.ResponseRecorder {
+				body := requestBody("openai")
+				if stream {
+					body = strings.TrimSuffix(body, "}") + `,"stream":true}`
+				}
+				req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer local-secret")
+				req.Header.Set("X-TideMux-Session-ID", session)
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				return out
+			}
+			first := request("session-a", scenario == "stream")
+			wantFirst := 502
+			if scenario == "stream" {
+				wantFirst = 200
+			}
+			if first.Code != wantFirst {
+				t.Fatalf("first request = %d: %s", first.Code, first.Body.String())
+			}
+			second := request("session-b", scenario == "stream")
+			if second.Code != 200 {
+				t.Fatalf("second request = %d: %s", second.Code, second.Body.String())
+			}
+			if calls != 2 {
+				t.Fatalf("upstream calls = %d, want 2", calls)
+			}
+		})
+	}
+}
+
+func TestSessionIDIsForwardedToProvider(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get(adapter.SessionIDHeader); got != "provider-session" {
+					t.Errorf("provider session header = %q", got)
+				}
+				io.WriteString(w, responseBody(protocol))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+			c.Protocol = protocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(requestBody(protocol)))
+			req.Header.Set("Authorization", "Bearer local-secret")
+			req.Header.Set(adapter.SessionIDHeader, "provider-session")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+		})
 	}
 }
 

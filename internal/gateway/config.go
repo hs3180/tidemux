@@ -31,24 +31,26 @@ type SecretLookup interface {
 }
 
 type Config struct {
-	Budget              ledger.BudgetPolicy      `json:"budget,omitempty"`
-	Reconciliation      ReconciliationConfig     `json:"reconciliation,omitempty"`
-	ReportSchedule      ReportSchedule           `json:"report_schedule,omitempty"`
-	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
-	Limits              adapter.Limits           `json:"limits,omitempty"`
-	ListenAddr          string                   `json:"listen_addr"`
-	Protocol            string                   `json:"protocol"`
-	BaseURL             string                   `json:"base_url"`
-	Model               string                   `json:"model"`
-	UpstreamID          string                   `json:"upstream_id"`
-	APIVersion          string                   `json:"anthropic_version,omitempty"`
-	UpstreamKeychain    KeychainReference        `json:"upstream_keychain"`
-	AccessTokenKeychain KeychainReference        `json:"access_token_keychain"`
-	MaxInFlight         int                      `json:"max_in_flight"`
-	LedgerPath          string                   `json:"ledger_path"`
-	Prices              map[string]adapter.Price `json:"prices,omitempty"`
-	APIKey              string                   `json:"-"`
-	AccessToken         string                   `json:"-"`
+	Budget                          ledger.BudgetPolicy      `json:"budget,omitempty"`
+	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
+	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
+	ModelCapabilities               ModelCapabilities        `json:"model_capabilities,omitempty"`
+	Limits                          adapter.Limits           `json:"limits,omitempty"`
+	ListenAddr                      string                   `json:"listen_addr"`
+	Protocol                        string                   `json:"protocol"`
+	BaseURL                         string                   `json:"base_url"`
+	Model                           string                   `json:"model"`
+	UpstreamID                      string                   `json:"upstream_id"`
+	APIVersion                      string                   `json:"anthropic_version,omitempty"`
+	UpstreamKeychain                KeychainReference        `json:"upstream_keychain"`
+	AccessTokenKeychain             KeychainReference        `json:"access_token_keychain"`
+	MaxInFlight                     int                      `json:"max_in_flight"`
+	MaxActiveSessions               int                      `json:"max_active_sessions,omitempty"`
+	ActiveSessionIdleTimeoutSeconds int                      `json:"active_session_idle_timeout_seconds,omitempty"`
+	LedgerPath                      string                   `json:"ledger_path"`
+	Prices                          map[string]adapter.Price `json:"prices,omitempty"`
+	APIKey                          string                   `json:"-"`
+	AccessToken                     string                   `json:"-"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -127,6 +129,12 @@ func (c Config) Validate() error {
 	}
 	if c.MaxInFlight < 1 || c.MaxInFlight > 1024 {
 		return errors.New("max_in_flight must be 1..1024")
+	}
+	if c.MaxActiveSessions < 0 || c.MaxActiveSessions > 4096 {
+		return errors.New("max_active_sessions must be 0..4096")
+	}
+	if c.ActiveSessionIdleTimeoutSeconds < 0 || c.ActiveSessionIdleTimeoutSeconds > 86400 {
+		return errors.New("active_session_idle_timeout_seconds must be 0..86400; zero uses the five-minute default")
 	}
 	if strings.TrimSpace(c.LedgerPath) == "" {
 		return errors.New("ledger_path is required")
