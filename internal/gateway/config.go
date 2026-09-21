@@ -29,9 +29,11 @@ func (r KeychainReference) Validate(name string) error {
 type SecretLookup interface {
 	Lookup(context.Context, KeychainReference) (string, error)
 }
+
 type Config struct {
 	Budget              ledger.BudgetPolicy      `json:"budget,omitempty"`
 	Reconciliation      ReconciliationConfig     `json:"reconciliation,omitempty"`
+	ReportSchedule      ReportSchedule           `json:"report_schedule,omitempty"`
 	ModelCapabilities   ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits              adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr          string                   `json:"listen_addr"`
@@ -75,6 +77,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.Reconciliation.Validate(); err != nil {
+		return err
+	}
+	if err := c.ReportSchedule.Validate(); err != nil {
 		return err
 	}
 	if err := c.ModelCapabilities.Validate(); err != nil {

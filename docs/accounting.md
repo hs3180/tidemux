@@ -284,6 +284,68 @@ Pre-release budget tables and fields are not migrated automatically. A profile
 using the old budget schema must be replaced with the new configuration before
 the budget feature can be used.
 
+## Daily reports and delivery
+
+`tidemux report generate --config /absolute/path/to/profile.json` writes a
+content-free report for the current day; `--date YYYY-MM-DD` regenerates a
+specific local-date view and `report list` reads persisted history. A report
+contains counts, token totals and local estimates. If reconciliation or budget
+tables exist, it reads those optional data sources without owning their migrations.
+Unavailable extensions are `null`, not zero. Use `--timezone` (default UTC) and,
+for a budget remainder, `--daily-budget N --budget-currency USD`; these are
+reporting inputs and do not enforce a gateway budget. It never includes request text,
+response text or API keys.
+
+For a calendar day with zero requests, estimated cost is shown as `0`; unknown
+cost is reserved for recorded requests whose cost cannot be estimated.
+
+Create an offline, self-contained visual report with:
+
+```sh
+tidemux report export --config /absolute/path/to/profile.json \
+  --days 30 --timezone Asia/Shanghai
+```
+
+The HTML file contains summary cards, inline SVG charts for daily requests and
+estimated cost, and a daily detail table. It has no network or JavaScript
+dependency, is written with private file permissions, and is saved by default
+as `reports/latest.html` beside the configured ledger. Run
+`tidemux report open` to open that latest report in the default browser. Use
+`--output /absolute/path/to/tidemux-report.html` for another destination or
+`--open` to open an export immediately. The export reads a date range without
+creating persisted daily-report rows.
+
+`tidemux report deliver --id N --channel macos` refreshes the default HTML
+report and sends a macOS notification whose click target is that file when
+`terminal-notifier` is installed:
+
+```sh
+brew install terminal-notifier
+```
+
+Without it, TideMux keeps using the built-in AppleScript notification and
+includes `tidemux report open` as the short fallback. `report retry` retries a
+recorded failed delivery. On the first clickable delivery, TideMux lets
+macOS ask for notification permission; if macOS reports that notifications
+are blocked, it opens the notification settings page automatically. SMTP
+delivery is intentionally deferred; this release supports macOS
+Notification Center only.
+
+The initial `tidemux configure` flow asks for an optional daily notification
+time in local time. The same setting can be managed from the command line:
+
+```sh
+tidemux report schedule --time 09:00
+tidemux report schedule --disable
+```
+
+TideMux stores the schedule in `report_schedule` and installs a private,
+per-profile user `launchd` agent. The agent runs `tidemux report notify`, which
+generates the current local-day report, exports the clickable HTML report and
+delivers the configured notification. If the Mac is asleep or offline,
+`launchd` runs the job at its next opportunity; TideMux records only the actual
+generated report and does not fabricate a missed balance snapshot.
+
 ## Legacy data
 
 The `ledger` command has been removed. Update scripts to use

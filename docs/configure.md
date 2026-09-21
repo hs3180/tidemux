@@ -48,8 +48,12 @@ replace it with the new schema using `tidemux budget` or recreate it with
 `tidemux configure --replace`.
 
 1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
-   `deepseek-flash`. At **API key (hidden)**, paste your DeepSeek key and press Enter.
-   Nothing appears while entering the key; this is expected.
+   `deepseek-flash`. Before the **API key (hidden)** prompt, TideMux asks for a
+   daily report notification time in local time (`HH:MM`). Enter a time to enable
+   scheduled notifications, or press Enter to leave them disabled. At the API-key
+   prompt, paste your DeepSeek key and press Enter. Nothing appears while entering
+   the key; this is expected. When enabled, TideMux installs a private per-profile
+   macOS LaunchAgent for the notification.
 2. It generates a gateway token, stores both credentials under unique accounts
    in your login Keychain, creates the state directory, and saves a mode-0600
    configuration containing only references. It verifies read-back and directory
@@ -71,6 +75,29 @@ records. The output shows exact RFC3339 date bounds; `--from` and `--to` select
 another period. Add `--json` for structured
 output, or `--download billing.csv` to save the selected period's billing details.
 
+The notification choice can also be supplied on the initial configure command:
+
+```sh
+tidemux configure --preset deepseek-flash --notification-time 09:00
+```
+
+The time uses the Mac's local timezone, and scheduled notifications use macOS
+Notification Center.
+
+To change the schedule of an existing profile without replacing its API-key
+references:
+
+```sh
+tidemux report schedule --time 09:00
+tidemux report schedule --disable
+```
+
+Use `--config /absolute/path/to/profile.json` for a non-default profile. The
+schedule command updates the JSON atomically, keeps a mode-0600 backup, and
+loads or unloads the corresponding user LaunchAgent. `tidemux report notify`
+is the LaunchAgent entry point; it generates the current local-day report,
+delivers it, and records the delivery result.
+
 ## If the login keychain is locked
 
 `configure` automatically starts the macOS `security unlock-keychain` password
@@ -81,8 +108,9 @@ There is no separate command to copy or rerun.
    (usually your Mac login password), **not** your API key. Input is hidden.
    The system utility reads this password directly; TideMux never receives it
    and never passes it through a command argument, environment variable or file.
-2. After unlocking, TideMux displays **API key (hidden)**. Paste the API key here
-   and press Enter. These are two different prompts for two different secrets.
+2. After unlocking, TideMux asks for the optional daily notification time and then
+   displays **API key (hidden)**. Paste the API key here and press Enter. These are
+   separate prompts for the schedule setting and the upstream secret.
 3. Wrong password, cancellation or an unavailable keychain stops setup before
    collecting the API key or changing configuration. Press Control-C to cancel.
 

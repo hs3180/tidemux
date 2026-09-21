@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>TideMux report: {{.StartDay}} to {{.EndDay}}</title>
+  <style>{{.CSS}}</style>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">TideMux · local usage</p>
+        <h1>Daily report</h1>
+        <p class="period">{{.StartDay}} – {{.EndDay}} · {{.Timezone}}</p>
+      </div>
+      <div class="generated">Generated {{.GeneratedAt}}</div>
+    </header>
+
+    <section class="cards" aria-label="Summary">
+      <article class="card accent-blue">
+        <span>Requests</span>
+        <strong>{{.TotalRequests}}</strong>
+        <small>{{.TotalFailures}} failures</small>
+      </article>
+      <article class="card accent-teal">
+        <span>Tokens</span>
+        <strong>{{.TotalInputTokens}} / {{.TotalOutputTokens}}</strong>
+        <small>input / output</small>
+      </article>
+      <article class="card accent-amber">
+        <span>Estimated cost</span>
+        <strong>{{.EstimatedCost}}</strong>
+        <small>{{.UnknownCostRequests}} requests with unknown cost</small>
+      </article>
+    </section>
+
+    {{if .HasUnknownCost}}
+    <aside class="notice" role="status">
+      Some local costs are unknown. The report keeps them visible instead of treating them as zero.
+    </aside>
+    {{end}}
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Activity</p>
+          <h2>Requests per day</h2>
+        </div>
+        <div class="legend"><span class="swatch requests"></span> requests <span class="swatch failures"></span> failures</div>
+      </div>
+      <svg class="chart" viewBox="0 0 960 250" role="img" aria-label="Requests and failures by day">
+        <line class="grid" x1="48" y1="35" x2="948" y2="35"></line>
+        <line class="grid" x1="48" y1="122" x2="948" y2="122"></line>
+        <line class="axis" x1="48" y1="210" x2="948" y2="210"></line>
+        <text class="axis-label" x="12" y="39">{{.RequestMaxLabel}}</text>
+        <text class="axis-label" x="28" y="214">0</text>
+        {{range .RequestBars}}
+        <g>
+          <title>{{.Tooltip}}</title>
+          <rect class="bar requests" x="{{.X}}" y="{{.Y}}" width="{{.Width}}" height="{{.Height}}" rx="3"></rect>
+          <rect class="bar failures" x="{{.X}}" y="{{.FailureY}}" width="{{.Width}}" height="{{.FailureHeight}}" rx="3"></rect>
+        </g>
+        {{end}}
+      </svg>
+      <div class="chart-labels"><span>{{.StartDay}}</span><span>{{.EndDay}}</span></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Cost</p>
+          <h2>Estimated cost per day</h2>
+        </div>
+        {{if .CostChartAvailable}}<div class="legend"><span class="swatch cost"></span> {{.Currency}}</div>{{end}}
+      </div>
+      {{if .CostChartAvailable}}
+      <svg class="chart" viewBox="0 0 960 250" role="img" aria-label="Estimated cost by day">
+        <line class="grid" x1="48" y1="35" x2="948" y2="35"></line>
+        <line class="grid" x1="48" y1="122" x2="948" y2="122"></line>
+        <line class="axis" x1="48" y1="210" x2="948" y2="210"></line>
+        <text class="axis-label" x="4" y="39">{{.CostMaxLabel}}</text>
+        <text class="axis-label" x="28" y="214">0</text>
+        {{range .CostBars}}
+        <g>
+          <title>{{.Tooltip}}</title>
+          <rect class="bar cost" x="{{.X}}" y="{{.Y}}" width="{{.Width}}" height="{{.Height}}" rx="3"></rect>
+        </g>
+        {{end}}
+      </svg>
+      <div class="chart-labels"><span>{{.StartDay}}</span><span>{{.EndDay}}</span></div>
+      {{else}}
+      <p class="empty">{{.CostChartDescription}}</p>
+      {{end}}
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Details</p>
+          <h2>Daily breakdown</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Requests</th>
+              <th>Failures</th>
+              <th>Input</th>
+              <th>Output</th>
+              <th>Estimated cost</th>
+              <th>Tokenizer mismatches</th>
+              <th>Unmatched statements</th>
+              <th>Balance change</th>
+              <th>Budget remaining</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Rows}}
+            <tr>
+              <td class="date">{{.Day}}</td>
+              <td>{{.RequestCount}}</td>
+              <td>{{.FailureCount}}</td>
+              <td>{{.InputTokens}}</td>
+              <td>{{.OutputTokens}}</td>
+              <td>{{.EstimatedCost}}</td>
+              <td>{{.TokenizerMismatches}}</td>
+              <td>{{.UnmatchedStatements}}</td>
+              <td>{{.BalanceNetChange}}</td>
+              <td>{{.BudgetRemaining}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>Generated locally by TideMux. This file contains aggregate usage data and should be kept private.</footer>
+  </main>
+</body>
+</html>
