@@ -18,6 +18,8 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
+const macOSNotificationSettingsURL = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+
 func report(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
 		return errors.New(usage)
@@ -200,7 +202,14 @@ func notifyMacOS(subject, body, reportPath string) error {
 	}
 	if notifier, ok := findTerminalNotifier(); ok {
 		fileURL := (&url.URL{Scheme: "file", Path: reportPath}).String()
-		if err := exec.Command(notifier, "-title", subject, "-message", body, "-open", fileURL, "-group", "tidemux-daily-report").Run(); err != nil {
+		output, err := exec.Command(notifier, "-title", subject, "-message", body, "-open", fileURL, "-group", "tidemux-daily-report").CombinedOutput()
+		if err != nil {
+			if notificationPermissionError(output) {
+				if settingsErr := openMacOSNotificationSettings(); settingsErr != nil {
+					return fmt.Errorf("send clickable macOS notification: %w (could not open notification settings: %v)", err, settingsErr)
+				}
+				return fmt.Errorf("send clickable macOS notification: %w (notification settings opened)", err)
+			}
 			return fmt.Errorf("send clickable macOS notification: %w", err)
 		}
 		return nil
@@ -209,10 +218,26 @@ func notifyMacOS(subject, body, reportPath string) error {
 	// notification API cannot attach a click target. Keep the existing
 	// notification path and make the one-command fallback visible to users.
 	fallback := body + " Open with: tidemux report open."
-	if err := exec.Command("osascript", "-e", fmt.Sprintf("display notification %s with title %s", appleQuote(fallback), appleQuote(subject))).Run(); err != nil {
+	output, err := exec.Command("osascript", "-e", fmt.Sprintf("display notification %s with title %s", appleQuote(fallback), appleQuote(subject))).CombinedOutput()
+	if err != nil {
+		if notificationPermissionError(output) {
+			if settingsErr := openMacOSNotificationSettings(); settingsErr != nil {
+				return fmt.Errorf("send macOS notification: %w (could not open notification settings: %v)", err, settingsErr)
+			}
+			return fmt.Errorf("send macOS notification: %w (notification settings opened)", err)
+		}
 		return fmt.Errorf("send macOS notification: %w", err)
 	}
 	return nil
+}
+
+func notificationPermissionError(output []byte) bool {
+	message := strings.ToLower(string(output))
+	return strings.Contains(message, "not allowed") || strings.Contains(message, "not authorized") || strings.Contains(message, "permission")
+}
+
+func openMacOSNotificationSettings() error {
+	return exec.Command("open", macOSNotificationSettingsURL).Run()
 }
 
 func findTerminalNotifier() (string, bool) {

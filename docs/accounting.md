@@ -322,8 +322,11 @@ brew install terminal-notifier
 
 Without it, TideMux keeps using the built-in AppleScript notification and
 includes `tidemux report open` as the short fallback. `report retry` retries a
-recorded failed delivery. Optional SMTP uses this config, with the Keychain
-item containing `username:password` rather than a plaintext secret in JSON:
+recorded failed delivery. On the first clickable delivery, TideMux lets
+macOS ask for notification permission; if macOS reports that notifications
+are blocked, it opens the notification settings page automatically. Optional
+SMTP uses this config, with the Keychain item containing `username:password`
+rather than a plaintext secret in JSON:
 
 ```json
 "smtp": {

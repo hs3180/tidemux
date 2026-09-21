@@ -168,6 +168,33 @@ func containsReportNotificationArgs(args []string, reportPath string) bool {
 	return false
 }
 
+func TestNotifyMacOSOpensNotificationSettingsAfterPermissionFailure(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "terminal-notifier"), []byte("#!/bin/sh\nprintf '%s\\n' 'Notifications are not allowed for this application' >&2\nexit 3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	openCapture := filepath.Join(dir, "open-target")
+	if err := os.WriteFile(filepath.Join(fakeBin, "open"), []byte("#!/bin/sh\nprintf '%s' \"$1\" > \"$TIDEMUX_SETTINGS_CAPTURE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TIDEMUX_SETTINGS_CAPTURE", openCapture)
+	t.Setenv("PATH", fakeBin)
+	if err := notifyMacOS("TideMux", "Report ready", filepath.Join(dir, "report.html")); err == nil || !strings.Contains(err.Error(), "notification settings opened") {
+		t.Fatalf("notifyMacOS error = %v, want permission recovery", err)
+	}
+	target, err := os.ReadFile(openCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(target) != macOSNotificationSettingsURL {
+		t.Fatalf("settings target = %q, want %q", target, macOSNotificationSettingsURL)
+	}
+}
+
 func runReportTest(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
 	stdout, err := os.CreateTemp(t.TempDir(), "stdout-*")
