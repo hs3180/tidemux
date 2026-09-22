@@ -6,8 +6,8 @@ import argparse, datetime, json, pathlib, sqlite3, subprocess, urllib.request
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--config',required=True);ap.add_argument('--disable-thinking',action='store_true');ap.add_argument('--output',required=True);ap.add_argument('--openai-token-limit-field',choices=['max_tokens','max_completion_tokens'],default='max_tokens');args=ap.parse_args()
-    c=json.loads(pathlib.Path(args.config).read_text());protocol=c['protocol']
-    if protocol not in ('openai','anthropic'):raise SystemExit('Unsupported protocol')
+    c=json.loads(pathlib.Path(args.config).read_text());protocol=c.get('protocol','auto')
+    if protocol not in ('','auto','openai','anthropic'):raise SystemExit('Unsupported protocol')
     ref=c['access_token_keychain']
     secret=subprocess.run(['security','find-generic-password','-s',ref['service'],'-a',ref['account'],'-w'],capture_output=True)
     if secret.returncode:raise SystemExit('Gateway Keychain item unavailable')
