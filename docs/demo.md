@@ -50,8 +50,8 @@ replacing it. Set:
   `https://your-endpoint.example/api/v1`. TideMux appends `/chat/completions` or
   `/messages` exactly once. Trailing slashes are ignored. HTTPS is required
   except for numeric loopback HTTP. URLs cannot contain credentials/query/fragment.
-- `listen_addr`: defaults to `127.0.0.1:8787` for loopback-only access. Set it
-  to exactly `0.0.0.0:8787` to bind all IPv4 interfaces; other non-loopback IPs
+- `listen_addr`: defaults to `127.0.0.1:4000` for loopback-only access. Set it
+  to exactly `0.0.0.0:4000` to bind all IPv4 interfaces; other non-loopback IPs
   are rejected.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
@@ -83,11 +83,11 @@ network.
 
 ## Request and inspect
 
-Configure your HTTP client with the local gateway token (not the upstream key):
+Configure your HTTP client with the gateway API key/token (not the upstream key):
 
-- OpenAI: `POST http://127.0.0.1:8787/v1/chat/completions`, Bearer authentication,
+- OpenAI: `POST http://127.0.0.1:4000/v1/chat/completions`, Bearer authentication,
   body `{"model":"your-model","messages":[{"role":"user","content":"Hi"}]}`.
-- Anthropic: `POST http://127.0.0.1:8787/v1/messages`, Bearer or `x-api-key`
+- Anthropic: `POST http://127.0.0.1:4000/v1/messages`, Bearer or `x-api-key`
   authentication with the **local token**, body
   `{"model":"your-model","max_tokens":16,"messages":[{"role":"user","content":"Hi"}]}`.
 

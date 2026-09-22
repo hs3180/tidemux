@@ -1,5 +1,5 @@
 {
-  "listen_addr": "127.0.0.1:8787",
+  "listen_addr": "127.0.0.1:4000",
   "protocol": "anthropic",
   "base_url": "https://api.anthropic.com/v1",
   "model": "replace-with-your-model-id",

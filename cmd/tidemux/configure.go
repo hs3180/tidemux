@@ -28,6 +28,8 @@ type secretWriter interface {
 	Delete(context.Context, gateway.KeychainReference) error
 }
 
+const defaultListenAddr = "127.0.0.1:4000"
+
 func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -43,7 +45,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
-	listen := flags.String("listen", "127.0.0.1:8787", "IP:port (loopback by default)")
+	listen := flags.String("listen", defaultListenAddr, "IP:port (loopback by default)")
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
 	maxSessions := flags.Int("max-active-sessions", 0, "maximum active logical sessions; zero disables the limit")
 	sessionIdleTimeout := flags.Int("active-session-idle-timeout-seconds", 0, "idle time before releasing a retained session in seconds; zero uses the five-minute default")
@@ -162,13 +164,31 @@ func configure(args []string, stdout, stderr *os.File) error {
 			secret[i] = 0
 		}
 	}()
-	if err = saveConfiguration(abs, c, string(secret), *replace, gateway.MacOSKeychain{}); err != nil {
+	var gatewaySecret []byte
+	if !isLoopbackListenAddr(c.ListenAddr) {
+		fmt.Fprint(tty, "Gateway API key (hidden; use a separate value): ")
+		gatewaySecret, err = term.ReadPassword(int(tty.Fd()))
+		fmt.Fprintln(tty)
+		defer func() {
+			for i := range gatewaySecret {
+				gatewaySecret[i] = 0
+			}
+		}()
+		if err != nil {
+			return errors.New("could not read gateway API key")
+		}
+	}
+	if err = saveConfiguration(abs, c, string(secret), gatewaySecret, *replace, gateway.MacOSKeychain{}); err != nil {
 		return err
 	}
 	if _, err := syncReportSchedule(abs, c.ReportSchedule); err != nil {
 		return fmt.Errorf("configuration saved, but scheduled notification setup failed: %w", err)
 	}
-	fmt.Fprintln(stdout, "Configured. API key and generated gateway token are stored in macOS Keychain.")
+	if isLoopbackListenAddr(c.ListenAddr) {
+		fmt.Fprintln(stdout, "Configured. API key and generated gateway token are stored in macOS Keychain.")
+	} else {
+		fmt.Fprintln(stdout, "Configured. Provider API key and gateway API key are stored in macOS Keychain.")
+	}
 	if *replace {
 		fmt.Fprintln(stdout, "If a config was replaced, its exact backup is beside it as <config>.backup-<id>; old Keychain items are retained.")
 	}
@@ -213,9 +233,15 @@ func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, sour
 	prices[model] = price
 	return prices, nil
 }
-func saveConfiguration(path string, c gateway.Config, secret string, replace bool, store secretWriter) error {
+func saveConfiguration(path string, c gateway.Config, secret string, gatewaySecret []byte, replace bool, store secretWriter) error {
 	if strings.TrimSpace(secret) == "" || strings.ContainsAny(secret, "\r\n\x00") {
 		return errors.New("API key is empty or contains invalid characters")
+	}
+	if !isLoopbackListenAddr(c.ListenAddr) && len(bytes.TrimSpace(gatewaySecret)) == 0 {
+		return errors.New("external listening requires a gateway API key")
+	}
+	if len(gatewaySecret) > 0 && (strings.ContainsAny(string(gatewaySecret), "\r\n\x00") || string(gatewaySecret) == secret) {
+		return errors.New("gateway API key must be distinct and contain no line breaks")
 	}
 	if _, err := os.Lstat(path); err == nil && !replace {
 		return errors.New("config already exists")
@@ -236,10 +262,18 @@ func saveConfiguration(path string, c gateway.Config, secret string, replace boo
 		return errors.New("cannot generate credential reference")
 	}
 	account := hex.EncodeToString(nonce)
-	token := make([]byte, 32)
-	if _, err := rand.Read(token); err != nil {
-		return errors.New("cannot generate gateway token")
+	token := append([]byte(nil), gatewaySecret...)
+	if len(token) == 0 {
+		token = make([]byte, 32)
+		if _, err := rand.Read(token); err != nil {
+			return errors.New("cannot generate gateway token")
+		}
 	}
+	defer func() {
+		for i := range token {
+			token[i] = 0
+		}
+	}()
 	c.UpstreamKeychain = gateway.KeychainReference{Service: "com.tidemux." + c.Protocol, Account: account}
 	c.AccessTokenKeychain = gateway.KeychainReference{Service: "com.tidemux.gateway", Account: account}
 	if err := c.Validate(); err != nil {
@@ -290,7 +324,11 @@ func saveConfiguration(path string, c gateway.Config, secret string, replace boo
 		return errors.New("cannot save API key in Keychain; unlock your login keychain and try again")
 	}
 	created = append(created, c.UpstreamKeychain)
-	if err = store.StoreNew(ctx, c.AccessTokenKeychain, hex.EncodeToString(token)); err != nil {
+	gatewayCredential := hex.EncodeToString(token)
+	if len(gatewaySecret) > 0 {
+		gatewayCredential = string(token)
+	}
+	if err = store.StoreNew(ctx, c.AccessTokenKeychain, gatewayCredential); err != nil {
 		return errors.New("cannot save local gateway credential")
 	}
 	created = append(created, c.AccessTokenKeychain)

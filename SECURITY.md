@@ -17,8 +17,9 @@ macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 
 - The gateway binds a loopback IP and requires a local Bearer token by default.
   Setting `listen_addr` to `0.0.0.0` enables all-interface LAN access and emits a
-  warning; this mode is plain HTTP and must be protected by a trusted network,
-  firewall, and preferably a TLS-terminating reverse proxy.
+  warning; configure requires a separate Gateway API key for this mode. It is
+  plain HTTP and must be protected by a trusted network, firewall, and preferably
+  a TLS-terminating reverse proxy.
 - Provider and gateway credentials are read from macOS Keychain references.
 - Configuration does not serialize runtime credentials. Errors avoid exposing
   upstream response bodies; full prompts and responses are not persisted.

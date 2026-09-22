@@ -54,12 +54,13 @@ replace it with the new schema using `tidemux budget` or recreate it with
    prompt, paste your DeepSeek key and press Enter. Nothing appears while entering
    the key; this is expected. When enabled, TideMux installs a private per-profile
    macOS LaunchAgent for the notification.
-2. It generates a gateway token, stores both credentials under unique accounts
-   in your login Keychain, creates the state directory, and saves a mode-0600
-   configuration containing only references. It verifies read-back and directory
-   access. This step makes **no API request**.
+2. In loopback mode it generates a gateway token; in external mode it asks for a
+   separate hidden Gateway API key. It stores both credentials under unique
+   accounts in your login Keychain, creates the state directory, and saves a
+   mode-0600 configuration containing only references. It verifies read-back and
+   directory access. This step makes **no API request**.
 3. `doctor` confirms local readiness. By default, `serve` listens only at
-   `127.0.0.1:8787`; keep this terminal open. Stop with Control-C.
+   `127.0.0.1:4000`; keep this terminal open. Stop with Control-C.
 
 Default files:
 
@@ -92,13 +93,17 @@ listen address to `0.0.0.0`:
 
 ```sh
 tidemux configure --preset deepseek-flash \
-  --listen 0.0.0.0:8787
+  --listen 0.0.0.0:4000
 ```
 
-`127.0.0.1:8787` (or another loopback IP) keeps the gateway local;
-`0.0.0.0:8787` binds all IPv4 interfaces. Other non-loopback IPs are rejected.
+`127.0.0.1:4000` (or another loopback IP) keeps the gateway local;
+`0.0.0.0:4000` binds all IPv4 interfaces. Other non-loopback IPs are rejected.
 The selected address is persisted in `listen_addr`, and existing profiles remain
 loopback-only.
+
+External mode also asks for a separate hidden **Gateway API key**. This key is
+used by remote clients and must not be the same as the upstream provider key.
+Loopback mode continues to generate a local gateway token automatically.
 
 TideMux prints a warning when external access is configured or started. The
 gateway still requires its local Bearer token, but the service is plain HTTP:
