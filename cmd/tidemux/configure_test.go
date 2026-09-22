@@ -37,7 +37,7 @@ func TestConfigureSavesReferencesAndRollsBack(t *testing.T) {
 		p := filepath.Join(dir, "app", "config.json")
 		m := &memorySecrets{values: map[string]string{}, fail: fail}
 		c := gateway.Config{ListenAddr: "127.0.0.1:8787", Protocol: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", UpstreamID: "deepseek", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "app", "ledger.db")}
-		err := saveConfiguration(p, c, "provider-private", false, m)
+		err := saveConfiguration(p, c, "provider-private", nil, false, m)
 		if fail {
 			if err == nil || len(m.values) != 0 {
 				t.Fatal("credentials not rolled back")
@@ -67,7 +67,7 @@ func TestConfigureSavesReferencesAndRollsBack(t *testing.T) {
 			t.Fatal("credential roundtrip")
 		}
 		before := len(m.values)
-		if saveConfiguration(p, c, "another", false, m) == nil || len(m.values) != before {
+		if saveConfiguration(p, c, "another", nil, false, m) == nil || len(m.values) != before {
 			t.Fatal("existing config overwritten")
 		}
 	}
@@ -78,7 +78,7 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	c := gateway.Config{ListenAddr: "127.0.0.1:8787", Protocol: "openai", BaseURL: "https://example.com/v1", Model: "old-model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
 	secrets := &memorySecrets{values: map[string]string{}}
-	if err := saveConfiguration(path, c, "old-secret", false, secrets); err != nil {
+	if err := saveConfiguration(path, c, "old-secret", nil, false, secrets); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
@@ -86,7 +86,7 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Model = "new-model"
-	if err := saveConfiguration(path, c, "new-secret", true, secrets); err != nil {
+	if err := saveConfiguration(path, c, "new-secret", nil, true, secrets); err != nil {
 		t.Fatal(err)
 	}
 	backups, err := filepath.Glob(path + ".backup-*")
@@ -127,7 +127,7 @@ func TestSaveConfigurationPersistsExternalListenMode(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	c := gateway.Config{ListenAddr: "0.0.0.0:8787", Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
 	secrets := &memorySecrets{values: map[string]string{}}
-	if err := saveConfiguration(path, c, "secret", false, secrets); err != nil {
+	if err := saveConfiguration(path, c, "secret", nil, false, secrets); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := gateway.LoadConfig(path)
@@ -140,6 +140,34 @@ func TestSaveConfigurationPersistsExternalListenMode(t *testing.T) {
 	resolved, err := loaded.ResolveCredentials(context.Background(), secrets)
 	if err != nil || resolved.AccessToken == "" || resolved.AccessToken == "secret" {
 		t.Fatalf("random gateway API key was not persisted in Keychain: err=%v token=%q", err, resolved.AccessToken)
+	}
+}
+
+func TestSaveConfigurationPersistsCustomGatewayKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := gateway.Config{ListenAddr: "0.0.0.0:8787", Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
+	secrets := &memorySecrets{values: map[string]string{}}
+	if err := saveConfiguration(path, c, "provider-secret", []byte("custom-gateway-key"), false, secrets); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := loaded.ResolveCredentials(context.Background(), secrets)
+	if err != nil || resolved.AccessToken != "custom-gateway-key" {
+		t.Fatalf("custom gateway API key was not persisted in Keychain: err=%v token=%q", err, resolved.AccessToken)
+	}
+}
+
+func TestSaveConfigurationRejectsInvalidCustomGatewayKey(t *testing.T) {
+	dir := t.TempDir()
+	c := gateway.Config{ListenAddr: "0.0.0.0:8787", Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
+	for _, gatewaySecret := range []string{"provider-secret", "\n", "   "} {
+		if err := saveConfiguration(filepath.Join(dir, gatewaySecret+".json"), c, "provider-secret", []byte(gatewaySecret), false, &memorySecrets{values: map[string]string{}}); err == nil {
+			t.Errorf("gateway key %q was accepted", gatewaySecret)
+		}
 	}
 }
 
