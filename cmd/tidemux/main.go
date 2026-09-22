@@ -1,4 +1,5 @@
-// TideMux is a loopback-only, local OpenAI-compatible gateway.
+// TideMux is a local OpenAI-compatible gateway; it is loopback-only unless
+// external listening is explicitly enabled in the configuration.
 package main
 
 import (
@@ -19,7 +20,7 @@ import (
 
 const (
 	version = "0.1.1"
-	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek-flash [--protocol anthropic] [--notification-time HH:MM] [--max-active-sessions N] [--active-session-idle-timeout-seconds N]\n       tidemux configure --base-url URL --model ID --pricing-input-cache-hit amount --pricing-input-cache-miss amount --pricing-output amount [--notification-time HH:MM] [--max-active-sessions N] [--active-session-idle-timeout-seconds N]\n       tidemux budget [--budget-5h amount] [--budget-weekly amount]\n       tidemux report <generate|list|export|open|deliver|retry|schedule|notify> [--config <path>] [options]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
+	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek-flash [--protocol anthropic] [--listen 0.0.0.0:4000] [--notification-time HH:MM] [--max-active-sessions N] [--active-session-idle-timeout-seconds N]\n       tidemux configure --base-url URL --model ID --pricing-input-cache-hit amount --pricing-input-cache-miss amount --pricing-output amount [--listen 0.0.0.0:4000] [--notification-time HH:MM] [--max-active-sessions N] [--active-session-idle-timeout-seconds N]\n       tidemux budget [--budget-5h amount] [--budget-weekly amount]\n       tidemux report <generate|list|export|open|deliver|retry|schedule|notify> [--config <path>] [options]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
 )
 
 func main() {
@@ -127,8 +128,13 @@ func serve(config gateway.Config, stdout *os.File) error {
 		return err
 	}
 	defer closeGateway()
-	if host, _, err := net.SplitHostPort(listener.Addr().String()); err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		return errors.New("gateway did not bind a loopback listener")
+	host, _, err := net.SplitHostPort(listener.Addr().String())
+	ip := net.ParseIP(host)
+	if err != nil || ip == nil {
+		return errors.New("gateway did not bind an IP listener")
+	}
+	if !ip.IsLoopback() {
+		fmt.Fprintf(stdout, "WARNING: external gateway access is enabled on %s; protect the network and gateway token.\n", listener.Addr())
 	}
 	fmt.Fprintf(stdout, "TideMux listening on http://%s\n", listener.Addr())
 	interrupt := make(chan os.Signal, 1)
@@ -154,4 +160,13 @@ func serve(config gateway.Config, stdout *os.File) error {
 		}
 		return err
 	}
+}
+
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

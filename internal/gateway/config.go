@@ -91,8 +91,12 @@ func (c Config) Validate() error {
 		return err
 	}
 	host, port, err := net.SplitHostPort(c.ListenAddr)
-	if err != nil || port == "" || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		return errors.New("listen_addr must use a loopback IP and port")
+	ip := net.ParseIP(host)
+	if err != nil || port == "" || ip == nil {
+		return errors.New("listen_addr must use an IP address and port")
+	}
+	if !ip.IsLoopback() && host != "0.0.0.0" {
+		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
 	if c.Protocol != "openai" && c.Protocol != "anthropic" {
 		return errors.New("protocol must be openai or anthropic")

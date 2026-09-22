@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -30,6 +31,25 @@ func responseBody(protocol string) string {
 	}
 	return `{"id":"chat1","object":"chat.completion","model":"custom-model","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`
 }
+
+func TestOpenAllowsExplicitExternalListen(t *testing.T) {
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://example.com/v1")
+	c.ListenAddr = "0.0.0.0:0"
+	listener, server, closeGateway, err := Open(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGateway()
+	if server.Handler == nil {
+		t.Fatal("server handler is nil")
+	}
+	host, _, err := net.SplitHostPort(listener.Addr().String())
+	ip := net.ParseIP(host)
+	if err != nil || ip == nil || ip.IsLoopback() {
+		t.Fatalf("listener address=%s err=%v", listener.Addr(), err)
+	}
+}
+
 func endpoint(protocol string) string {
 	if protocol == "anthropic" {
 		return "/v1/messages"
