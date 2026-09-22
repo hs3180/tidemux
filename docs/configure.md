@@ -58,8 +58,8 @@ replace it with the new schema using `tidemux budget` or recreate it with
    in your login Keychain, creates the state directory, and saves a mode-0600
    configuration containing only references. It verifies read-back and directory
    access. This step makes **no API request**.
-3. `doctor` confirms local readiness. `serve` listens at `127.0.0.1:8787`;
-   keep this terminal open. Stop with Control-C.
+3. `doctor` confirms local readiness. By default, `serve` listens only at
+   `127.0.0.1:8787`; keep this terminal open. Stop with Control-C.
 
 Default files:
 
@@ -83,6 +83,30 @@ tidemux configure --preset deepseek-flash --notification-time 09:00
 
 The time uses the Mac's local timezone, and scheduled notifications use macOS
 Notification Center.
+
+## Allow LAN clients (explicit opt-in)
+
+TideMux is loopback-only by default. To let clients on the local network reach
+the gateway, explicitly opt in during configuration and choose a non-loopback
+listen address:
+
+```sh
+tidemux configure --preset deepseek-flash \
+  --listen 192.168.1.20:8787 \
+  --allow-external
+```
+
+Use `--listen 0.0.0.0:8787` to bind all IPv4 interfaces, or prefer a specific
+LAN address when possible. The choice is persisted as `allow_external: true` in
+the profile. A non-loopback address is rejected unless that setting is enabled;
+existing profiles remain loopback-only.
+
+TideMux prints a warning when external access is configured or started. The
+gateway still requires its local Bearer token, but the service is plain HTTP:
+use a trusted network and firewall, do not expose the port directly to the
+internet, and use a TLS-terminating reverse proxy when traffic can leave the
+trusted LAN. Treat the gateway token as a bearer secret for every client that
+can reach the listener.
 
 To change the schedule of an existing profile without replacing its API-key
 references:

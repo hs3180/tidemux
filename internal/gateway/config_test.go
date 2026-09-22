@@ -50,8 +50,16 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 	}
 	bad := c
 	bad.ListenAddr = "0.0.0.0:8787"
-	if bad.Validate() == nil {
-		t.Fatal("non-loopback accepted")
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "allow_external") {
+		t.Fatalf("non-loopback validation error=%v", err)
+	}
+	bad.AllowExternal = true
+	if err := bad.Validate(); err != nil {
+		t.Fatalf("explicit external listener rejected: %v", err)
+	}
+	bad.ListenAddr = "192.168.1.10:8787"
+	if err := bad.Validate(); err != nil {
+		t.Fatalf("explicit LAN listener rejected: %v", err)
 	}
 	for _, body := range []string{`{"deepseek_api_key":"secret"}`, `{} {}`, `{"protocol":"openai","protocol":"anthropic"}`} {
 		p := filepath.Join(t.TempDir(), "config.json")

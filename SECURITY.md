@@ -15,7 +15,10 @@ macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 
 ## Current boundary
 
-- The gateway binds only a loopback IP and requires a local Bearer token.
+- The gateway binds a loopback IP and requires a local Bearer token by default.
+  An explicit `allow_external` configuration can bind a non-loopback IP for LAN
+  access and emits a warning; this mode is plain HTTP and must be protected by
+  a trusted network, firewall, and preferably a TLS-terminating reverse proxy.
 - Provider and gateway credentials are read from macOS Keychain references.
 - Configuration does not serialize runtime credentials. Errors avoid exposing
   upstream response bodies; full prompts and responses are not persisted.

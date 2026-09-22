@@ -61,6 +61,9 @@ replacing it. Set:
   after the cap is reached.
 - `active_session_idle_timeout_seconds`: optional top-level idle timeout for
   retained sessions; zero uses the five-minute default, or set 1–86400 seconds.
+- `allow_external`: optional boolean, default `false`. Set it to `true` only
+  when `listen_addr` is a non-loopback IP such as `192.168.1.20:8787` or
+  `0.0.0.0:8787`; external addresses are rejected without explicit opt-in.
 - `anthropic_version`: explicit protocol version for Anthropic, example `2023-06-01`.
 
 Do not put credentials in JSON, terminal history, logs, or source control.
@@ -74,6 +77,9 @@ Old `deepseek_*` configs are rejected; migrate to the generic example explicitly
 `doctor` checks local config, Keychain retrieval and ledger-directory write
 access. It does not contact the upstream. `serve` stays in the foreground;
 Control-C stops it. There is one configured upstream per process, no fallback.
+When `allow_external` is enabled, `serve` warns that the gateway is reachable
+from non-loopback interfaces; protect the port with a firewall and trusted
+network.
 
 ## Request and inspect
 

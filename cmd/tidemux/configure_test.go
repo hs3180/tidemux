@@ -122,6 +122,39 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 	}
 }
 
+func TestSaveConfigurationPersistsExternalListenOptIn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := gateway.Config{ListenAddr: "0.0.0.0:8787", AllowExternal: true, Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
+	secrets := &memorySecrets{values: map[string]string{}}
+	if err := saveConfiguration(path, c, "secret", false, secrets); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.AllowExternal || loaded.ListenAddr != c.ListenAddr {
+		t.Fatalf("external listen settings were not persisted: %+v", loaded)
+	}
+}
+
+func TestLoopbackListenAddress(t *testing.T) {
+	for _, test := range []struct {
+		addr     string
+		loopback bool
+	}{
+		{addr: "127.0.0.1:8787", loopback: true},
+		{addr: "[::1]:8787", loopback: true},
+		{addr: "0.0.0.0:8787", loopback: false},
+		{addr: "192.168.1.10:8787", loopback: false},
+	} {
+		if got := isLoopbackListenAddr(test.addr); got != test.loopback {
+			t.Errorf("isLoopbackListenAddr(%q)=%v, want %v", test.addr, got, test.loopback)
+		}
+	}
+}
+
 func TestConfigurePricesUsesPeakDeepSeekPreset(t *testing.T) {
 	flags, currency, source, version, cacheHit, cacheMiss, output := pricingTestFlags(t)
 	prices, err := configurePrices(flags, "deepseek-flash", "https://api.deepseek.com", "deepseek-flash", *currency, *source, *version, *cacheHit, *cacheMiss, *output)

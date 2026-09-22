@@ -43,7 +43,8 @@ func configure(args []string, stdout, stderr *os.File) error {
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
-	listen := flags.String("listen", "127.0.0.1:8787", "loopback IP:port")
+	listen := flags.String("listen", "127.0.0.1:8787", "IP:port (loopback by default)")
+	allowExternal := flags.Bool("allow-external", false, "allow clients on non-loopback interfaces to access the gateway")
 	max := flags.Int("max-in-flight", 1, "maximum simultaneous upstream requests")
 	maxSessions := flags.Int("max-active-sessions", 0, "maximum active logical sessions; zero disables the limit")
 	sessionIdleTimeout := flags.Int("active-session-idle-timeout-seconds", 0, "idle time before releasing a retained session in seconds; zero uses the five-minute default")
@@ -111,7 +112,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 		schedule = gateway.ReportSchedule{Time: normalized, Channel: "macos"}
 	}
-	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, AllowExternal: *allowExternal, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}
@@ -130,6 +131,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Protocol: %s\nAPI root: %s\nModel: %s\nConfig: %s\n", c.Protocol, c.BaseURL, c.Model, abs)
+	if c.AllowExternal && !isLoopbackListenAddr(c.ListenAddr) {
+		fmt.Fprintf(stdout, "WARNING: external gateway access is enabled on %s; protect the network and gateway token.\n", c.ListenAddr)
+	}
 	if c.Budget != (ledger.BudgetPolicy{}) {
 		fmt.Fprintf(stdout, "Budget: %g %s / 5h, %g %s / 7d (%s mode)\n", c.Budget.FiveHourLimit, c.Budget.Currency, c.Budget.WeeklyLimit, c.Budget.Currency, c.Budget.Mode)
 	}

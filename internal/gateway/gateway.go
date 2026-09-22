@@ -53,7 +53,7 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 	listener, err := net.Listen("tcp", c.ListenAddr)
 	if err != nil {
 		closeLedger()
-		return nil, nil, nil, errors.New("cannot bind loopback listener")
+		return nil, nil, nil, errors.New("cannot bind configured listener")
 	}
 	return listener, &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}, func() error { listener.Close(); return closeLedger() }, nil
 }
