@@ -81,9 +81,6 @@ func translateOpenAIRequest(data []byte, defaultModel string, maxOutputTokens in
 	if err := StrictJSON(validated, &in); err != nil {
 		return nil, "", errors.New("invalid_request")
 	}
-	if in.ReasoningEffort != "" {
-		return nil, "", errors.New("reasoning_effort")
-	}
 	out := anthropicRequest{
 		Model:       in.Model,
 		MaxTokens:   defaultAnthropicMaxTokens,

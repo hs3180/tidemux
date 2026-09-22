@@ -379,6 +379,68 @@ func TestOpenAIUnknownFieldsAreAcceptedAndNotForwarded(t *testing.T) {
 	}
 }
 
+func TestDshCompatibilityFieldsAcrossRoutes(t *testing.T) {
+	for _, providerProtocol := range []string{"openai", "anthropic"} {
+		for _, clientProtocol := range []string{"openai", "anthropic"} {
+			t.Run(clientProtocol+"-client/"+providerProtocol+"-provider", func(t *testing.T) {
+				var upstreamBody string
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, _ := io.ReadAll(r.Body)
+					upstreamBody = string(body)
+					if providerProtocol == "anthropic" {
+						if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != "2023-06-01" || r.Header.Get("Authorization") != "" {
+							t.Errorf("Anthropic authentication = %q/%q/%q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"), r.Header.Get("Authorization"))
+						}
+					} else if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("x-api-key") != "" {
+						t.Errorf("OpenAI authentication = %q/%q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
+					}
+					io.WriteString(w, responseBody(providerProtocol))
+				}))
+				defer up.Close()
+
+				c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+				c.Protocol = providerProtocol
+				h, closeDB, err := NewHandler(c, up.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer closeDB()
+
+				body := `{"model":"custom-model","dsh_plugin_packages":[{"name":"demo"}],"reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]}`
+				path := "/v1/chat/completions"
+				req := httptest.NewRequest("POST", path, strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer local-secret")
+				if clientProtocol == "anthropic" {
+					body = `{"model":"custom-model","max_tokens":256,"dsh_plugin_packages":[{"name":"demo"}],"reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]}`
+					path = "/v1/messages"
+					req = httptest.NewRequest("POST", path, strings.NewReader(body))
+					req.Header.Set("x-api-key", "local-secret")
+					req.Header.Set("anthropic-version", "2023-06-01")
+				}
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				if out.Code != 200 {
+					t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+				}
+				if clientProtocol == "anthropic" && !strings.Contains(out.Body.String(), `"type":"message"`) {
+					t.Fatalf("Anthropic response=%s", out.Body.String())
+				}
+				if clientProtocol == "openai" && !strings.Contains(out.Body.String(), `"chat.completion"`) {
+					t.Fatalf("OpenAI response=%s", out.Body.String())
+				}
+				if strings.Contains(upstreamBody, `"dsh_plugin_packages"`) {
+					t.Fatalf("dsh metadata reached provider: %s", upstreamBody)
+				}
+				wantReasoning := clientProtocol == "openai" && providerProtocol == "openai"
+				gotReasoning := strings.Contains(upstreamBody, `"reasoning_effort"`)
+				if gotReasoning != wantReasoning {
+					t.Fatalf("provider reasoning_effort forwarded=%v want %v: %s", gotReasoning, wantReasoning, upstreamBody)
+				}
+			})
+		}
+	}
+}
+
 func TestValidationNeverCallsUpstream(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		t.Run(protocol, func(t *testing.T) {

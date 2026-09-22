@@ -122,6 +122,9 @@ type Input struct {
 	OutputConfig      *OutputConfig   `json:"output_config,omitempty"`
 	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"`
 	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	// dsh_plugin_packages is client-side plugin metadata. Accept it for
+	// compatibility, but never forward it to a provider.
+	DshPluginPackages json.RawMessage `json:"dsh_plugin_packages,omitempty"`
 
 	Tools             []Tool          `json:"tools,omitempty"`
 	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
@@ -212,12 +215,8 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 		}
 		return nil, "", warnings, validationError("invalid_request", param)
 	}
-	if protocol == "anthropic" && (in.ResponseFormat != nil || in.ReasoningEffort != "") {
-		param := "response_format"
-		if in.ReasoningEffort != "" {
-			param = "reasoning_effort"
-		}
-		return nil, "", warnings, validationError("invalid_request", param)
+	if protocol == "anthropic" && in.ResponseFormat != nil {
+		return nil, "", warnings, validationError("invalid_request", "response_format")
 	}
 	if in.ResponseFormat != nil {
 		f := in.ResponseFormat
@@ -337,6 +336,12 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 	// through to a provider that may not implement it.
 	for i := range in.Tools {
 		in.Tools[i].EagerInputStreaming = nil
+	}
+	// These fields are client compatibility metadata or protocol-specific
+	// options that the Anthropic wire format cannot represent.
+	in.DshPluginPackages = nil
+	if protocol == "anthropic" {
+		in.ReasoningEffort = ""
 	}
 	encoded, err := json.Marshal(in)
 	return encoded, in.Model, warnings, err
