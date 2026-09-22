@@ -63,11 +63,8 @@ func launch(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return err
 	}
-	if name == "claude" && c.Protocol != "anthropic" {
-		return errors.New("Claude Code requires an Anthropic profile; use configure --protocol anthropic --config <separate-profile.json>")
-	}
-	if (name == "kilo" || name == "kilo-ide" || name == "hermes") && c.Protocol != "openai" {
-		return errors.New("this client launcher requires an OpenAI profile; select an OpenAI --config")
+	if err := validateClientProtocol(name, c.Protocol); err != nil {
+		return err
 	}
 	binary, err := exec.LookPath(*executable)
 	if err != nil {
@@ -144,6 +141,17 @@ func launch(args []string, stdout, stderr *os.File) error {
 	}
 	return nil
 }
+
+func validateClientProtocol(name, protocol string) error {
+	if name == "claude" && protocol != "anthropic" && protocol != "both" {
+		return errors.New("Claude Code requires an Anthropic or both-protocol profile; select an appropriate --config")
+	}
+	if (name == "kilo" || name == "kilo-ide" || name == "hermes") && protocol != "openai" && protocol != "both" {
+		return errors.New("this client launcher requires an OpenAI or both-protocol profile; select an appropriate --config")
+	}
+	return nil
+}
+
 func checkClientEndpoint(ctx context.Context, url, token, model string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url+"/v1/models", nil)
 	if err != nil {
