@@ -12,12 +12,13 @@ import (
 // then apply its own documented recovery (for example unsupported JSON Schema).
 func upstreamError(resp *http.Response) *CallError {
 	if resp.StatusCode == 429 {
-		return &CallError{429, "upstream_rate_limited"}
+		return &CallError{Status: 429, Code: "upstream_rate_limited"}
 	}
 	if resp.StatusCode != 400 && resp.StatusCode != 422 {
-		return &CallError{502, "upstream_error"}
+		return &CallError{Status: 502, Code: "upstream_error"}
 	}
 	code := "upstream_invalid_request"
+	param := ""
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err == nil {
 		var envelope struct {
@@ -29,16 +30,18 @@ func upstreamError(resp *http.Response) *CallError {
 		}
 		if json.Unmarshal(raw, &envelope) == nil {
 			message := strings.ToLower(envelope.Error.Message)
+			param = envelope.Error.Param
 			unsupported := strings.Contains(message, "not support") || strings.Contains(message, "unsupported") || strings.Contains(message, "unavailable") || strings.Contains(message, "unknown parameter") || strings.Contains(message, "unrecognized") || strings.Contains(message, "extra inputs are not permitted")
 			if unsupported {
 				for _, p := range []string{"response_format", "output_config", "reasoning_effort", "thinking", "temperature", "tools", "tool_choice"} {
 					if envelope.Error.Param == p || strings.Contains(message, p) {
 						code = "unsupported_parameter_" + p
+						param = p
 						break
 					}
 				}
 			}
 		}
 	}
-	return &CallError{resp.StatusCode, code}
+	return &CallError{Status: resp.StatusCode, Code: code, Param: param}
 }

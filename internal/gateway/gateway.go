@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -77,7 +78,7 @@ type handler struct {
 	clients  map[string]*adapter.Client
 }
 
-func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string) {
+func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string, param ...string) {
 	kind := "api_error"
 	switch status {
 	case 400, 413:
@@ -91,10 +92,22 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	field := ""
+	if len(param) > 0 {
+		field = param[0]
+	}
 	if protocol == "anthropic" {
-		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": code}})
+		detail := map[string]any{"type": kind, "message": code}
+		if field != "" {
+			detail["param"] = field
+		}
+		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": detail})
 	} else {
-		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": code, "type": kind, "code": code, "param": nil}})
+		detail := map[string]any{"message": code, "type": kind, "code": code, "param": nil}
+		if field != "" {
+			detail["param"] = field
+		}
+		json.NewEncoder(w).Encode(map[string]any{"error": detail})
 	}
 }
 
@@ -161,7 +174,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
 	if err := options.Validate(protocol); err != nil {
-		h.reject(w, r, protocol, 400, err.Error())
+		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
 	defer r.Body.Close()
@@ -170,9 +183,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 413, "request_too_large")
 		return
 	}
-	body, model, err := adapter.Request(protocol, data, h.config.Model)
+	body, model, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, h.config.Model)
+	if len(ignoredFields) > 0 {
+		log.Printf("tidemux: ignored unsupported request fields protocol=%s fields=%q", protocol, ignoredFields)
+	}
 	if err != nil {
-		h.reject(w, r, protocol, 400, err.Error())
+		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
 	if options.SessionID == "" {
@@ -275,10 +291,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if id != "" {
 				w.Header().Set("X-TideMux-Request-ID", id)
 			}
-			h.fail(w, ce.Status, ce.Code, protocol)
+			h.fail(w, ce.Status, ce.Code, protocol, ce.Param)
 			return
 		}
-		payload := map[string]any{"error": map[string]string{"type": "api_error", "message": ce.Code}}
+		detail := map[string]any{"type": "api_error", "message": ce.Code}
+		if ce.Param != "" {
+			detail["param"] = ce.Param
+		}
+		payload := map[string]any{"error": detail}
 		if protocol == "anthropic" {
 			payload["type"] = "error"
 		}
@@ -294,7 +314,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ce *adapter.CallError
 		if errors.As(err, &ce) {
-			h.fail(w, ce.Status, ce.Code, protocol)
+			h.fail(w, ce.Status, ce.Code, protocol, ce.Param)
 		} else {
 			h.fail(w, 500, "internal_error", protocol)
 		}
@@ -316,7 +336,7 @@ func newRequestID() (string, error) {
 	return hex.EncodeToString(nonce), nil
 }
 
-func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string, status int, code string) {
+func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string, status int, code string, param ...string) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		h.fail(w, 500, "request_id_failed", protocol)
@@ -341,5 +361,5 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		h.fail(w, 500, "local_diagnostic_failed", protocol)
 		return
 	}
-	h.fail(w, status, code, protocol)
+	h.fail(w, status, code, protocol, param...)
 }

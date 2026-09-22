@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -39,6 +40,18 @@ func TestToolResponseAllowsNoText(t *testing.T) {
 		}
 	}
 }
+
+func TestEagerInputStreamingHintIsAcceptedAndDropped(t *testing.T) {
+	body := `{"model":"m","max_tokens":128,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"name":"read_file","input_schema":{"type":"object"},"eager_input_streaming":true}]}`
+	encoded, model, err := Request("anthropic", []byte(body), "")
+	if err != nil || model != "m" {
+		t.Fatalf("model=%q err=%v", model, err)
+	}
+	if bytes.Contains(encoded, []byte("eager_input_streaming")) {
+		t.Fatalf("client-only hint was forwarded: %s", encoded)
+	}
+}
+
 func TestMalformedToolMessagesRejected(t *testing.T) {
 	for _, body := range []string{
 		`{"messages":[{"role":"tool","content":"missing ID"}]}`,

@@ -13,6 +13,17 @@ func ptr[T any](v T) *T { return &v }
 
 // StrictJSON rejects trailing documents, duplicate keys, unknown fields and null roots.
 func StrictJSON(data []byte, dst any) error {
+	return decodeJSON(data, dst, true)
+}
+
+// LenientJSON rejects trailing documents, duplicate keys and null roots, but
+// ignores fields that are not modeled by the receiving type. API requests use
+// this mode so optional provider/client extensions remain forward-compatible.
+func LenientJSON(data []byte, dst any) error {
+	return decodeJSON(data, dst, false)
+}
+
+func decodeJSON(data []byte, dst any, rejectUnknown bool) error {
 	d := json.NewDecoder(bytes.NewReader(data))
 	var walk func() error
 	walk = func() error {
@@ -62,7 +73,9 @@ func StrictJSON(data []byte, dst any) error {
 		return errors.New("null JSON")
 	}
 	d = json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
+	if rejectUnknown {
+		d.DisallowUnknownFields()
+	}
 	return d.Decode(dst)
 }
 
@@ -136,7 +149,7 @@ func textContent(raw json.RawMessage) bool {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if StrictJSON(raw, &blocks) != nil || len(blocks) == 0 {
+	if LenientJSON(raw, &blocks) != nil || len(blocks) == 0 {
 		return false
 	}
 	for _, b := range blocks {
@@ -147,78 +160,98 @@ func textContent(raw json.RawMessage) bool {
 	return true
 }
 func Request(protocol string, data []byte, defaultModel string) ([]byte, string, error) {
+	encoded, model, _, err := RequestWithWarnings(protocol, data, defaultModel)
+	return encoded, model, err
+}
+
+// RequestWithWarnings validates and normalizes a client request. The warning
+// list contains client/provider fields that were accepted but intentionally
+// omitted from the normalized upstream request.
+func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]byte, string, []string, error) {
 	var in Input
-	if StrictJSON(data, &in) != nil {
-		return nil, "", errors.New("invalid_request")
+	if err := LenientJSON(data, &in); err != nil {
+		return nil, "", nil, validationErrorFromJSON(err)
 	}
+	warnings := ignoredRequestFields(data, in)
 	if in.Model == "" {
 		in.Model = defaultModel
 	}
 	if strings.TrimSpace(in.Model) == "" {
-		return nil, "", errors.New("model")
+		return nil, "", warnings, validationError("model", "model")
 	}
 	if in.Thinking != nil {
 		if in.Thinking.Display != "" && (protocol != "anthropic" || in.Thinking.Type == "disabled" || (in.Thinking.Display != "summarized" && in.Thinking.Display != "omitted")) {
-			return nil, "", errors.New("thinking")
+			return nil, "", warnings, validationError("thinking", "thinking.display")
 		}
 		switch in.Thinking.Type {
 		case "disabled", "adaptive":
 			if in.Thinking.BudgetTokens != nil || in.Thinking.Type == "adaptive" && protocol != "anthropic" {
-				return nil, "", errors.New("thinking")
+				return nil, "", warnings, validationError("thinking", "thinking.budget_tokens")
 			}
 		case "enabled":
 			if protocol == "anthropic" && (in.Thinking.BudgetTokens == nil || *in.Thinking.BudgetTokens < 1024) {
-				return nil, "", errors.New("thinking")
+				return nil, "", warnings, validationError("thinking", "thinking.budget_tokens")
 			}
 			if in.Thinking.BudgetTokens != nil && (*in.Thinking.BudgetTokens < 1 || *in.Thinking.BudgetTokens > 1_000_000) {
-				return nil, "", errors.New("thinking")
+				return nil, "", warnings, validationError("thinking", "thinking.budget_tokens")
 			}
 		default:
-			return nil, "", errors.New("thinking")
+			return nil, "", warnings, validationError("thinking", "thinking.type")
 		}
 	}
 	if in.StreamOptions != nil && (protocol != "openai" || !in.Stream) {
-		return nil, "", errors.New("stream_options")
+		return nil, "", warnings, validationError("stream_options", "stream_options")
 	}
 	if in.ContextManagement != nil && (protocol != "anthropic" || !object(in.ContextManagement)) {
-		return nil, "", errors.New("context_management")
+		return nil, "", warnings, validationError("context_management", "context_management")
 	}
 	if protocol == "openai" && (in.Metadata != nil || in.OutputConfig != nil) {
-		return nil, "", errors.New("invalid_request")
+		param := "metadata"
+		if in.OutputConfig != nil {
+			param = "output_config"
+		}
+		return nil, "", warnings, validationError("invalid_request", param)
 	}
 	if protocol == "anthropic" && (in.ResponseFormat != nil || in.ReasoningEffort != "") {
-		return nil, "", errors.New("invalid_request")
+		param := "response_format"
+		if in.ReasoningEffort != "" {
+			param = "reasoning_effort"
+		}
+		return nil, "", warnings, validationError("invalid_request", param)
 	}
 	if in.ResponseFormat != nil {
 		f := in.ResponseFormat
 		if f.Type == "json_schema" {
 			if f.JSONSchema == nil || f.JSONSchema.Name == "" || !object(f.JSONSchema.Schema) {
-				return nil, "", errors.New("response_format")
+				return nil, "", warnings, validationError("response_format", "response_format.json_schema")
 			}
 		} else if (f.Type != "json_object" && f.Type != "text") || f.JSONSchema != nil {
-			return nil, "", errors.New("response_format")
+			return nil, "", warnings, validationError("response_format", "response_format.type")
 		}
 	}
 	if in.OutputConfig != nil {
 		o := in.OutputConfig
 		if o.Effort != "" && o.Effort != "low" && o.Effort != "medium" && o.Effort != "high" && o.Effort != "max" {
-			return nil, "", errors.New("output_config")
+			return nil, "", warnings, validationError("output_config", "output_config.effort")
 		}
 		if o.Format != nil && (o.Format.Type != "json_schema" || !object(o.Format.Schema)) {
-			return nil, "", errors.New("output_config")
+			return nil, "", warnings, validationError("output_config", "output_config.format")
 		}
 	}
 	if in.Stream && protocol == "openai" && in.StreamOptions == nil {
 		in.StreamOptions = &StreamOptions{IncludeUsage: true}
 	}
 	if len(in.Messages) == 0 {
-		return nil, "", errors.New("messages")
+		return nil, "", warnings, validationError("messages", "messages")
 	}
-	if !validTools(protocol, in.Tools) || !validChoice(protocol, in.ToolChoice) {
-		return nil, "", errors.New("tools")
+	if !validTools(protocol, in.Tools) {
+		return nil, "", warnings, validationError("tools", "tools")
+	}
+	if !validChoice(protocol, in.ToolChoice) {
+		return nil, "", warnings, validationError("tools", "tool_choice")
 	}
 	if protocol == "anthropic" && in.ParallelToolCalls != nil {
-		return nil, "", errors.New("parallel_tool_calls")
+		return nil, "", warnings, validationError("parallel_tool_calls", "parallel_tool_calls")
 	}
 	for _, m := range in.Messages {
 		// System-role messages are a compatible-provider extension emitted by
@@ -228,61 +261,85 @@ func Request(protocol string, data []byte, defaultModel string) ([]byte, string,
 			allowed = allowed || m.Role == "system" || m.Role == "developer" || m.Role == "tool"
 		}
 		if !allowed {
-			return nil, "", errors.New("messages")
+			return nil, "", warnings, validationError("messages", "messages.role")
 		}
 		if protocol == "anthropic" && (len(m.ToolCalls) > 0 || m.ToolCallID != "" || m.ReasoningContent != nil) {
-			return nil, "", errors.New("messages")
+			return nil, "", warnings, validationError("messages", "messages")
 		}
 		if len(m.ToolCalls) > 0 && (m.Role != "assistant" || !validCalls(m.ToolCalls)) {
-			return nil, "", errors.New("tool_calls")
+			return nil, "", warnings, validationError("tool_calls", "messages.tool_calls")
 		}
 		if (m.Role == "tool") != (m.ToolCallID != "") {
-			return nil, "", errors.New("tool_call_id")
+			return nil, "", warnings, validationError("tool_call_id", "messages.tool_call_id")
 		}
 		if m.ReasoningContent != nil && m.Role != "assistant" {
-			return nil, "", errors.New("reasoning_content")
+			return nil, "", warnings, validationError("reasoning_content", "messages.reasoning_content")
 		}
 		emptyAssistant := protocol == "openai" && m.Role == "assistant" && len(m.ToolCalls) > 0 && (len(m.Content) == 0 || string(m.Content) == "null")
 		if !emptyAssistant && !messageContent(protocol, m.Role, m.Content) {
-			return nil, "", errors.New("messages")
+			return nil, "", warnings, validationError("messages", "messages.content")
 		}
 	}
-	for _, n := range []*int64{in.MaxTokens, in.MaxCompletionTokens} {
-		if n != nil && (*n < 1 || *n > 1_000_000) {
-			return nil, "", errors.New("max_tokens")
+	for _, field := range []struct {
+		name  string
+		value *int64
+	}{
+		{name: "max_tokens", value: in.MaxTokens},
+		{name: "max_completion_tokens", value: in.MaxCompletionTokens},
+	} {
+		if field.value != nil && (*field.value < 1 || *field.value > 1_000_000) {
+			return nil, "", warnings, validationError(field.name, field.name)
 		}
 	}
 	if in.Temperature != nil && (*in.Temperature < 0 || *in.Temperature > 2) {
-		return nil, "", errors.New("temperature")
+		return nil, "", warnings, validationError("temperature", "temperature")
 	}
 	if in.TopP != nil && (*in.TopP < 0 || *in.TopP > 1) {
-		return nil, "", errors.New("top_p")
+		return nil, "", warnings, validationError("top_p", "top_p")
 	}
 	if protocol == "anthropic" {
 		if in.MaxTokens == nil || in.MaxCompletionTokens != nil || len(in.Stop) > 0 {
-			return nil, "", errors.New("invalid_request")
+			param := "max_tokens"
+			if in.MaxCompletionTokens != nil {
+				param = "max_completion_tokens"
+			} else if len(in.Stop) > 0 {
+				param = "stop"
+			}
+			return nil, "", warnings, validationError("invalid_request", param)
 		}
 		if len(in.System) > 0 && !messageContent("anthropic", "system", in.System) {
-			return nil, "", errors.New("system")
+			return nil, "", warnings, validationError("system", "system")
 		}
 		if in.Temperature != nil && *in.Temperature > 1 {
-			return nil, "", errors.New("temperature")
+			return nil, "", warnings, validationError("temperature", "temperature")
 		}
 	}
 	if protocol == "openai" {
 		if len(in.System) > 0 || in.StopSequences != nil || (in.MaxTokens != nil && in.MaxCompletionTokens != nil) {
-			return nil, "", errors.New("invalid_request")
+			param := "system"
+			if in.StopSequences != nil {
+				param = "stop_sequences"
+			} else if in.MaxTokens != nil && in.MaxCompletionTokens != nil {
+				param = "max_completion_tokens"
+			}
+			return nil, "", warnings, validationError("invalid_request", param)
 		}
 		if len(in.Stop) > 0 {
 			var s string
 			var ss []string
 			if json.Unmarshal(in.Stop, &s) != nil && (json.Unmarshal(in.Stop, &ss) != nil || len(ss) < 1 || len(ss) > 4) {
-				return nil, "", errors.New("stop")
+				return nil, "", warnings, validationError("stop", "stop")
 			}
 		}
 	}
+	// pi-ai sends this optional Anthropic client hint on every tool. Accept it
+	// at the gateway boundary for client compatibility, but never pass the hint
+	// through to a provider that may not implement it.
+	for i := range in.Tools {
+		in.Tools[i].EagerInputStreaming = nil
+	}
 	encoded, err := json.Marshal(in)
-	return encoded, in.Model, err
+	return encoded, in.Model, warnings, err
 }
 
 type TokenUsage struct{ Input, Output, CacheRead, CacheWrite *int64 }

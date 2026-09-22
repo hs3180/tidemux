@@ -34,7 +34,9 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 	total := int64(0)
 	started := false
 	finished := false
-	fail := func(code string) (TokenUsage, []byte, error) { return TokenUsage{}, nil, &CallError{502, code} }
+	fail := func(code string) (TokenUsage, []byte, error) {
+		return TokenUsage{}, nil, &CallError{Status: 502, Code: code}
+	}
 	for scan.Scan() {
 		wireLine := scan.Bytes()
 		line := strings.TrimSuffix(strings.TrimSuffix(string(wireLine), "\n"), "\r")

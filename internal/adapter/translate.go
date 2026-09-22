@@ -255,7 +255,7 @@ func translateAnthropicMessages(system json.RawMessage, messages []Message) (str
 			continue
 		}
 		var blocks []contentBlock
-		if StrictJSON(message.Content, &blocks) != nil || len(blocks) == 0 {
+		if LenientJSON(message.Content, &blocks) != nil || len(blocks) == 0 {
 			return "", nil, errors.New("messages")
 		}
 		switch message.Role {
@@ -287,7 +287,7 @@ func anthropicSystemText(raw json.RawMessage) (string, error) {
 		return text, nil
 	}
 	var blocks []contentBlock
-	if StrictJSON(raw, &blocks) != nil || len(blocks) == 0 {
+	if LenientJSON(raw, &blocks) != nil || len(blocks) == 0 {
 		return "", errors.New("system")
 	}
 	texts := make([]string, 0, len(blocks))
@@ -380,7 +380,7 @@ func anthropicToolResultText(raw json.RawMessage) (string, error) {
 		return text, nil
 	}
 	var blocks []contentBlock
-	if StrictJSON(raw, &blocks) != nil || len(blocks) == 0 {
+	if LenientJSON(raw, &blocks) != nil || len(blocks) == 0 {
 		return "", errors.New("tool_result")
 	}
 	var result strings.Builder
@@ -399,7 +399,7 @@ func translateAnthropicToolChoice(raw json.RawMessage) (json.RawMessage, *bool, 
 		Name               string `json:"name"`
 		DisableParallelUse *bool  `json:"disable_parallel_tool_use,omitempty"`
 	}
-	if StrictJSON(raw, &choice) != nil {
+	if LenientJSON(raw, &choice) != nil {
 		return nil, nil, errors.New("tools")
 	}
 	var result any
@@ -441,7 +441,7 @@ func translateMessages(messages []Message) (json.RawMessage, []translatedMessage
 				continue
 			}
 			var blocks []any
-			if StrictJSON(message.Content, &blocks) != nil || len(blocks) == 0 {
+			if LenientJSON(message.Content, &blocks) != nil || len(blocks) == 0 {
 				return nil, nil, errors.New("system")
 			}
 			hasSystemBlocks = true
@@ -498,7 +498,7 @@ func translateMessageContent(message Message) (json.RawMessage, error) {
 			blocks = append(blocks, map[string]any{"type": "text", "text": text})
 		} else {
 			var existing []any
-			if StrictJSON(message.Content, &existing) != nil {
+			if LenientJSON(message.Content, &existing) != nil {
 				return nil, errors.New("messages")
 			}
 			blocks = append(blocks, existing...)
@@ -552,7 +552,7 @@ func translateToolChoice(raw json.RawMessage) (json.RawMessage, error) {
 			Name string `json:"name"`
 		} `json:"function"`
 	}
-	if StrictJSON(raw, &choice) != nil || choice.Type != "function" || choice.Function.Name == "" {
+	if LenientJSON(raw, &choice) != nil || choice.Type != "function" || choice.Function.Name == "" {
 		return nil, errors.New("tools")
 	}
 	return json.Marshal(map[string]string{"type": "tool", "name": choice.Function.Name})

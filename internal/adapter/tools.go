@@ -14,12 +14,13 @@ type Function struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 type Tool struct {
-	Type         string          `json:"type,omitempty"`
-	Function     *Function       `json:"function,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Description  string          `json:"description,omitempty"`
-	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
-	CacheControl *CacheControl   `json:"cache_control,omitempty"`
+	Type                string          `json:"type,omitempty"`
+	Function            *Function       `json:"function,omitempty"`
+	Name                string          `json:"name,omitempty"`
+	Description         string          `json:"description,omitempty"`
+	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
+	CacheControl        *CacheControl   `json:"cache_control,omitempty"`
+	EagerInputStreaming *bool           `json:"eager_input_streaming,omitempty"`
 }
 type ToolCall struct {
 	ID       string `json:"id"`
@@ -86,7 +87,7 @@ func validChoice(protocol string, raw json.RawMessage) bool {
 		} `json:"function"`
 		DisableParallel *bool `json:"disable_parallel_tool_use"`
 	}
-	if StrictJSON(raw, &c) != nil {
+	if LenientJSON(raw, &c) != nil {
 		return false
 	}
 	if protocol == "openai" {
@@ -119,7 +120,7 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 		return true
 	}
 	var blocks []contentBlock
-	if StrictJSON(raw, &blocks) != nil || len(blocks) == 0 {
+	if LenientJSON(raw, &blocks) != nil || len(blocks) == 0 {
 		return false
 	}
 	for _, b := range blocks {
