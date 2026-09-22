@@ -38,7 +38,7 @@ else:sys.exit(2)
         secret=b'synthetic-pty-secret-not-real';password=b'synthetic-login-password'
         pid,fd=pty.fork()
         if pid==0:os.execve(binary,[binary,'configure','--preset','deepseek-flash'],env)
-        captured=b'';sent=False;schedule_sent=False;unlocked=False;deadline=time.monotonic()+15;status=None
+        captured=b'';sent=False;gateway_sent=False;schedule_sent=False;unlocked=False;deadline=time.monotonic()+15;status=None
         try:
             while time.monotonic()<deadline:
                 ready,_,_=select.select([fd],[],[],0.1)
@@ -52,6 +52,8 @@ else:sys.exit(2)
                         time.sleep(0.05);os.write(fd,b'08:30\n' if mode=='success' else b'\n');schedule_sent=True
                     if not sent and b'API key (hidden' in captured:
                         time.sleep(0.05);os.write(fd,secret+b'\n');sent=True
+                    if not gateway_sent and b'Gateway API key (hidden' in captured:
+                        time.sleep(0.05);os.write(fd,b'\n');gateway_sent=True
                 done,result=os.waitpid(pid,os.WNOHANG)
                 if done:status=result;break
             if status is None:os.kill(pid,signal.SIGKILL);os.waitpid(pid,0);raise RuntimeError('configure timeout')
@@ -67,6 +69,7 @@ else:sys.exit(2)
             assert status==0, 'configure failed with synthetic Keychain'
             assert unlocked==(mode=='success'), 'unnecessary or missing unlock prompt'
             assert schedule_sent, 'missing daily report notification prompt'
+            assert gateway_sent, 'missing gateway API key prompt'
             c=json.loads(config.read_text());assert secret.decode() not in config.read_text()
             assert c['model']=='deepseek-flash' and c['base_url']=='https://api.deepseek.com'
             if mode=='success':assert c['report_schedule']=={'time':'08:30','channel':'macos'}
@@ -74,6 +77,8 @@ else:sys.exit(2)
             price=c['prices']['deepseek-flash'];assert price['version']=='deepseek-v4-pricing-2026-08-16-peak' and price['input_cache_hit_per_million']==0.006 and price['input_cache_miss_per_million']==0.3 and price['output_per_million']==1.2
             assert config.stat().st_mode & 0o777 == 0o600
             values=json.loads(db.read_text());assert len(values)==2 and secret.decode() in values.values()
+            gateway_values=[value for value in values.values() if value != secret.decode()]
+            assert len(gateway_values)==1 and len(gateway_values[0])==64, 'gateway key was not randomly generated'
             assert 'Local checks passed' in captured.decode()
             assert 'Inspect: tidemux billing\r\n' in captured.decode()
             assert 'tidemux ledger' not in captured.decode()
