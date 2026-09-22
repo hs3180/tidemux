@@ -1,36 +1,45 @@
 # Protocol support — 0.2.0 development
 
-TideMux exposes one stable OpenAI-compatible client boundary:
-`/v1/chat/completions`. The configuration's `protocol` selects the upstream
-provider wire format, either `openai` or `anthropic`; `base_url` is the single
-API root for that provider. Credentials, gateway authentication, model identity
-and the local ledger remain shared.
+TideMux exposes both client protocols simultaneously. OpenAI clients use
+`/v1/chat/completions`; Anthropic clients use `/v1/messages`. The configuration's
+`protocol` selects only the upstream provider wire format, either `openai` or
+`anthropic`; `base_url` is the single API root for that provider. Credentials,
+gateway authentication, model identity and the local ledger remain shared.
 
-| Feature | OpenAI upstream | Anthropic upstream |
+| Feature | OpenAI provider | Anthropic provider |
 | --- | --- | --- |
-| Client endpoint | `/v1/chat/completions` | `/v1/chat/completions` |
+| OpenAI client endpoint | `/v1/chat/completions` | `/v1/chat/completions` |
+| Anthropic client endpoint | `/v1/messages` | `/v1/messages` |
 | Upstream endpoint | `/chat/completions` | `/messages` |
 | Upstream credential | Bearer key | `x-api-key` |
 | Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
 | Model discovery | OpenAI-shaped `/v1/models` | OpenAI-shaped `/v1/models` |
-| Request/response | Passed through after validation | OpenAI Chat Completions translated to/from Messages |
-| Streaming | Chat Completions SSE and `[DONE]` | Messages SSE translated to Chat Completions SSE |
+| OpenAI client ↔ provider | Passed through after validation | Chat Completions translated to/from Messages |
+| Anthropic client ↔ provider | Messages translated to/from Chat Completions | Passed through after validation |
+| Streaming | Client format is preserved or translated to the selected provider format | Client format is preserved or translated to the selected provider format |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-When an Anthropic provider is configured, `/v1/messages` remains available as
-a native compatibility passthrough for Claude Code. It uses the same single
-`base_url`; it is not a second provider configuration or a second client mode.
+The two client endpoints are independent of the provider selection. For
+example, Claude Code can call `/v1/messages` while `protocol: openai` is
+configured, and an OpenAI client can call `/v1/chat/completions` while
+`protocol: anthropic` is configured. Matching pairs are passed through;
+non-matching pairs are translated. This is one provider configuration, not a
+second base URL or a `protocol: both` mode.
 
 The translation boundary covers text, system/developer instructions, tools,
 tool calls/results, stop sequences, output schemas and streaming terminal
-events. Provider-specific features that have no OpenAI equivalent remain
-explicitly unsupported rather than silently forwarded.
+events in both directions. Provider-specific features that have no equivalent
+on the other wire format remain explicitly unsupported rather than silently
+forwarded.
 
 Explicit parameters are retained; provider acceptance is not inferred from the
-model name. Anthropic-compatible system-role messages within the message list
-are preserved, including position and cache markers. Claude's observed requests
-carry a mid-conversation-system beta declaration. Providers can reject this or
-other beta features; TideMux does not change system instructions into user text.
+model name. Native Anthropic client requests can include Anthropic-compatible
+system-role messages and cache markers when the upstream is Anthropic. When the
+upstream is OpenAI, only the supported top-level system/text subset is
+translated; unsupported provider-only blocks are rejected. Claude's observed
+requests carry a mid-conversation-system beta declaration. Providers can
+reject this or other beta features; TideMux does not change system instructions
+into user text.
 
 The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
 configured provider unchanged. If active-session limiting is enabled and the

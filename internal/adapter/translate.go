@@ -11,22 +11,21 @@ import (
 const defaultAnthropicMaxTokens int64 = 4096
 
 // PrepareRequest validates the client wire format and converts it to the
-// configured provider wire format. TideMux currently exposes OpenAI's API to
-// clients while supporting either OpenAI or Anthropic upstreams.
+// configured provider wire format. Both client protocols are available at
+// the gateway boundary; the configured provider protocol only selects the
+// upstream wire format.
 func PrepareRequest(clientProtocol, providerProtocol string, data []byte, defaultModel string, maxOutputTokens int64) ([]byte, string, error) {
 	if clientProtocol == providerProtocol {
 		return data, firstNonEmpty(modelFromBody(data), defaultModel), nil
 	}
-	if clientProtocol != "openai" {
-		return nil, "", errors.New("unsupported_client_protocol")
-	}
-	if providerProtocol == "openai" {
+	switch {
+	case clientProtocol == "openai" && providerProtocol == "anthropic":
+		return translateOpenAIRequest(data, defaultModel, maxOutputTokens)
+	case clientProtocol == "anthropic" && providerProtocol == "openai":
+		return translateAnthropicRequest(data, defaultModel)
+	default:
 		return nil, "", errors.New("unsupported_protocol_translation")
 	}
-	if providerProtocol == "anthropic" {
-		return translateOpenAIRequest(data, defaultModel, maxOutputTokens)
-	}
-	return nil, "", errors.New("unsupported_provider_protocol")
 }
 
 func modelFromBody(data []byte) string {
@@ -139,6 +138,294 @@ func translateOpenAIRequest(data []byte, defaultModel string, maxOutputTokens in
 	}
 	encoded, err := json.Marshal(out)
 	return encoded, model, err
+}
+
+type translatedOpenAIRequest struct {
+	Model             string          `json:"model"`
+	Messages          []Message       `json:"messages"`
+	MaxTokens         *int64          `json:"max_tokens,omitempty"`
+	Stream            bool            `json:"stream,omitempty"`
+	Temperature       *float64        `json:"temperature,omitempty"`
+	TopP              *float64        `json:"top_p,omitempty"`
+	Stop              json.RawMessage `json:"stop,omitempty"`
+	Tools             []Tool          `json:"tools,omitempty"`
+	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	ResponseFormat    json.RawMessage `json:"response_format,omitempty"`
+	User              string          `json:"user,omitempty"`
+}
+
+func translateAnthropicRequest(data []byte, defaultModel string) ([]byte, string, error) {
+	validated, model, err := Request("anthropic", data, defaultModel)
+	if err != nil {
+		return nil, "", err
+	}
+	var in Input
+	if err := StrictJSON(validated, &in); err != nil {
+		return nil, "", errors.New("invalid_request")
+	}
+	if in.ContextManagement != nil {
+		return nil, "", errors.New("context_management")
+	}
+	if in.Thinking != nil && in.Thinking.Type != "disabled" {
+		return nil, "", errors.New("thinking")
+	}
+	system, messages, err := translateAnthropicMessages(in.System, in.Messages)
+	if err != nil {
+		return nil, "", err
+	}
+	out := translatedOpenAIRequest{
+		Model:       in.Model,
+		Messages:    messages,
+		MaxTokens:   in.MaxTokens,
+		Stream:      in.Stream,
+		Temperature: in.Temperature,
+		TopP:        in.TopP,
+	}
+	if system != "" {
+		out.Messages = append([]Message{{Role: "system", Content: json.RawMessage(strconv.Quote(system))}}, out.Messages...)
+	}
+	if len(in.StopSequences) > 0 {
+		if len(in.StopSequences) > 4 {
+			return nil, "", errors.New("stop_sequences")
+		}
+		out.Stop, err = json.Marshal(in.StopSequences)
+		if err != nil {
+			return nil, "", errors.New("stop_sequences")
+		}
+	}
+	for _, tool := range in.Tools {
+		parameters := tool.InputSchema
+		if len(parameters) == 0 {
+			parameters = json.RawMessage(`{}`)
+		}
+		out.Tools = append(out.Tools, Tool{Type: "function", Function: &Function{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  parameters,
+		}})
+	}
+	if in.ToolChoice != nil {
+		out.ToolChoice, out.ParallelToolCalls, err = translateAnthropicToolChoice(in.ToolChoice)
+		if err != nil {
+			return nil, "", errors.New("tools")
+		}
+	}
+	if in.Metadata != nil {
+		out.User = in.Metadata.UserID
+	}
+	if in.OutputConfig != nil {
+		if in.OutputConfig.Effort != "" {
+			if in.OutputConfig.Effort == "max" {
+				return nil, "", errors.New("output_config")
+			}
+			out.ReasoningEffort = in.OutputConfig.Effort
+		}
+		if in.OutputConfig.Format != nil {
+			out.ResponseFormat, err = json.Marshal(map[string]any{
+				"type": "json_schema",
+				"json_schema": map[string]any{
+					"name":   "response",
+					"schema": json.RawMessage(in.OutputConfig.Format.Schema),
+				},
+			})
+			if err != nil {
+				return nil, "", errors.New("output_config")
+			}
+		}
+	}
+	encoded, err := json.Marshal(out)
+	return encoded, model, err
+}
+
+func translateAnthropicMessages(system json.RawMessage, messages []Message) (string, []Message, error) {
+	systemText, err := anthropicSystemText(system)
+	if err != nil {
+		return "", nil, err
+	}
+	var out []Message
+	for _, message := range messages {
+		if len(message.Content) == 0 || string(message.Content) == "null" {
+			return "", nil, errors.New("messages")
+		}
+		var text string
+		if json.Unmarshal(message.Content, &text) == nil {
+			out = append(out, Message{Role: message.Role, Content: message.Content})
+			continue
+		}
+		var blocks []contentBlock
+		if StrictJSON(message.Content, &blocks) != nil || len(blocks) == 0 {
+			return "", nil, errors.New("messages")
+		}
+		switch message.Role {
+		case "assistant":
+			translated, err := translateAnthropicAssistantBlocks(blocks)
+			if err != nil {
+				return "", nil, err
+			}
+			out = append(out, translated)
+		case "user":
+			translated, err := translateAnthropicUserBlocks(blocks)
+			if err != nil {
+				return "", nil, err
+			}
+			out = append(out, translated...)
+		default:
+			return "", nil, errors.New("messages")
+		}
+	}
+	return systemText, out, nil
+}
+
+func anthropicSystemText(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text, nil
+	}
+	var blocks []contentBlock
+	if StrictJSON(raw, &blocks) != nil || len(blocks) == 0 {
+		return "", errors.New("system")
+	}
+	texts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		if block.Type != "text" || block.Text == nil {
+			return "", errors.New("system")
+		}
+		texts = append(texts, *block.Text)
+	}
+	return strings.Join(texts, "\n"), nil
+}
+
+func translateAnthropicAssistantBlocks(blocks []contentBlock) (Message, error) {
+	var text strings.Builder
+	var calls []ToolCall
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			if block.Text == nil {
+				return Message{}, errors.New("messages")
+			}
+			text.WriteString(*block.Text)
+		case "tool_use":
+			if block.ID == "" || block.Name == "" || !object(block.Input) {
+				return Message{}, errors.New("tool_calls")
+			}
+			call := ToolCall{ID: block.ID, Type: "function"}
+			call.Function.Name = block.Name
+			call.Function.Arguments = string(block.Input)
+			calls = append(calls, call)
+		default:
+			return Message{}, errors.New("messages")
+		}
+	}
+	message := Message{Role: "assistant"}
+	if text.Len() > 0 {
+		message.Content = json.RawMessage(strconv.Quote(text.String()))
+	}
+	message.ToolCalls = calls
+	return message, nil
+}
+
+func translateAnthropicUserBlocks(blocks []contentBlock) ([]Message, error) {
+	var out []Message
+	var text strings.Builder
+	hasText := false
+	flushText := func() {
+		if !hasText {
+			return
+		}
+		out = append(out, Message{Role: "user", Content: json.RawMessage(strconv.Quote(text.String()))})
+		text.Reset()
+		hasText = false
+	}
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			if block.Text == nil {
+				return nil, errors.New("messages")
+			}
+			text.WriteString(*block.Text)
+			hasText = true
+		case "tool_result":
+			flushText()
+			content, err := anthropicToolResultText(block.Content)
+			if err != nil {
+				return nil, err
+			}
+			if block.IsError != nil && *block.IsError {
+				content = "Tool error: " + content
+			}
+			out = append(out, Message{Role: "tool", ToolCallID: block.ToolUseID, Content: json.RawMessage(strconv.Quote(content))})
+		default:
+			return nil, errors.New("messages")
+		}
+	}
+	flushText()
+	if len(out) == 0 {
+		return nil, errors.New("messages")
+	}
+	return out, nil
+}
+
+func anthropicToolResultText(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text, nil
+	}
+	var blocks []contentBlock
+	if StrictJSON(raw, &blocks) != nil || len(blocks) == 0 {
+		return "", errors.New("tool_result")
+	}
+	var result strings.Builder
+	for _, block := range blocks {
+		if block.Type != "text" || block.Text == nil {
+			return "", errors.New("tool_result")
+		}
+		result.WriteString(*block.Text)
+	}
+	return result.String(), nil
+}
+
+func translateAnthropicToolChoice(raw json.RawMessage) (json.RawMessage, *bool, error) {
+	var choice struct {
+		Type               string `json:"type"`
+		Name               string `json:"name"`
+		DisableParallelUse *bool  `json:"disable_parallel_tool_use,omitempty"`
+	}
+	if StrictJSON(raw, &choice) != nil {
+		return nil, nil, errors.New("tools")
+	}
+	var result any
+	switch choice.Type {
+	case "auto", "none":
+		result = choice.Type
+	case "any":
+		result = "required"
+	case "tool":
+		if choice.Name == "" {
+			return nil, nil, errors.New("tools")
+		}
+		result = map[string]any{"type": "function", "function": map[string]string{"name": choice.Name}}
+	default:
+		return nil, nil, errors.New("tools")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return nil, nil, err
+	}
+	var parallel *bool
+	if choice.DisableParallelUse != nil && *choice.DisableParallelUse {
+		value := false
+		parallel = &value
+	}
+	return encoded, parallel, nil
 }
 
 func translateMessages(messages []Message) (json.RawMessage, []translatedMessage, error) {
@@ -276,6 +563,9 @@ func TranslateResponse(providerProtocol, clientProtocol string, data []byte, def
 	if providerProtocol == clientProtocol {
 		return data, nil
 	}
+	if providerProtocol == "openai" && clientProtocol == "anthropic" {
+		return translateOpenAIResponse(data, defaultModel)
+	}
 	if providerProtocol != "anthropic" || clientProtocol != "openai" {
 		return nil, errors.New("unsupported_protocol_translation")
 	}
@@ -337,6 +627,132 @@ func TranslateResponse(providerProtocol, clientProtocol string, data []byte, def
 		out["usage"] = usage
 	}
 	return json.Marshal(out)
+}
+
+func translateOpenAIResponse(data []byte, defaultModel string) ([]byte, error) {
+	var in struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Role      string          `json:"role"`
+				Content   json.RawMessage `json:"content"`
+				Refusal   string          `json:"refusal"`
+				ToolCalls []ToolCall      `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage json.RawMessage `json:"usage"`
+	}
+	if json.Unmarshal(data, &in) != nil || in.ID == "" || len(in.Choices) != 1 {
+		return nil, errors.New("invalid_upstream_response")
+	}
+	choice := in.Choices[0]
+	if choice.Message.Role != "assistant" {
+		return nil, errors.New("invalid_upstream_response")
+	}
+	content, err := translateOpenAIResponseContent(choice.Message.Content, choice.Message.Refusal, choice.Message.ToolCalls)
+	if err != nil {
+		return nil, err
+	}
+	model := firstNonEmpty(in.Model, defaultModel)
+	if model == "" {
+		return nil, errors.New("invalid_upstream_response")
+	}
+	out := map[string]any{
+		"id":            in.ID,
+		"type":          "message",
+		"role":          "assistant",
+		"model":         model,
+		"content":       content,
+		"stop_reason":   translateOpenAIStopReason(choice.FinishReason),
+		"stop_sequence": nil,
+	}
+	if usage := translateOpenAIUsage(in.Usage); usage != nil {
+		out["usage"] = usage
+	}
+	return json.Marshal(out)
+}
+
+func translateOpenAIResponseContent(raw json.RawMessage, refusal string, calls []ToolCall) ([]any, error) {
+	var out []any
+	if len(raw) > 0 && string(raw) != "null" {
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			if text != "" {
+				out = append(out, map[string]string{"type": "text", "text": text})
+			}
+		} else {
+			var parts []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
+				return nil, errors.New("invalid_upstream_response")
+			}
+			for _, part := range parts {
+				if part.Type != "text" {
+					return nil, errors.New("invalid_upstream_response")
+				}
+				out = append(out, map[string]string{"type": "text", "text": part.Text})
+			}
+		}
+	}
+	if refusal != "" {
+		out = append(out, map[string]string{"type": "text", "text": refusal})
+	}
+	for _, call := range calls {
+		if call.ID == "" || call.Function.Name == "" {
+			return nil, errors.New("invalid_upstream_response")
+		}
+		var input map[string]any
+		if json.Unmarshal([]byte(call.Function.Arguments), &input) != nil || input == nil {
+			return nil, errors.New("invalid_upstream_response")
+		}
+		out = append(out, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Function.Name, "input": input})
+	}
+	if len(out) == 0 {
+		return nil, errors.New("invalid_upstream_response")
+	}
+	return out, nil
+}
+
+func translateOpenAIStopReason(reason *string) string {
+	if reason == nil || *reason == "" {
+		return "end_turn"
+	}
+	switch *reason {
+	case "length":
+		return "max_tokens"
+	case "tool_calls":
+		return "tool_use"
+	default:
+		return "end_turn"
+	}
+}
+
+func translateOpenAIUsage(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	usage, err := ParseUsage("openai", raw)
+	if err != nil || (usage.Input == nil && usage.Output == nil) {
+		return nil
+	}
+	out := map[string]any{}
+	if usage.Input != nil {
+		out["input_tokens"] = *usage.Input
+	}
+	if usage.Output != nil {
+		out["output_tokens"] = *usage.Output
+	}
+	if usage.CacheRead != nil {
+		out["cache_read_input_tokens"] = *usage.CacheRead
+	}
+	if usage.CacheWrite != nil {
+		out["cache_creation_input_tokens"] = *usage.CacheWrite
+	}
+	return out
 }
 
 func translateStopReason(reason *string) any {
@@ -426,8 +842,11 @@ type streamTranslator interface {
 }
 
 func newStreamTranslator(providerProtocol, clientProtocol, model string) streamTranslator {
-	if providerProtocol == "anthropic" && clientProtocol == "openai" {
+	switch {
+	case providerProtocol == "anthropic" && clientProtocol == "openai":
 		return newAnthropicStreamTranslator(model)
+	case providerProtocol == "openai" && clientProtocol == "anthropic":
+		return newOpenAIStreamTranslator(model)
 	}
 	return nil
 }
@@ -544,6 +963,237 @@ func (t *anthropicStreamTranslator) chunk(delta map[string]any, finish any, usag
 	}
 	encoded, _ := json.Marshal(payload)
 	return append([]byte("data: "), append(encoded, '\n', '\n')...)
+}
+
+type openAIStreamTranslator struct {
+	model        string
+	id           string
+	started      bool
+	finished     bool
+	finishReason *string
+	inputTokens  *int64
+	outputTokens *int64
+	nextIndex    int
+	activeType   string
+	activeIndex  int
+	toolIndices  map[int]int
+}
+
+func newOpenAIStreamTranslator(model string) *openAIStreamTranslator {
+	return &openAIStreamTranslator{model: model, toolIndices: map[int]int{}}
+}
+
+func (t *openAIStreamTranslator) frame(frame []byte) ([]byte, error) {
+	_, data, err := parseSSEFrame(frame)
+	if err != nil || data == "" {
+		return nil, err
+	}
+	var chunk struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Index int `json:"index"`
+			Delta struct {
+				Role      string          `json:"role"`
+				Content   json.RawMessage `json:"content"`
+				ToolCalls []struct {
+					Index    int    `json:"index"`
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage json.RawMessage `json:"usage"`
+	}
+	if json.Unmarshal([]byte(data), &chunk) != nil {
+		return nil, errors.New("invalid_upstream_stream")
+	}
+	if chunk.ID != "" {
+		t.id = chunk.ID
+	}
+	if chunk.Model != "" {
+		t.model = chunk.Model
+	}
+	t.updateUsage(chunk.Usage)
+	var output []byte
+	if !t.started {
+		t.started = true
+		input := int64(0)
+		if t.inputTokens != nil {
+			input = *t.inputTokens
+		}
+		output = append(output, anthropicEvent("message_start", map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":            t.id,
+				"type":          "message",
+				"role":          "assistant",
+				"model":         t.model,
+				"content":       []any{},
+				"stop_reason":   nil,
+				"stop_sequence": nil,
+				"usage":         map[string]any{"input_tokens": input},
+			},
+		})...)
+	}
+	for _, choice := range chunk.Choices {
+		if choice.Index != 0 {
+			continue
+		}
+		if text, ok := streamText(choice.Delta.Content); ok && text != "" {
+			var err error
+			output, err = t.startBlock(output, "text", "", "")
+			if err != nil {
+				return nil, err
+			}
+			output = append(output, anthropicEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": t.activeIndex,
+				"delta": map[string]any{"type": "text_delta", "text": text},
+			})...)
+		}
+		for _, call := range choice.Delta.ToolCalls {
+			index, ok := t.toolIndices[call.Index]
+			if !ok {
+				if call.ID == "" || call.Function.Name == "" {
+					return nil, errors.New("invalid_upstream_stream")
+				}
+				var err error
+				output, err = t.startBlock(output, "tool_use", call.ID, call.Function.Name)
+				if err != nil {
+					return nil, err
+				}
+				index = t.activeIndex
+				t.toolIndices[call.Index] = index
+			} else if t.activeType != "tool_use" || t.activeIndex != index {
+				output = append(output, t.stopActiveBlock()...)
+				t.activeType, t.activeIndex = "tool_use", index
+			}
+			if call.Function.Arguments != "" {
+				output = append(output, anthropicEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": index,
+					"delta": map[string]any{"type": "input_json_delta", "partial_json": call.Function.Arguments},
+				})...)
+			}
+		}
+		if choice.FinishReason != nil && *choice.FinishReason != "" {
+			t.finished = true
+			reason := *choice.FinishReason
+			t.finishReason = &reason
+		}
+	}
+	return output, nil
+}
+
+func (t *openAIStreamTranslator) startBlock(output []byte, blockType, id, name string) ([]byte, error) {
+	if t.activeType == blockType && blockType == "text" {
+		return output, nil
+	}
+	output = append(output, t.stopActiveBlock()...)
+	t.activeType = blockType
+	t.activeIndex = t.nextIndex
+	t.nextIndex++
+	block := map[string]any{"type": blockType}
+	if blockType == "text" {
+		block["text"] = ""
+	} else {
+		if id == "" || name == "" {
+			return nil, errors.New("invalid_upstream_stream")
+		}
+		block["id"], block["name"], block["input"] = id, name, map[string]any{}
+	}
+	return append(output, anthropicEvent("content_block_start", map[string]any{
+		"type":          "content_block_start",
+		"index":         t.activeIndex,
+		"content_block": block,
+	})...), nil
+}
+
+func (t *openAIStreamTranslator) stopActiveBlock() []byte {
+	if t.activeType == "" {
+		return nil
+	}
+	output := anthropicEvent("content_block_stop", map[string]any{
+		"type":  "content_block_stop",
+		"index": t.activeIndex,
+	})
+	t.activeType = ""
+	return output
+}
+
+func (t *openAIStreamTranslator) terminal(_ []byte) ([]byte, error) {
+	if !t.started || !t.finished {
+		return nil, errors.New("invalid_upstream_stream")
+	}
+	output := t.stopActiveBlock()
+	usage := map[string]any{}
+	if t.outputTokens != nil {
+		usage["output_tokens"] = *t.outputTokens
+	}
+	messageDelta := map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason":   translateOpenAIStopReason(t.finishReason),
+			"stop_sequence": nil,
+		},
+	}
+	if len(usage) > 0 {
+		messageDelta["usage"] = usage
+	}
+	output = append(output, anthropicEvent("message_delta", messageDelta)...)
+	output = append(output, anthropicEvent("message_stop", map[string]any{"type": "message_stop"})...)
+	return output, nil
+}
+
+func (t *openAIStreamTranslator) updateUsage(raw json.RawMessage) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+	var values map[string]json.RawMessage
+	if json.Unmarshal(raw, &values) != nil {
+		return
+	}
+	get := func(name string) *int64 {
+		value, ok := values[name]
+		if !ok {
+			return nil
+		}
+		var n int64
+		if json.Unmarshal(value, &n) != nil || n < 0 {
+			return nil
+		}
+		return &n
+	}
+	if input := get("prompt_tokens"); input != nil {
+		t.inputTokens = input
+	}
+	if output := get("completion_tokens"); output != nil {
+		t.outputTokens = output
+	}
+}
+
+func streamText(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return "", false
+	}
+	return text, true
+}
+
+func anthropicEvent(event string, payload any) []byte {
+	encoded, _ := json.Marshal(payload)
+	result := []byte("event: " + event + "\ndata: ")
+	result = append(result, encoded...)
+	return append(result, '\n', '\n')
 }
 
 func parseSSEFrame(frame []byte) (string, string, error) {

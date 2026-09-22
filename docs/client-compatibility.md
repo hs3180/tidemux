@@ -4,6 +4,11 @@ Verified on macOS arm64 on 2026-09-11 with real DeepSeek `deepseek-flash`.
 The 0.1.1 release carries forward the verified client matrix from the 0.1.0
 repair; use BUILD.txt and binary SHA256 to identify the exact release artifact.
 
+The gateway exposes both client APIs in every profile: OpenAI clients call
+`/v1/chat/completions`, and Anthropic clients call `/v1/messages`. The selected
+`protocol` controls only the provider side. Matching client/provider pairs pass
+through; the other two combinations use the bidirectional adapter.
+
 | Client | Installed CLI read/edit/test | Persistent continuation | Status |
 | --- | --- | --- | --- |
 | Claude Code 2.1.263 | Passed | Passed | CLI verified |

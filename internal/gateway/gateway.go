@@ -90,9 +90,9 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string)
 }
 
 func (h *handler) protocolForRequest(r *http.Request) string {
-	// The stable client-facing route is OpenAI. Keep the native Anthropic route
-	// as a compatibility passthrough when the configured provider is Anthropic.
-	if h.config.Protocol == "anthropic" && (r.URL.Path == "/v1/messages" || strings.HasPrefix(r.URL.Path, "/v1/messages/")) {
+	// Both client-facing protocols are always available. The configured
+	// protocol only selects the upstream provider wire format.
+	if r.URL.Path == "/v1/messages" {
 		return "anthropic"
 	}
 	return "openai"

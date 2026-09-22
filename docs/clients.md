@@ -7,7 +7,7 @@ launching a client. The client command checks authenticated model discovery, rea
 local gateway credential from Keychain, and passes it in the child environment.
 The upstream API key stays in the gateway.
 
-## OpenAI profile: Kilo CLI and Hermes
+## OpenAI client profile: Kilo CLI and Hermes
 
 ```sh
 ./tidemux configure --preset deepseek-flash
@@ -30,7 +30,7 @@ Hermes uses a named custom provider with `chat_completions` transport. Selecting
 its `openai-api` provider can select the Responses API, which TideMux does not
 currently serve. The launcher makes this transport choice explicitly.
 
-## Anthropic provider: OpenAI clients and Claude Code
+## Anthropic client and provider combinations
 
 Create a provider profile with the Anthropic API root. The configure prompt
 collects the upstream key without echoing it:
@@ -41,9 +41,10 @@ collects the upstream key without echoing it:
 ./tidemux serve --config "$HOME/.config/tidemux/anthropic.json"
 ```
 
-Kilo and Hermes can use this profile through the same OpenAI-compatible
-`/v1/chat/completions` endpoint; TideMux translates requests and responses to
-Anthropic Messages upstream.
+Kilo and Hermes use the OpenAI-compatible `/v1/chat/completions` endpoint;
+TideMux translates requests and responses to Anthropic Messages upstream.
+Claude Code uses the Anthropic-compatible `/v1/messages` endpoint. Both client
+routes remain available when `protocol: anthropic` is configured.
 
 In another terminal:
 
@@ -62,6 +63,11 @@ The Claude launcher supplies `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`,
 not pass the model as a client-specific flag. The gateway remains a separate
 process started with `tidemux serve`; this command only performs the local
 credential/model preflight and launches Claude Code.
+
+Claude Code can also use a profile with `protocol: openai`: TideMux translates
+the Anthropic client request and response to the OpenAI provider wire format.
+Likewise, an OpenAI client can use an Anthropic provider profile. The
+`protocol` setting selects the provider, not which client API is exposed.
 
 ## Profiles and credentials
 

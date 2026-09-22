@@ -54,9 +54,10 @@ replacing it. Set:
   to exactly `0.0.0.0:4000` to bind all IPv4 interfaces; other non-loopback IPs
   are rejected.
 - `protocol`: the upstream provider wire format, either `openai` or `anthropic`.
-  Clients use `/v1/chat/completions` in both modes; Anthropic requests are
-  translated to `/messages` upstream. When the provider is Anthropic,
-  `/v1/messages` is also available as a native compatibility route.
+  Both client routes are always available: OpenAI clients use
+  `/v1/chat/completions`, and Anthropic clients use `/v1/messages`. Matching
+  client/provider protocols pass through; mismatched protocols are translated
+  in either direction.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
 - `ledger_path`: the existing local ledger location, or for a first setup the
@@ -96,8 +97,8 @@ Configure your HTTP client with the gateway API key/token (not the upstream key)
   `{"model":"your-model","max_tokens":16,"messages":[{"role":"user","content":"Hi"}]}`.
 
 See [protocol support](protocols.md) for accepted fields. The response keeps
-the OpenAI client shape; Anthropic provider responses are translated. Every
-response adds `X-TideMux-Request-ID` for audit correlation.
+the shape of the client API that was called; mismatched provider responses are
+translated. Every response adds `X-TideMux-Request-ID` for audit correlation.
 
 Inspect the local ledger with:
 

@@ -104,7 +104,7 @@ func TestValidateClientProtocol(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "claude", protocol: "anthropic"},
-		{name: "claude", protocol: "openai", wantErr: true},
+		{name: "claude", protocol: "openai"},
 		{name: "kilo", protocol: "openai"},
 		{name: "kilo", protocol: "anthropic"},
 		{name: "kilo-ide", protocol: "anthropic"},

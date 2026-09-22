@@ -2,11 +2,12 @@
 
 ## 0.2.0 development
 
-- Make the gateway's client boundary OpenAI-compatible while allowing the
-  configured provider protocol to be OpenAI or Anthropic.
-- Translate Anthropic requests, responses, tool calls and streaming events
-  through the single configured `base_url`; remove the separate Anthropic base
-  URL and native `protocol: both` configuration mode.
+- Expose OpenAI Chat Completions and Anthropic Messages APIs simultaneously to
+  clients while allowing the configured provider protocol to be OpenAI or
+  Anthropic.
+- Translate requests, responses, tool calls and streaming events in both
+  directions through the single configured `base_url`; remove the separate
+  Anthropic base URL and native `protocol: both` configuration mode.
 
 ## 0.1.1 — 2026-09-21
 

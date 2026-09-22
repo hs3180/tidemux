@@ -209,6 +209,58 @@ func TestProviderProtocolsShareOpenAIClientRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderProtocolsShareAnthropicClientRoute(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol, func(t *testing.T) {
+			var path string
+			var upstreamBody string
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path = r.URL.Path
+				body, _ := io.ReadAll(r.Body)
+				upstreamBody = string(body)
+				if protocol == "anthropic" {
+					if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != "2023-06-01" || r.Header.Get("Authorization") != "" {
+						t.Errorf("Anthropic authentication = %q/%q/%q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"), r.Header.Get("Authorization"))
+					}
+					io.WriteString(w, responseBody("anthropic"))
+					return
+				}
+				if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("x-api-key") != "" {
+					t.Errorf("OpenAI authentication = %q/%q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
+				}
+				io.WriteString(w, responseBody("openai"))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+			c.Protocol = protocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(requestBody("anthropic")))
+			req.Header.Set("x-api-key", "local-secret")
+			req.Header.Set("anthropic-version", "2023-06-01")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != 200 || !strings.Contains(out.Body.String(), `"type":"message"`) {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+			wantPath := "/provider/v1/chat/completions"
+			if protocol == "anthropic" {
+				wantPath = "/provider/v1/messages"
+			}
+			if path != wantPath {
+				t.Fatalf("upstream path=%s want %s", path, wantPath)
+			}
+			if protocol == "openai" && (!strings.Contains(upstreamBody, `"messages"`) || !strings.Contains(upstreamBody, `"role":"user"`) || !strings.Contains(upstreamBody, `"max_tokens":16`)) {
+				t.Fatalf("Anthropic request was not translated: %s", upstreamBody)
+			}
+		})
+	}
+}
+
 func TestValidationNeverCallsUpstream(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		t.Run(protocol, func(t *testing.T) {
