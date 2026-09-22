@@ -281,6 +281,12 @@ func Request(protocol string, data []byte, defaultModel string) ([]byte, string,
 			}
 		}
 	}
+	// pi-ai sends this optional Anthropic client hint on every tool. Accept it
+	// at the gateway boundary for client compatibility, but never pass the hint
+	// through to a provider that may not implement it.
+	for i := range in.Tools {
+		in.Tools[i].EagerInputStreaming = nil
+	}
 	encoded, err := json.Marshal(in)
 	return encoded, in.Model, err
 }

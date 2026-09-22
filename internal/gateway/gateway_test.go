@@ -261,6 +261,40 @@ func TestProviderProtocolsShareAnthropicClientRoute(t *testing.T) {
 	}
 }
 
+func TestAnthropicToolHintIsAcceptedAndNotForwarded(t *testing.T) {
+	body := `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"name":"read_file","input_schema":{"type":"object"},"eager_input_streaming":true}]}`
+	for _, providerProtocol := range []string{"anthropic", "openai"} {
+		t.Run(providerProtocol, func(t *testing.T) {
+			var upstreamBody string
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				upstreamBody = string(data)
+				io.WriteString(w, responseBody(providerProtocol))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+			c.Protocol = providerProtocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+
+			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+			req.Header.Set("x-api-key", "local-secret")
+			req.Header.Set("anthropic-version", "2023-06-01")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != 200 {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+			if strings.Contains(upstreamBody, "eager_input_streaming") {
+				t.Fatalf("client-only hint reached %s provider: %s", providerProtocol, upstreamBody)
+			}
+		})
+	}
+}
+
 func TestValidationNeverCallsUpstream(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		t.Run(protocol, func(t *testing.T) {

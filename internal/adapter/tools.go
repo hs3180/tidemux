@@ -14,12 +14,13 @@ type Function struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 type Tool struct {
-	Type         string          `json:"type,omitempty"`
-	Function     *Function       `json:"function,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Description  string          `json:"description,omitempty"`
-	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
-	CacheControl *CacheControl   `json:"cache_control,omitempty"`
+	Type                string          `json:"type,omitempty"`
+	Function            *Function       `json:"function,omitempty"`
+	Name                string          `json:"name,omitempty"`
+	Description         string          `json:"description,omitempty"`
+	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
+	CacheControl        *CacheControl   `json:"cache_control,omitempty"`
+	EagerInputStreaming *bool           `json:"eager_input_streaming,omitempty"`
 }
 type ToolCall struct {
 	ID       string `json:"id"`
