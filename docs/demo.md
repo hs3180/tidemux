@@ -50,6 +50,9 @@ replacing it. Set:
   `https://your-endpoint.example/api/v1`. TideMux appends `/chat/completions` or
   `/messages` exactly once. Trailing slashes are ignored. HTTPS is required
   except for numeric loopback HTTP. URLs cannot contain credentials/query/fragment.
+- `listen_addr`: defaults to `127.0.0.1:8787` for loopback-only access. Set it
+  to exactly `0.0.0.0:8787` to bind all IPv4 interfaces; other non-loopback IPs
+  are rejected.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
 - `ledger_path`: the existing local ledger location, or for a first setup the
@@ -61,9 +64,6 @@ replacing it. Set:
   after the cap is reached.
 - `active_session_idle_timeout_seconds`: optional top-level idle timeout for
   retained sessions; zero uses the five-minute default, or set 1–86400 seconds.
-- `allow_external`: optional boolean, default `false`. Set it to `true` only
-  when `listen_addr` is a non-loopback IP such as `192.168.1.20:8787` or
-  `0.0.0.0:8787`; external addresses are rejected without explicit opt-in.
 - `anthropic_version`: explicit protocol version for Anthropic, example `2023-06-01`.
 
 Do not put credentials in JSON, terminal history, logs, or source control.
@@ -77,7 +77,7 @@ Old `deepseek_*` configs are rejected; migrate to the generic example explicitly
 `doctor` checks local config, Keychain retrieval and ledger-directory write
 access. It does not contact the upstream. `serve` stays in the foreground;
 Control-C stops it. There is one configured upstream per process, no fallback.
-When `allow_external` is enabled, `serve` warns that the gateway is reachable
+When `listen_addr` is `0.0.0.0`, `serve` warns that the gateway is reachable
 from non-loopback interfaces; protect the port with a firewall and trusted
 network.
 

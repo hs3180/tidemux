@@ -1,6 +1,5 @@
 {
   "listen_addr": "127.0.0.1:8787",
-  "allow_external": false,
   "protocol": "openai",
   "base_url": "https://api.openai.com/v1",
   "model": "replace-with-your-model-id",

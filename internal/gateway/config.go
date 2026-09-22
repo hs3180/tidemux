@@ -37,7 +37,6 @@ type Config struct {
 	ModelCapabilities               ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits                          adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr                      string                   `json:"listen_addr"`
-	AllowExternal                   bool                     `json:"allow_external,omitempty"`
 	Protocol                        string                   `json:"protocol"`
 	BaseURL                         string                   `json:"base_url"`
 	Model                           string                   `json:"model"`
@@ -96,8 +95,8 @@ func (c Config) Validate() error {
 	if err != nil || port == "" || ip == nil {
 		return errors.New("listen_addr must use an IP address and port")
 	}
-	if !ip.IsLoopback() && !c.AllowExternal {
-		return errors.New("listen_addr must use a loopback IP and port unless allow_external is enabled")
+	if !ip.IsLoopback() && host != "0.0.0.0" {
+		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
 	if c.Protocol != "openai" && c.Protocol != "anthropic" {
 		return errors.New("protocol must be openai or anthropic")

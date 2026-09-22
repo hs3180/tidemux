@@ -35,7 +35,6 @@ func responseBody(protocol string) string {
 func TestOpenAllowsExplicitExternalListen(t *testing.T) {
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://example.com/v1")
 	c.ListenAddr = "0.0.0.0:0"
-	c.AllowExternal = true
 	listener, server, closeGateway, err := Open(c, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -122,10 +122,10 @@ func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 	}
 }
 
-func TestSaveConfigurationPersistsExternalListenOptIn(t *testing.T) {
+func TestSaveConfigurationPersistsExternalListenMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	c := gateway.Config{ListenAddr: "0.0.0.0:8787", AllowExternal: true, Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
+	c := gateway.Config{ListenAddr: "0.0.0.0:8787", Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model", UpstreamID: "test", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
 	secrets := &memorySecrets{values: map[string]string{}}
 	if err := saveConfiguration(path, c, "secret", false, secrets); err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestSaveConfigurationPersistsExternalListenOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.AllowExternal || loaded.ListenAddr != c.ListenAddr {
+	if loaded.ListenAddr != c.ListenAddr {
 		t.Fatalf("external listen settings were not persisted: %+v", loaded)
 	}
 }

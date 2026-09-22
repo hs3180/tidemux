@@ -84,22 +84,21 @@ tidemux configure --preset deepseek-flash --notification-time 09:00
 The time uses the Mac's local timezone, and scheduled notifications use macOS
 Notification Center.
 
-## Allow LAN clients (explicit opt-in)
+## Allow LAN clients (external listen mode)
 
-TideMux is loopback-only by default. To let clients on the local network reach
-the gateway, explicitly opt in during configuration and choose a non-loopback
-listen address:
+TideMux has two listen modes. It uses loopback by default. To let clients on
+the local network reach the gateway, select the external mode by setting the
+listen address to `0.0.0.0`:
 
 ```sh
 tidemux configure --preset deepseek-flash \
-  --listen 192.168.1.20:8787 \
-  --allow-external
+  --listen 0.0.0.0:8787
 ```
 
-Use `--listen 0.0.0.0:8787` to bind all IPv4 interfaces, or prefer a specific
-LAN address when possible. The choice is persisted as `allow_external: true` in
-the profile. A non-loopback address is rejected unless that setting is enabled;
-existing profiles remain loopback-only.
+`127.0.0.1:8787` (or another loopback IP) keeps the gateway local;
+`0.0.0.0:8787` binds all IPv4 interfaces. Other non-loopback IPs are rejected.
+The selected address is persisted in `listen_addr`, and existing profiles remain
+loopback-only.
 
 TideMux prints a warning when external access is configured or started. The
 gateway still requires its local Bearer token, but the service is plain HTTP:
