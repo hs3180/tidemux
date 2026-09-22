@@ -1,11 +1,10 @@
 {
   "listen_addr": "127.0.0.1:4000",
-  "protocol": "anthropic",
   "base_url": "https://api.deepseek.com/anthropic/v1",
   "model": "deepseek-flash",
   "upstream_id": "deepseek-anthropic",
   "upstream_keychain": {
-    "service": "com.tidemux.deepseek",
+    "service": "com.tidemux.provider",
     "account": "default"
   },
   "access_token_keychain": {
@@ -16,7 +15,6 @@
   "max_active_sessions": 0,
   "active_session_idle_timeout_seconds": 0,
   "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db",
-  "anthropic_version": "2023-06-01",
   "prices": {
     "deepseek-flash": {
       "currency": "USD",

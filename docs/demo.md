@@ -37,7 +37,7 @@ In Keychain Access create two generic-password items:
 
 | Service | Account | Password |
 | --- | --- | --- |
-| `com.tidemux.openai` (or `com.tidemux.anthropic`) | `default` | Your upstream API key |
+| `com.tidemux.provider` | `default` | Your upstream API key |
 | `com.tidemux.gateway` | `default` | A different locally generated secret for gateway clients |
 
 Copy [OpenAI config](../examples/openai.json) or
@@ -46,13 +46,18 @@ Copy [OpenAI config](../examples/openai.json) or
 If a configuration already exists, stop the gateway and back it up before
 replacing it. Set:
 
-- `base_url`: the exact API root **including its version/prefix**, for example
+- `base_url`: the exact upstream API root **including its version/prefix**, for example
   `https://your-endpoint.example/api/v1`. TideMux appends `/chat/completions` or
   `/messages` exactly once. Trailing slashes are ignored. HTTPS is required
   except for numeric loopback HTTP. URLs cannot contain credentials/query/fragment.
 - `listen_addr`: defaults to `127.0.0.1:4000` for loopback-only access. Set it
   to exactly `0.0.0.0:4000` to bind all IPv4 interfaces; other non-loopback IPs
   are rejected.
+- provider protocol: detected automatically from `base_url` and, for generic
+  roots, a safe `GET /models` response. Both client routes are always available:
+  OpenAI clients use `/v1/chat/completions`, and Anthropic clients use
+  `/v1/messages`. Matching client/provider protocols pass through; mismatched
+  protocols are translated in either direction.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
 - `ledger_path`: the existing local ledger location, or for a first setup the
@@ -64,7 +69,8 @@ replacing it. Set:
   after the cap is reached.
 - `active_session_idle_timeout_seconds`: optional top-level idle timeout for
   retained sessions; zero uses the five-minute default, or set 1–86400 seconds.
-- `anthropic_version`: explicit protocol version for Anthropic, example `2023-06-01`.
+- `anthropic_version`: optional Anthropic API version; when omitted, TideMux
+  uses `2023-06-01` after detecting an Anthropic provider.
 
 Do not put credentials in JSON, terminal history, logs, or source control.
 Old `deepseek_*` configs are rejected; migrate to the generic example explicitly.
@@ -87,12 +93,13 @@ Configure your HTTP client with the gateway API key/token (not the upstream key)
 
 - OpenAI: `POST http://127.0.0.1:4000/v1/chat/completions`, Bearer authentication,
   body `{"model":"your-model","messages":[{"role":"user","content":"Hi"}]}`.
-- Anthropic: `POST http://127.0.0.1:4000/v1/messages`, Bearer or `x-api-key`
+- Anthropic compatibility: `POST http://127.0.0.1:4000/v1/messages`, Bearer or `x-api-key`
   authentication with the **local token**, body
   `{"model":"your-model","max_tokens":16,"messages":[{"role":"user","content":"Hi"}]}`.
 
 See [protocol support](protocols.md) for accepted fields. The response keeps
-upstream JSON and adds `X-TideMux-Request-ID` for audit correlation.
+the shape of the client API that was called; mismatched provider responses are
+translated. Every response adds `X-TideMux-Request-ID` for audit correlation.
 
 Inspect the local ledger with:
 
@@ -125,7 +132,7 @@ DeepSeek preset stores the fixed peak rates automatically. For another provider,
 set rates on the same command; rates are **per million tokens**:
 
 ```sh
-tidemux configure --protocol openai \
+tidemux configure \
   --base-url https://provider.example/v1 \
   --model your-model \
   --pricing-input-cache-hit 1 \
@@ -159,7 +166,7 @@ python3 scripts/verify_live.py \
 For `deepseek-flash`, add `--disable-thinking`. For models requiring
 `max_completion_tokens`, add `--openai-token-limit-field max_completion_tokens`.
 To verify the other protocol, stop the gateway, switch the local configuration
-using `configure` with that protocol's API settings and `--replace`, and restore
+using `configure` with that API root and `--replace`, and restore
 the verified price settings from the saved backup before restarting. Use a
 separate evidence file for that authorized run. The helper
 reads the local token into memory, makes one request, and checks response usage

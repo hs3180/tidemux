@@ -58,8 +58,12 @@ func TestStreamingGatewayAudit(t *testing.T) {
 					t.Fatal("leaked error")
 				}
 				if scenario == "ok" {
-					if w.Body.String() != start+end {
-						t.Fatalf("SSE modified %s", w.Body.String())
+					if protocol == "openai" {
+						if w.Body.String() != start+end {
+							t.Fatalf("SSE modified %s", w.Body.String())
+						}
+					} else if body := w.Body.String(); !strings.Contains(body, `"chat.completion.chunk"`) || !strings.Contains(body, "data: [DONE]") || strings.Contains(body, "event:") || strings.Contains(body, "end_turn") {
+						t.Fatalf("Anthropic stream was not translated: %s", body)
 					}
 				} else if strings.Contains(w.Body.String(), end) || !strings.Contains(w.Body.String(), "event: error") {
 					t.Fatal("failed stream completed")
@@ -92,6 +96,44 @@ func TestStreamingGatewayAudit(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAnthropicClientStreamingWithOpenAIProvider(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer provider-secret" {
+			t.Fatalf("unexpected upstream request: %s %s", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"id":"chat1","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`+"\n\n")
+		io.WriteString(w, `data: {"id":"chat1","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}`+"\n\n")
+		io.WriteString(w, `data: {"id":"chat1","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`+"\n\n")
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.Protocol = "openai"
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := strings.TrimSuffix(requestBody("anthropic"), "}") + `,"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != 200 || out.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(out.Body.String(), "event: message_start") || !strings.Contains(out.Body.String(), `"text":"hi"`) || !strings.Contains(out.Body.String(), "event: message_stop") {
+		t.Fatalf("status=%d headers=%v body=%s", out.Code, out.Header(), out.Body.String())
+	}
+	db, err := ledger.Open(c.LedgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Recent(context.Background(), 10)
+	if err != nil || len(rows) != 1 || rows[0].InputTokens == nil || *rows[0].InputTokens != 3 || rows[0].OutputTokens == nil || *rows[0].OutputTokens != 2 {
+		t.Fatalf("audit=%+v err=%v", rows, err)
 	}
 }
 

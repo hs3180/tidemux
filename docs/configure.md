@@ -48,8 +48,11 @@ profiles. If an existing profile contains conflicting legacy budget fields,
 replace it with the new schema using `tidemux budget` or recreate it with
 `tidemux configure --replace`.
 
-1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
-   `deepseek-flash`. Before the **API key (hidden)** prompt, TideMux asks for a
+1. `configure` selects the provider API root and model. The DeepSeek preset
+   uses `https://api.deepseek.com` and `deepseek-flash`; TideMux automatically
+   detects the provider protocol from that root. To use DeepSeek's Anthropic
+   compatible API, override the root with
+   `--base-url https://api.deepseek.com/anthropic/v1`. Before the **API key (hidden)** prompt, TideMux asks for a
    daily report notification time in local time (`HH:MM`). Enter a time to enable
    scheduled notifications, or press Enter to leave them disabled. At the API-key
    prompt, paste your DeepSeek key and press Enter. The following **Gateway API
@@ -186,7 +189,8 @@ To switch the current local gateway to Anthropic format, stop it with Control-C
 and replace the local configuration:
 
 ```sh
-tidemux configure --preset deepseek-flash --protocol anthropic --replace
+tidemux configure --preset deepseek-flash \
+  --base-url https://api.deepseek.com/anthropic/v1 --replace
 tidemux doctor
 tidemux serve
 ```
@@ -201,7 +205,7 @@ omit `--replace`.
 ## Any other compatible API
 
 ```sh
-tidemux configure --protocol openai \
+tidemux configure \
   --base-url https://your-provider.example/v1 \
   --model your-model-id \
   --pricing-input-cache-hit 1 \
@@ -210,9 +214,10 @@ tidemux configure --protocol openai \
   --pricing-currency USD
 ```
 
-Use `--protocol anthropic` for an Anthropic-format API. Include the endpoint's
-version/path prefix. Model IDs are not limited to a preset. Prices are per
-million tokens. The three rates are input cache hit, input cache miss and output;
+Include the endpoint's version/path prefix. TideMux detects whether the endpoint
+uses OpenAI or Anthropic format from its API root/model discovery; no protocol
+flag is needed. Model IDs are not limited to a preset. Prices are per million
+tokens. The three rates are input cache hit, input cache miss and output;
 `--pricing-currency` defaults to `USD`, while source and version default to
 `manual-cli` and `manual`. `--max-in-flight 2` changes the explicit concurrency cap.
 To replace an existing local setup,

@@ -53,7 +53,6 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
             config = root / (name + '.json')
             config.write_text(json.dumps({
                 'listen_addr': '127.0.0.1:' + str(server.server_port),
-                'protocol': 'anthropic' if name == 'claude' else 'openai',
                 'base_url': 'https://unused.example/v1', 'model': 'test-model',
                 'upstream_id': 'test', 'anthropic_version': '2023-06-01',
                 'upstream_keychain': {'service': 'must-not-read', 'account': 'test'},

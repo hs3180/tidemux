@@ -23,7 +23,7 @@ or asks for pricing.
 For a custom provider or a deliberate override, set rates on `configure`:
 
 ```sh
-tidemux configure --protocol openai \
+tidemux configure \
   --base-url https://provider.example/v1 \
   --model your-model-id \
   --pricing-input-cache-hit 1 \
@@ -35,7 +35,8 @@ tidemux configure --protocol openai \
 
 Rates are per million tokens. All three rates are required. `--pricing-currency`
 defaults to `USD`; source and version default to `manual-cli` and `manual`. The
-same entry supports either API protocol for the configured model.
+same entry applies whichever provider protocol TideMux detects for the
+configured model.
 
 Prices are stored in the local provider profile, not in Keychain and not in the
 budget section. DeepSeek may change prices; update TideMux or use explicit custom

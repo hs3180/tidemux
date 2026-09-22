@@ -1,11 +1,10 @@
 {
   "listen_addr": "127.0.0.1:4000",
-  "protocol": "anthropic",
   "base_url": "https://api.anthropic.com/v1",
   "model": "replace-with-your-model-id",
   "upstream_id": "anthropic-primary",
   "upstream_keychain": {
-    "service": "com.tidemux.anthropic",
+    "service": "com.tidemux.provider",
     "account": "default"
   },
   "access_token_keychain": {
@@ -15,6 +14,5 @@
   "max_in_flight": 1,
   "max_active_sessions": 0,
   "active_session_idle_timeout_seconds": 0,
-  "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db",
-  "anthropic_version": "2023-06-01"
+  "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db"
 }

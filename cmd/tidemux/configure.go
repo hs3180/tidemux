@@ -41,7 +41,6 @@ func configure(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("configure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
-	protocol := flags.String("protocol", "openai", "openai or anthropic")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
@@ -79,16 +78,13 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if *preset == "deepseek-flash" {
 		if *baseURL == "" {
 			*baseURL = "https://api.deepseek.com"
-			if *protocol == "anthropic" {
-				*baseURL = "https://api.deepseek.com/anthropic/v1"
-			}
 		}
 		if *model == "" {
 			*model = "deepseek-flash"
 		}
 	}
 	if *baseURL == "" || *model == "" {
-		return errors.New("use configure --preset deepseek-flash, or provide --protocol, --base-url and --model")
+		return errors.New("use configure --preset deepseek-flash, or provide --base-url and --model")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("configure requires macOS Keychain")
@@ -113,7 +109,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 		schedule = gateway.ReportSchedule{Time: normalized, Channel: "macos"}
 	}
-	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, BaseURL: *baseURL, Model: *model, UpstreamID: "provider-primary", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}
@@ -131,7 +127,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err := unlockKeychainIfNeeded(context.Background(), tty); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Protocol: %s\nAPI root: %s\nModel: %s\nConfig: %s\n", c.Protocol, c.BaseURL, c.Model, abs)
+	fmt.Fprintf(stdout, "Provider API root: %s\nProvider protocol: automatic (checked when the gateway starts)\nModel: %s\nConfig: %s\n", c.BaseURL, c.Model, abs)
 	if !isLoopbackListenAddr(c.ListenAddr) {
 		fmt.Fprintf(stdout, "WARNING: external gateway access is enabled on %s; protect the network and gateway token.\n", c.ListenAddr)
 	}
@@ -271,7 +267,7 @@ func saveConfiguration(path string, c gateway.Config, secret string, gatewaySecr
 		}()
 		gatewayCredential = hex.EncodeToString(token)
 	}
-	c.UpstreamKeychain = gateway.KeychainReference{Service: "com.tidemux." + c.Protocol, Account: account}
+	c.UpstreamKeychain = gateway.KeychainReference{Service: "com.tidemux.provider", Account: account}
 	c.AccessTokenKeychain = gateway.KeychainReference{Service: "com.tidemux.gateway", Account: account}
 	if err := c.Validate(); err != nil {
 		return err

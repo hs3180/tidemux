@@ -39,10 +39,13 @@ For Kilo CLI or Hermes Agent:
 tidemux configure --preset deepseek-flash
 ```
 
-For Claude Code, use this command **instead** to select the Anthropic-compatible endpoint:
+The provider protocol is detected automatically from the configured API root.
+For a provider's Anthropic-compatible API, pass that API root explicitly; do
+not select a protocol flag:
 
 ```sh
-tidemux configure --preset deepseek-flash --protocol anthropic
+tidemux configure --preset deepseek-flash \
+  --base-url https://api.deepseek.com/anthropic/v1
 ```
 
 Paste your API key at the hidden prompt; TideMux handles Keychain storage.
@@ -61,13 +64,15 @@ Next time, just run `tidemux serve` to reuse your configuration.
 
 ### 3. Launch your client
 
-In another terminal, from your project directory, run the command matching your configured protocol:
+In another terminal, from your project directory, run the client you want. The
+gateway exposes both client APIs at the same time; the upstream protocol is
+detected automatically:
 
 ```sh
-# Anthropic API format
+# Anthropic API client
 tidemux claude
 
-# OpenAI API format — choose one
+# OpenAI API clients — choose one
 tidemux kilo -- run 'Explain this project'
 tidemux hermes -- -q 'Explain this project'
 ```
@@ -92,13 +97,21 @@ For client invocation options and setup details, see [client setup](docs/clients
 
 ## Compatibility
 
-**0.1.1** supports Chat Completions and Messages, one upstream and protocol per
-instance. The three CLIs have passed DeepSeek file read/edit/test and continued
-conversation workflows. You can configure other compatible providers, though they have not been tested.
+**0.1.1** supports one configured upstream provider per instance. The 0.2.0
+development line exposes both OpenAI Chat Completions and Anthropic Messages
+client APIs simultaneously. TideMux detects whether the configured provider
+speaks OpenAI or Anthropic format from its API root and model discovery, then
+passes through matching requests or translates them in the other direction.
+Credentials and ledger accounting remain shared. The three CLIs have passed
+DeepSeek file read/edit/test and continued conversation
+workflows. You can configure other compatible providers, though they have not
+been tested.
 
-Responses API, protocol conversion, images/audio and IDE extensions are outside
-this release's scope. See [tested clients](docs/client-compatibility.md) and
-[protocol support](docs/protocols.md).
+Responses API, images/audio and IDE extensions are outside this release's
+scope. Supported bidirectional Chat Completions/Messages conversion is covered
+in the protocol boundary; provider-specific features without a client
+equivalent are not forwarded silently. See [tested clients](docs/client-compatibility.md)
+and [protocol support](docs/protocols.md).
 
 ## Documentation
 

@@ -96,6 +96,34 @@ func TestConnectEnvironmentReplacesConflictingAuth(t *testing.T) {
 		t.Fatal("credential override failed")
 	}
 }
+
+func TestValidateClientProtocol(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol string
+		wantErr  bool
+	}{
+		{name: "claude", protocol: "anthropic"},
+		{name: "claude", protocol: "openai"},
+		{name: "kilo", protocol: "openai"},
+		{name: "kilo", protocol: "anthropic"},
+		{name: "kilo-ide", protocol: "anthropic"},
+		{name: "hermes", protocol: "anthropic"},
+		{name: "claude", protocol: ""},
+		{name: "kilo", protocol: "auto"},
+		{name: "hermes", protocol: "AUTO"},
+		{name: "claude", protocol: "both", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"/"+tt.protocol, func(t *testing.T) {
+			err := validateClientProtocol(tt.name, tt.protocol)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateClientProtocol(%q, %q) error = %v, wantErr %v", tt.name, tt.protocol, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestConnectChecksGatewayBeforeLaunch(t *testing.T) {
 	redirected := false
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirected = true }))
