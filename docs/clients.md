@@ -2,9 +2,10 @@
 
 Use `tidemux <client>` to start an installed client with TideMux settings.
 The direct commands replace the earlier `connect` interface. VS Code extension compatibility is outside the 0.1.1 scope.
-Each gateway process uses one upstream provider protocol and one profile. Start `serve` before
-launching a client. The client command checks authenticated model discovery, reads only the
-local gateway credential from Keychain, and passes it in the child environment.
+Each gateway process uses one provider profile. TideMux detects that provider's
+wire protocol when `serve` starts. Start `serve` before launching a client. The
+client command checks authenticated model discovery, reads only the local gateway
+credential from Keychain, and passes it in the child environment.
 The upstream API key stays in the gateway.
 
 ## OpenAI client profile: Kilo CLI and Hermes
@@ -36,7 +37,8 @@ Create a provider profile with the Anthropic API root. The configure prompt
 collects the upstream key without echoing it:
 
 ```sh
-./tidemux configure --preset deepseek-flash --protocol anthropic \
+./tidemux configure --preset deepseek-flash \
+  --base-url https://api.deepseek.com/anthropic/v1 \
   --listen 127.0.0.1:8788 --config "$HOME/.config/tidemux/anthropic.json"
 ./tidemux serve --config "$HOME/.config/tidemux/anthropic.json"
 ```
@@ -44,7 +46,8 @@ collects the upstream key without echoing it:
 Kilo and Hermes use the OpenAI-compatible `/v1/chat/completions` endpoint;
 TideMux translates requests and responses to Anthropic Messages upstream.
 Claude Code uses the Anthropic-compatible `/v1/messages` endpoint. Both client
-routes remain available when `protocol: anthropic` is configured.
+routes remain available; the provider protocol is detected from the configured
+API root.
 
 In another terminal:
 
@@ -64,10 +67,11 @@ not pass the model as a client-specific flag. The gateway remains a separate
 process started with `tidemux serve`; this command only performs the local
 credential/model preflight and launches Claude Code.
 
-Claude Code can also use a profile with `protocol: openai`: TideMux translates
-the Anthropic client request and response to the OpenAI provider wire format.
-Likewise, an OpenAI client can use an Anthropic provider profile. The
-`protocol` setting selects the provider, not which client API is exposed.
+Claude Code can also use a profile whose provider speaks OpenAI: TideMux
+translates the Anthropic client request and response to the OpenAI provider wire
+format. Likewise, an OpenAI client can use an Anthropic provider profile. The
+client route selects the client API; provider detection selects the upstream
+wire format.
 
 ## Profiles and credentials
 

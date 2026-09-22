@@ -37,7 +37,7 @@ In Keychain Access create two generic-password items:
 
 | Service | Account | Password |
 | --- | --- | --- |
-| `com.tidemux.openai` (or `com.tidemux.anthropic`) | `default` | Your upstream API key |
+| `com.tidemux.provider` | `default` | Your upstream API key |
 | `com.tidemux.gateway` | `default` | A different locally generated secret for gateway clients |
 
 Copy [OpenAI config](../examples/openai.json) or
@@ -53,11 +53,11 @@ replacing it. Set:
 - `listen_addr`: defaults to `127.0.0.1:4000` for loopback-only access. Set it
   to exactly `0.0.0.0:4000` to bind all IPv4 interfaces; other non-loopback IPs
   are rejected.
-- `protocol`: the upstream provider wire format, either `openai` or `anthropic`.
-  Both client routes are always available: OpenAI clients use
-  `/v1/chat/completions`, and Anthropic clients use `/v1/messages`. Matching
-  client/provider protocols pass through; mismatched protocols are translated
-  in either direction.
+- provider protocol: detected automatically from `base_url` and, for generic
+  roots, a safe `GET /models` response. Both client routes are always available:
+  OpenAI clients use `/v1/chat/completions`, and Anthropic clients use
+  `/v1/messages`. Matching client/provider protocols pass through; mismatched
+  protocols are translated in either direction.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
 - `ledger_path`: the existing local ledger location, or for a first setup the
@@ -69,7 +69,8 @@ replacing it. Set:
   after the cap is reached.
 - `active_session_idle_timeout_seconds`: optional top-level idle timeout for
   retained sessions; zero uses the five-minute default, or set 1–86400 seconds.
-- `anthropic_version`: explicit protocol version for Anthropic, example `2023-06-01`.
+- `anthropic_version`: optional Anthropic API version; when omitted, TideMux
+  uses `2023-06-01` after detecting an Anthropic provider.
 
 Do not put credentials in JSON, terminal history, logs, or source control.
 Old `deepseek_*` configs are rejected; migrate to the generic example explicitly.
@@ -131,7 +132,7 @@ DeepSeek preset stores the fixed peak rates automatically. For another provider,
 set rates on the same command; rates are **per million tokens**:
 
 ```sh
-tidemux configure --protocol openai \
+tidemux configure \
   --base-url https://provider.example/v1 \
   --model your-model \
   --pricing-input-cache-hit 1 \
@@ -165,7 +166,7 @@ python3 scripts/verify_live.py \
 For `deepseek-flash`, add `--disable-thinking`. For models requiring
 `max_completion_tokens`, add `--openai-token-limit-field max_completion_tokens`.
 To verify the other protocol, stop the gateway, switch the local configuration
-using `configure` with that protocol's API settings and `--replace`, and restore
+using `configure` with that API root and `--replace`, and restore
 the verified price settings from the saved backup before restarting. Use a
 separate evidence file for that authorized run. The helper
 reads the local token into memory, makes one request, and checks response usage

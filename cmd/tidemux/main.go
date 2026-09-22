@@ -1,5 +1,6 @@
-// TideMux is a local OpenAI-compatible gateway; it is loopback-only unless
-// external listening is explicitly enabled in the configuration.
+// TideMux is a local OpenAI- and Anthropic-compatible gateway; it is
+// loopback-only unless external listening is explicitly enabled in the
+// configuration.
 package main
 
 import (
@@ -20,7 +21,33 @@ import (
 
 const (
 	version = "0.1.1"
-	usage   = "usage: tidemux serve [--config <path>]\n       tidemux doctor [--config <path>] [--diagnostics [--json]]\n       tidemux billing [--from RFC3339 --to RFC3339] [--details] [--json] [--download path.csv]\n       tidemux configure --preset deepseek-flash [--protocol openai|anthropic] [--listen 0.0.0.0:4000] [--notification-time HH:MM] [--max-active-sessions N] [--active-session-idle-timeout-seconds N]\n       tidemux configure --base-url URL --model ID --pricing-input-cache-hit amount --pricing-input-cache-miss amount --pricing-output amount [--protocol openai|anthropic] [--listen 0.0.0.0:4000] [--notification-time HH:MM] [--max-active-sessions N] [--active-session-idle-timeout-seconds N]\n       tidemux budget [--budget-5h amount] [--budget-weekly amount]\n       tidemux report <generate|list|export|open|deliver|retry|schedule|notify> [--config <path>] [options]\n       tidemux <claude|kilo|hermes> [--config path] -- [client arguments]\n       tidemux version\n"
+	usage   = `usage: tidemux <command> [options]
+
+commands:
+  serve       start the local gateway
+  doctor      check the configuration, Keychain and local state directory
+  configure   create or replace a provider configuration
+  billing     inspect local usage and cost records (--details for requests)
+  budget      set the rolling budget limits
+  report      generate, view or deliver usage reports
+              use --diagnostics [--json] for recent local rejections
+  claude      launch Claude Code through the gateway
+  kilo        launch Kilo CLI through the gateway
+  hermes      launch Hermes Agent through the gateway
+  version     print the TideMux version
+
+configuration examples:
+  tidemux configure --preset deepseek-flash [options]
+  tidemux configure --base-url URL --model ID [pricing options]
+
+common examples:
+  tidemux configure --preset deepseek-flash
+  tidemux configure --help
+  tidemux serve --config /path/to/config.json
+
+The provider protocol is detected automatically from the configured API root.
+Both OpenAI Chat Completions and Anthropic Messages client routes are available.
+`
 )
 
 func main() {

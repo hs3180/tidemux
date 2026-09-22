@@ -39,11 +39,13 @@ For Kilo CLI or Hermes Agent:
 tidemux configure --preset deepseek-flash
 ```
 
-To select an Anthropic-compatible **upstream provider** instead of the default
-OpenAI-compatible upstream, use:
+The provider protocol is detected automatically from the configured API root.
+For a provider's Anthropic-compatible API, pass that API root explicitly; do
+not select a protocol flag:
 
 ```sh
-tidemux configure --preset deepseek-flash --protocol anthropic
+tidemux configure --preset deepseek-flash \
+  --base-url https://api.deepseek.com/anthropic/v1
 ```
 
 Paste your API key at the hidden prompt; TideMux handles Keychain storage.
@@ -63,8 +65,8 @@ Next time, just run `tidemux serve` to reuse your configuration.
 ### 3. Launch your client
 
 In another terminal, from your project directory, run the client you want. The
-gateway exposes both client APIs at the same time, regardless of the configured
-upstream protocol:
+gateway exposes both client APIs at the same time; the upstream protocol is
+detected automatically:
 
 ```sh
 # Anthropic API client
@@ -97,10 +99,11 @@ For client invocation options and setup details, see [client setup](docs/clients
 
 **0.1.1** supports one configured upstream provider per instance. The 0.2.0
 development line exposes both OpenAI Chat Completions and Anthropic Messages
-client APIs simultaneously, while the provider can be OpenAI-compatible or
-Anthropic-compatible. TideMux passes through matching protocols and translates
-the other direction, with shared credentials and ledger accounting. The three
-CLIs have passed DeepSeek file read/edit/test and continued conversation
+client APIs simultaneously. TideMux detects whether the configured provider
+speaks OpenAI or Anthropic format from its API root and model discovery, then
+passes through matching requests or translates them in the other direction.
+Credentials and ledger accounting remain shared. The three CLIs have passed
+DeepSeek file read/edit/test and continued conversation
 workflows. You can configure other compatible providers, though they have not
 been tested.
 

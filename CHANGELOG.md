@@ -3,8 +3,8 @@
 ## 0.2.0 development
 
 - Expose OpenAI Chat Completions and Anthropic Messages APIs simultaneously to
-  clients while allowing the configured provider protocol to be OpenAI or
-  Anthropic.
+  clients and automatically detect the provider protocol from the configured
+  API root/model discovery.
 - Translate requests, responses, tool calls and streaming events in both
   directions through the single configured `base_url`; remove the separate
   Anthropic base URL and native `protocol: both` configuration mode.

@@ -37,7 +37,7 @@ type Config struct {
 	ModelCapabilities               ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits                          adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr                      string                   `json:"listen_addr"`
-	Protocol                        string                   `json:"protocol"` // upstream provider protocol
+	Protocol                        string                   `json:"protocol,omitempty"` // resolved provider protocol; empty/auto means detect; legacy values remain supported
 	BaseURL                         string                   `json:"base_url"`
 	Model                           string                   `json:"model"`
 	UpstreamID                      string                   `json:"upstream_id"`
@@ -98,8 +98,10 @@ func (c Config) Validate() error {
 	if !ip.IsLoopback() && host != "0.0.0.0" {
 		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
-	if c.Protocol != "openai" && c.Protocol != "anthropic" {
-		return errors.New("protocol must be openai or anthropic")
+	switch normalizeProviderProtocol(c.Protocol) {
+	case "", "auto", "openai", "anthropic":
+	default:
+		return errors.New("protocol must be auto, openai or anthropic")
 	}
 	if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
 		return err
@@ -119,7 +121,7 @@ func (c Config) Validate() error {
 	if len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n") {
 		return errors.New("upstream_id must be a short non-secret label")
 	}
-	if c.Protocol == "anthropic" {
+	if normalizeProviderProtocol(c.Protocol) == "anthropic" {
 		if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
 			return errors.New("anthropic_version must be YYYY-MM-DD")
 		}

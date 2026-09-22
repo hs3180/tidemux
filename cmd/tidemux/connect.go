@@ -143,13 +143,11 @@ func launch(args []string, stdout, stderr *os.File) error {
 }
 
 func validateClientProtocol(name, protocol string) error {
-	if name == "claude" && protocol != "openai" && protocol != "anthropic" {
-		return errors.New("Claude Code requires an OpenAI or Anthropic provider profile; select an appropriate --config")
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "", "auto", "openai", "anthropic":
+		return nil
 	}
-	if (name == "kilo" || name == "kilo-ide" || name == "hermes") && protocol != "openai" && protocol != "anthropic" {
-		return errors.New("this client launcher requires an OpenAI or Anthropic provider profile; select an appropriate --config")
-	}
-	return nil
+	return errors.New("configuration has an invalid provider protocol; use automatic detection or a legacy openai/anthropic value")
 }
 
 func checkClientEndpoint(ctx context.Context, url, token, model string) error {

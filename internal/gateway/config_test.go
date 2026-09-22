@@ -62,6 +62,13 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 	if err := badProtocol.Validate(); err == nil {
 		t.Fatal("both protocol accepted as a client mode")
 	}
+	for _, protocol := range []string{"", "auto", "OPENAI", "anthropic"} {
+		auto := c
+		auto.Protocol = protocol
+		if err := auto.Validate(); err != nil {
+			t.Fatalf("protocol %q rejected: %v", protocol, err)
+		}
+	}
 	for _, body := range []string{`{"deepseek_api_key":"secret"}`, `{} {}`, `{"protocol":"openai","protocol":"anthropic"}`} {
 		p := filepath.Join(t.TempDir(), "config.json")
 		os.WriteFile(p, []byte(body), 0600)

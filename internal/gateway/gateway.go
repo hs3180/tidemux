@@ -26,6 +26,15 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	if c.APIKey == "" || c.AccessToken == "" || c.APIKey == c.AccessToken {
 		return nil, nil, errors.New("distinct resolved credentials are required")
 	}
+	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.Protocol = protocol
+	c.APIVersion = apiVersion
+	if err := c.Validate(); err != nil {
+		return nil, nil, err
+	}
 	l, err := ledger.Open(c.LedgerPath)
 	if err != nil {
 		return nil, nil, errors.New("cannot open ledger")

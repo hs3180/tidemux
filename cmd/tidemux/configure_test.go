@@ -73,6 +73,27 @@ func TestConfigureSavesReferencesAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestSaveConfigurationOmitsAutoProtocol(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := gateway.Config{ListenAddr: "127.0.0.1:8787", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", UpstreamID: "provider-primary", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db")}
+	secrets := &memorySecrets{values: map[string]string{}}
+	if err := saveConfiguration(path, c, "provider-secret", nil, false, secrets); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"protocol"`) || !strings.Contains(string(data), `"service": "com.tidemux.provider"`) {
+		t.Fatalf("configuration is not provider-neutral: %s", data)
+	}
+	loaded, err := gateway.LoadConfig(path)
+	if err != nil || loaded.Protocol != "" {
+		t.Fatalf("loaded protocol=%q err=%v", loaded.Protocol, err)
+	}
+}
+
 func TestReplaceKeepsRestorableConfigAndCredentials(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -225,6 +246,12 @@ func TestConfigurePricesRequiresCustomRatesForNonPreset(t *testing.T) {
 func TestConfigureDoesNotAcceptPricingFile(t *testing.T) {
 	if err := configure([]string{"--pricing-file", "pricing.json"}, os.Stdout, os.Stderr); err == nil {
 		t.Fatal("configure still accepts --pricing-file")
+	}
+}
+
+func TestConfigureDoesNotAcceptProviderProtocolFlag(t *testing.T) {
+	if err := configure([]string{"--protocol", "openai"}, os.Stdout, os.Stderr); err == nil {
+		t.Fatal("configure still accepts --protocol")
 	}
 }
 

@@ -109,6 +109,10 @@ func TestValidateClientProtocol(t *testing.T) {
 		{name: "kilo", protocol: "anthropic"},
 		{name: "kilo-ide", protocol: "anthropic"},
 		{name: "hermes", protocol: "anthropic"},
+		{name: "claude", protocol: ""},
+		{name: "kilo", protocol: "auto"},
+		{name: "hermes", protocol: "AUTO"},
+		{name: "claude", protocol: "both", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+tt.protocol, func(t *testing.T) {

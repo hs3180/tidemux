@@ -12,8 +12,8 @@ const defaultAnthropicMaxTokens int64 = 4096
 
 // PrepareRequest validates the client wire format and converts it to the
 // configured provider wire format. Both client protocols are available at
-// the gateway boundary; the configured provider protocol only selects the
-// upstream wire format.
+// the gateway boundary; the resolved provider protocol selects the upstream
+// wire format.
 func PrepareRequest(clientProtocol, providerProtocol string, data []byte, defaultModel string, maxOutputTokens int64) ([]byte, string, error) {
 	if clientProtocol == providerProtocol {
 		return data, firstNonEmpty(modelFromBody(data), defaultModel), nil
