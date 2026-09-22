@@ -87,7 +87,7 @@ func validChoice(protocol string, raw json.RawMessage) bool {
 		} `json:"function"`
 		DisableParallel *bool `json:"disable_parallel_tool_use"`
 	}
-	if StrictJSON(raw, &c) != nil {
+	if LenientJSON(raw, &c) != nil {
 		return false
 	}
 	if protocol == "openai" {
@@ -120,7 +120,7 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 		return true
 	}
 	var blocks []contentBlock
-	if StrictJSON(raw, &blocks) != nil || len(blocks) == 0 {
+	if LenientJSON(raw, &blocks) != nil || len(blocks) == 0 {
 		return false
 	}
 	for _, b := range blocks {

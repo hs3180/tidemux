@@ -29,6 +29,7 @@ type Client struct {
 type CallError struct {
 	Status int
 	Code   string
+	Param  string
 }
 
 func (e *CallError) Error() string { return e.Code }
@@ -64,18 +65,18 @@ func (c *Client) CallFrom(clientProtocol string, ctx context.Context, body []byt
 }
 func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) (response []byte, id string, err error) {
 	if err := options.Validate(clientProtocol); err != nil {
-		return nil, "", &CallError{400, err.Error()}
+		return nil, "", &CallError{Status: 400, Code: err.Error(), Param: ValidationParameter(err)}
 	}
 	started := time.Now()
 	nonce := make([]byte, 16)
 	if _, e := rand.Read(nonce); e != nil {
-		return nil, "", &CallError{500, "request_id_failed"}
+		return nil, "", &CallError{Status: 500, Code: "request_id_failed"}
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, Model: model, Status: "error", Events: []string{}}
 	providerBody, preparedModel, e := PrepareRequest(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
 	if e != nil {
-		return nil, id, &CallError{400, e.Error()}
+		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e)}
 	}
 	if preparedModel != "" {
 		model = preparedModel
@@ -111,12 +112,12 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				a.Status = "canceled"
 				a.ErrorCode = "request_canceled"
-				err = &CallError{408, "request_canceled"}
+				err = &CallError{Status: 408, Code: "request_canceled"}
 			}
 		}
 		if e := c.Ledger.AppendAudit(a); e != nil {
 			response = nil
-			err = &CallError{500, "audit_failed_do_not_retry_blindly"}
+			err = &CallError{Status: 500, Code: "audit_failed_do_not_retry_blindly"}
 		}
 	}()
 	admission, e := c.Gate.Acquire(ctx)
@@ -125,18 +126,18 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 		a.Events = append(a.Events, "queue_wait")
 	}
 	if e != nil {
-		return nil, id, &CallError{408, "request_canceled"}
+		return nil, id, &CallError{Status: 408, Code: "request_canceled"}
 	}
 	defer c.Gate.Release()
 	if e = ctx.Err(); e != nil {
-		return nil, id, &CallError{408, "request_canceled"}
+		return nil, id, &CallError{Status: 408, Code: "request_canceled"}
 	}
 	limits := c.Limits.Effective()
 	requestCtx, cancelRequest := context.WithTimeout(ctx, time.Duration(limits.UpstreamTimeoutSeconds)*time.Second)
 	defer cancelRequest()
 	defer func() {
 		if err != nil && ctx.Err() == nil && requestCtx.Err() == context.DeadlineExceeded {
-			err = &CallError{504, "upstream_timeout"}
+			err = &CallError{Status: 504, Code: "upstream_timeout"}
 		}
 	}()
 	path := "/chat/completions"
@@ -145,7 +146,7 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 	}
 	req, e := http.NewRequestWithContext(requestCtx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(providerBody))
 	if e != nil {
-		return nil, id, &CallError{502, "upstream_request_failed"}
+		return nil, id, &CallError{Status: 502, Code: "upstream_request_failed"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.Protocol == "openai" {
@@ -168,7 +169,7 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 	attempted = true
 	resp, e := client.Do(req)
 	if e != nil {
-		return nil, id, &CallError{502, "upstream_transport_error"}
+		return nil, id, &CallError{Status: 502, Code: "upstream_transport_error"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -183,21 +184,21 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 	recordedBody := observedReader{Reader: resp.Body, observed: &observed}
 	if sink != nil {
 		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-			return nil, id, &CallError{502, "invalid_upstream_content_type"}
+			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_content_type"}
 		}
 		translator := newStreamTranslator(c.Protocol, clientProtocol, model)
 		usage, data, e = readStreamWithLimits(c.Protocol, recordedBody, limits, func(frame []byte) error {
 			if translator != nil {
 				frame, e = translator.frame(frame)
 				if e != nil {
-					return &CallError{502, "invalid_upstream_stream"}
+					return &CallError{Status: 502, Code: "invalid_upstream_stream"}
 				}
 			}
 			if len(frame) == 0 {
 				return nil
 			}
 			if err := sink(id, frame); err != nil {
-				return &CallError{502, "downstream_write_error"}
+				return &CallError{Status: 502, Code: "downstream_write_error"}
 			}
 			return nil
 		})
@@ -211,20 +212,20 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 	} else {
 		data, e = io.ReadAll(io.LimitReader(recordedBody, limits.ResponseBytes+1))
 		if e != nil {
-			return nil, id, &CallError{502, "upstream_read_error"}
+			return nil, id, &CallError{Status: 502, Code: "upstream_read_error"}
 		}
 		if int64(len(data)) > limits.ResponseBytes {
-			return nil, id, &CallError{502, "upstream_response_too_large"}
+			return nil, id, &CallError{Status: 502, Code: "upstream_response_too_large"}
 		}
 		usage, e = ValidateResponse(c.Protocol, data)
 		if e != nil {
 			localEstimate(data)
-			return nil, id, &CallError{502, "invalid_upstream_response"}
+			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_response"}
 		}
 		data, e = TranslateResponse(c.Protocol, clientProtocol, data, model)
 		if e != nil {
 			localEstimate(data)
-			return nil, id, &CallError{502, "invalid_upstream_response"}
+			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_response"}
 		}
 	}
 	a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens = usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite

@@ -262,7 +262,7 @@ func TestProviderProtocolsShareAnthropicClientRoute(t *testing.T) {
 }
 
 func TestAnthropicToolHintIsAcceptedAndNotForwarded(t *testing.T) {
-	body := `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"name":"read_file","input_schema":{"type":"object"},"eager_input_streaming":true}]}`
+	body := `{"model":"custom-model","max_tokens":16,"store":true,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"name":"read_file","input_schema":{"type":"object"},"eager_input_streaming":true}]}`
 	for _, providerProtocol := range []string{"anthropic", "openai"} {
 		t.Run(providerProtocol, func(t *testing.T) {
 			var upstreamBody string
@@ -290,6 +290,90 @@ func TestAnthropicToolHintIsAcceptedAndNotForwarded(t *testing.T) {
 			}
 			if strings.Contains(upstreamBody, "eager_input_streaming") {
 				t.Fatalf("client-only hint reached %s provider: %s", providerProtocol, upstreamBody)
+			}
+		})
+	}
+}
+
+func TestValidationErrorIdentifiesParameter(t *testing.T) {
+	for _, test := range []struct {
+		name, protocol, path, body string
+	}{
+		{
+			name:     "openai",
+			protocol: "openai",
+			path:     "/v1/chat/completions",
+			body:     `{"model":"custom-model","messages":[{"role":"user","content":"hi"}],"temperature":"invalid"}`,
+		},
+		{
+			name:     "anthropic",
+			protocol: "anthropic",
+			path:     "/v1/messages",
+			body:     `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"temperature":"invalid"}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://provider.example/v1")
+			c.Protocol = test.protocol
+			h, closeDB, err := NewHandler(c, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			req := httptest.NewRequest("POST", test.path, strings.NewReader(test.body))
+			if test.protocol == "anthropic" {
+				req.Header.Set("x-api-key", "local-secret")
+			} else {
+				req.Header.Set("Authorization", "Bearer local-secret")
+			}
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != 400 {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+			var payload struct {
+				Error struct {
+					Param string `json:"param"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(out.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Error.Param != "temperature" {
+				t.Fatalf("param=%q body=%s", payload.Error.Param, out.Body.String())
+			}
+		})
+	}
+}
+
+func TestOpenAIUnknownFieldsAreAcceptedAndNotForwarded(t *testing.T) {
+	body := `{"model":"custom-model","store":true,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"},"eager_input_streaming":true}}]}`
+	for _, providerProtocol := range []string{"openai", "anthropic"} {
+		t.Run(providerProtocol, func(t *testing.T) {
+			var upstreamBody string
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				upstreamBody = string(data)
+				io.WriteString(w, responseBody(providerProtocol))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+			c.Protocol = providerProtocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer local-secret")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != 200 {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+			if strings.Contains(upstreamBody, "store") || strings.Contains(upstreamBody, "eager_input_streaming") {
+				t.Fatalf("ignored fields reached %s provider: %s", providerProtocol, upstreamBody)
 			}
 		})
 	}
