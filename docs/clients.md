@@ -2,7 +2,7 @@
 
 Use `tidemux <client>` to start an installed client with TideMux settings.
 The direct commands replace the earlier `connect` interface. VS Code extension compatibility is outside the 0.1.1 scope.
-Each gateway process uses one protocol and one profile. Start `serve` before
+Each gateway process uses one upstream provider protocol and one profile. Start `serve` before
 launching a client. The client command checks authenticated model discovery, reads only the
 local gateway credential from Keychain, and passes it in the child environment.
 The upstream API key stays in the gateway.
@@ -30,9 +30,9 @@ Hermes uses a named custom provider with `chat_completions` transport. Selecting
 its `openai-api` provider can select the Responses API, which TideMux does not
 currently serve. The launcher makes this transport choice explicitly.
 
-## Anthropic profile: Claude Code
+## Anthropic provider: OpenAI clients and Claude Code
 
-Create a separate configuration with a different port. The configure prompt
+Create a provider profile with the Anthropic API root. The configure prompt
 collects the upstream key without echoing it:
 
 ```sh
@@ -40,6 +40,10 @@ collects the upstream key without echoing it:
   --listen 127.0.0.1:8788 --config "$HOME/.config/tidemux/anthropic.json"
 ./tidemux serve --config "$HOME/.config/tidemux/anthropic.json"
 ```
+
+Kilo and Hermes can use this profile through the same OpenAI-compatible
+`/v1/chat/completions` endpoint; TideMux translates requests and responses to
+Anthropic Messages upstream.
 
 In another terminal:
 

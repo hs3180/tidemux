@@ -46,17 +46,17 @@ Copy [OpenAI config](../examples/openai.json) or
 If a configuration already exists, stop the gateway and back it up before
 replacing it. Set:
 
-- `base_url`: the exact API root **including its version/prefix**, for example
+- `base_url`: the exact upstream API root **including its version/prefix**, for example
   `https://your-endpoint.example/api/v1`. TideMux appends `/chat/completions` or
   `/messages` exactly once. Trailing slashes are ignored. HTTPS is required
   except for numeric loopback HTTP. URLs cannot contain credentials/query/fragment.
 - `listen_addr`: defaults to `127.0.0.1:4000` for loopback-only access. Set it
   to exactly `0.0.0.0:4000` to bind all IPv4 interfaces; other non-loopback IPs
   are rejected.
-- `protocol`: `openai`, `anthropic` or `both`. With `both`, `/v1/chat/completions`
-  uses `base_url` and `/v1/messages` uses `anthropic_base_url` when set, otherwise
-  the same root.
-- `anthropic_base_url`: optional second API root for `protocol: both`.
+- `protocol`: the upstream provider wire format, either `openai` or `anthropic`.
+  Clients use `/v1/chat/completions` in both modes; Anthropic requests are
+  translated to `/messages` upstream. When the provider is Anthropic,
+  `/v1/messages` is also available as a native compatibility route.
 - `model`: your actual model ID, used when a request omits model.
 - `upstream_id`: a short non-secret label for ledger records.
 - `ledger_path`: the existing local ledger location, or for a first setup the
@@ -91,12 +91,13 @@ Configure your HTTP client with the gateway API key/token (not the upstream key)
 
 - OpenAI: `POST http://127.0.0.1:4000/v1/chat/completions`, Bearer authentication,
   body `{"model":"your-model","messages":[{"role":"user","content":"Hi"}]}`.
-- Anthropic: `POST http://127.0.0.1:4000/v1/messages`, Bearer or `x-api-key`
+- Anthropic compatibility: `POST http://127.0.0.1:4000/v1/messages`, Bearer or `x-api-key`
   authentication with the **local token**, body
   `{"model":"your-model","max_tokens":16,"messages":[{"role":"user","content":"Hi"}]}`.
 
 See [protocol support](protocols.md) for accepted fields. The response keeps
-upstream JSON and adds `X-TideMux-Request-ID` for audit correlation.
+the OpenAI client shape; Anthropic provider responses are translated. Every
+response adds `X-TideMux-Request-ID` for audit correlation.
 
 Inspect the local ledger with:
 

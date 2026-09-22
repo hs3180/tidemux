@@ -19,6 +19,7 @@ import (
 type Client struct {
 	Limits                                          Limits
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
+	MaxOutputTokens                                 int64
 	Prices                                          map[string]Price
 	PromptCache                                     *PromptCache
 	HTTP                                            *http.Client
@@ -50,16 +51,19 @@ func mustJSON(value any) []byte {
 	return data
 }
 func (c *Client) Call(ctx context.Context, body []byte, model string) (response []byte, id string, err error) {
-	return c.call(ctx, body, model, nil, CallOptions{})
+	return c.call(c.Protocol, ctx, body, model, nil, CallOptions{})
 }
 func (c *Client) CallStream(ctx context.Context, body []byte, model string, sink StreamSink) ([]byte, string, error) {
-	return c.call(ctx, body, model, sink, CallOptions{})
+	return c.call(c.Protocol, ctx, body, model, sink, CallOptions{})
 }
 func (c *Client) CallWithOptions(ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) ([]byte, string, error) {
-	return c.call(ctx, body, model, sink, options)
+	return c.call(c.Protocol, ctx, body, model, sink, options)
 }
-func (c *Client) call(ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) (response []byte, id string, err error) {
-	if err := options.Validate(c.Protocol); err != nil {
+func (c *Client) CallFrom(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) ([]byte, string, error) {
+	return c.call(clientProtocol, ctx, body, model, sink, options)
+}
+func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) (response []byte, id string, err error) {
+	if err := options.Validate(clientProtocol); err != nil {
 		return nil, "", &CallError{400, err.Error()}
 	}
 	started := time.Now()
@@ -69,6 +73,14 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, Model: model, Status: "error", Events: []string{}}
+	providerBody, preparedModel, e := PrepareRequest(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
+	if e != nil {
+		return nil, id, &CallError{400, e.Error()}
+	}
+	if preparedModel != "" {
+		model = preparedModel
+		a.Model = model
+	}
 	price, priced := c.Prices[model]
 	if !priced {
 		price, priced = BuiltInPrice(c.BaseURL, model, started)
@@ -131,7 +143,7 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 	if c.Protocol == "anthropic" {
 		path = "/messages"
 	}
-	req, e := http.NewRequestWithContext(requestCtx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(body))
+	req, e := http.NewRequestWithContext(requestCtx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(providerBody))
 	if e != nil {
 		return nil, id, &CallError{502, "upstream_request_failed"}
 	}
@@ -173,12 +185,25 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			return nil, id, &CallError{502, "invalid_upstream_content_type"}
 		}
+		translator := newStreamTranslator(c.Protocol, clientProtocol, model)
 		usage, data, e = readStreamWithLimits(c.Protocol, recordedBody, limits, func(frame []byte) error {
+			if translator != nil {
+				frame, e = translator.frame(frame)
+				if e != nil {
+					return &CallError{502, "invalid_upstream_stream"}
+				}
+			}
+			if len(frame) == 0 {
+				return nil
+			}
 			if err := sink(id, frame); err != nil {
 				return &CallError{502, "downstream_write_error"}
 			}
 			return nil
 		})
+		if e == nil && translator != nil {
+			data, e = translator.terminal(data)
+		}
 		if e != nil {
 			localEstimate(observed.Bytes())
 			return nil, id, e
@@ -192,6 +217,11 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 			return nil, id, &CallError{502, "upstream_response_too_large"}
 		}
 		usage, e = ValidateResponse(c.Protocol, data)
+		if e != nil {
+			localEstimate(data)
+			return nil, id, &CallError{502, "invalid_upstream_response"}
+		}
+		data, e = TranslateResponse(c.Protocol, clientProtocol, data, model)
 		if e != nil {
 			localEstimate(data)
 			return nil, id, &CallError{502, "invalid_upstream_response"}
@@ -211,7 +241,7 @@ func (c *Client) call(ctx context.Context, body []byte, model string, sink Strea
 		}
 	}
 	if c.PromptCache != nil {
-		c.PromptCache.Remember(c.Protocol, model, options.SessionID, body)
+		c.PromptCache.Remember(clientProtocol, model, options.SessionID, body)
 	}
 	a.Status = "ok"
 	return data, id, nil

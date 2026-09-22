@@ -92,15 +92,18 @@ For client invocation options and setup details, see [client setup](docs/clients
 
 ## Compatibility
 
-**0.1.1** supports Chat Completions and Messages, one upstream and protocol per
-instance. The 0.2.0 development line adds an optional `protocol: both` mode so
-one gateway can expose both native routes while sharing credentials and ledger.
-The three CLIs have passed DeepSeek file read/edit/test and continued
-conversation workflows. You can configure other compatible providers, though
-they have not been tested.
+**0.1.1** supports an OpenAI-compatible client boundary and one configured
+upstream provider per instance. The 0.2.0 development line adds Anthropic
+upstream translation: clients continue using Chat Completions while the
+provider can be OpenAI-compatible or Anthropic-compatible, with shared
+credentials and ledger accounting. The three CLIs have passed DeepSeek file
+read/edit/test and continued conversation workflows. You can configure other
+compatible providers, though they have not been tested.
 
-Responses API, protocol conversion, images/audio and IDE extensions are outside
-this release's scope. See [tested clients](docs/client-compatibility.md) and
+Responses API, images/audio and IDE extensions are outside this release's
+scope. Supported Chat Completions-to-Messages conversion is covered in the
+protocol boundary; provider-specific features without a client equivalent are
+not forwarded silently. See [tested clients](docs/client-compatibility.md) and
 [protocol support](docs/protocols.md).
 
 ## Documentation

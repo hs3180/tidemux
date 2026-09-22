@@ -58,8 +58,12 @@ func TestStreamingGatewayAudit(t *testing.T) {
 					t.Fatal("leaked error")
 				}
 				if scenario == "ok" {
-					if w.Body.String() != start+end {
-						t.Fatalf("SSE modified %s", w.Body.String())
+					if protocol == "openai" {
+						if w.Body.String() != start+end {
+							t.Fatalf("SSE modified %s", w.Body.String())
+						}
+					} else if body := w.Body.String(); !strings.Contains(body, `"chat.completion.chunk"`) || !strings.Contains(body, "data: [DONE]") || strings.Contains(body, "event:") || strings.Contains(body, "end_turn") {
+						t.Fatalf("Anthropic stream was not translated: %s", body)
 					}
 				} else if strings.Contains(w.Body.String(), end) || !strings.Contains(w.Body.String(), "event: error") {
 					t.Fatal("failed stream completed")

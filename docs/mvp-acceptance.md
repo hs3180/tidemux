@@ -3,7 +3,7 @@
 ## Candidate status
 
 The 0.1.1 release combines the merged budget, reconciliation and daily-report
-features. It includes dual-protocol streaming, tools, CLI launchers, configurable
+features. It includes OpenAI-boundary streaming, provider translation, tools, CLI launchers, configurable
 limits, model discovery, local diagnostics, usage reports and macOS scheduled
 notifications. SMTP and webhook delivery are intentionally deferred.
 

@@ -143,11 +143,11 @@ func launch(args []string, stdout, stderr *os.File) error {
 }
 
 func validateClientProtocol(name, protocol string) error {
-	if name == "claude" && protocol != "anthropic" && protocol != "both" {
-		return errors.New("Claude Code requires an Anthropic or both-protocol profile; select an appropriate --config")
+	if name == "claude" && protocol != "anthropic" {
+		return errors.New("Claude Code requires an Anthropic provider profile; select an appropriate --config")
 	}
-	if (name == "kilo" || name == "kilo-ide" || name == "hermes") && protocol != "openai" && protocol != "both" {
-		return errors.New("this client launcher requires an OpenAI or both-protocol profile; select an appropriate --config")
+	if (name == "kilo" || name == "kilo-ide" || name == "hermes") && protocol != "openai" && protocol != "anthropic" {
+		return errors.New("this client launcher requires an OpenAI or Anthropic provider profile; select an appropriate --config")
 	}
 	return nil
 }

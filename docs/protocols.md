@@ -1,30 +1,30 @@
-# Protocol support — 0.1.1
+# Protocol support — 0.2.0 development
 
-The original 0.1.0 supported text/non-streaming requests. The 0.1.1 release
-extends that baseline as below. Release acceptance covers three CLIs.
-Each process uses one configured upstream root. It may expose one protocol or,
-with `protocol: "both"`, both native routes at the same time. No provider/model
-whitelist or cross-protocol conversion is applied.
+TideMux exposes one stable OpenAI-compatible client boundary:
+`/v1/chat/completions`. The configuration's `protocol` selects the upstream
+provider wire format, either `openai` or `anthropic`; `base_url` is the single
+API root for that provider. Credentials, gateway authentication, model identity
+and the local ledger remain shared.
 
-| Feature | OpenAI compatible | Anthropic compatible |
+| Feature | OpenAI upstream | Anthropic upstream |
 | --- | --- | --- |
-| Inference endpoint | `/v1/chat/completions` | `/v1/messages` |
-| Upstream suffix | `/chat/completions` | `/messages` |
-| Upstream credential | Configured Bearer key | Configured `x-api-key` |
-| Protocol headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, validated client `anthropic-beta`, and `X-TideMux-Session-ID` when present |
-| Model discovery | `/v1/models`, `/models`, and model detail | Same paths, Anthropic-shaped model objects |
-| Text | String or text blocks | String or text blocks; top-level system |
-| Tools | Function definitions, choices, call IDs, tool messages | Custom tools, choices, tool_use/tool_result blocks |
-| Streaming | Chat Completions SSE and `[DONE]` | Messages SSE and `message_stop` |
-| Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation |
-| Reasoning | `reasoning_content`, `reasoning_effort`, compatible thinking toggle | Thinking modes/display; signed and redacted history blocks |
-| Formatting | `response_format` text/json_object/json_schema | `output_config` effort/schema |
-| Client metadata | `stream_options`, parallel tool calls | `metadata.user_id`, cache_control, context_management object |
+| Client endpoint | `/v1/chat/completions` | `/v1/chat/completions` |
+| Upstream endpoint | `/chat/completions` | `/messages` |
+| Upstream credential | Bearer key | `x-api-key` |
+| Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
+| Model discovery | OpenAI-shaped `/v1/models` | OpenAI-shaped `/v1/models` |
+| Request/response | Passed through after validation | OpenAI Chat Completions translated to/from Messages |
+| Streaming | Chat Completions SSE and `[DONE]` | Messages SSE translated to Chat Completions SSE |
+| Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-With `protocol: "both"`, `/v1/chat/completions` selects the OpenAI upstream
-root and `/v1/messages` selects the Anthropic root. `anthropic_base_url` is
-optional; when omitted, the configured `base_url` is reused. Credentials,
-gateway authentication, model identity and the local ledger remain shared.
+When an Anthropic provider is configured, `/v1/messages` remains available as
+a native compatibility passthrough for Claude Code. It uses the same single
+`base_url`; it is not a second provider configuration or a second client mode.
+
+The translation boundary covers text, system/developer instructions, tools,
+tool calls/results, stop sequences, output schemas and streaming terminal
+events. Provider-specific features that have no OpenAI equivalent remain
+explicitly unsupported rather than silently forwarded.
 
 Explicit parameters are retained; provider acceptance is not inferred from the
 model name. Anthropic-compatible system-role messages within the message list

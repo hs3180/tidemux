@@ -41,9 +41,8 @@ func configure(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("configure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
-	protocol := flags.String("protocol", "openai", "openai, anthropic or both")
+	protocol := flags.String("protocol", "openai", "upstream provider protocol: openai or anthropic")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
-	anthropicBaseURL := flags.String("anthropic-base-url", "", "optional Anthropic API root when protocol is both")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
 	listen := flags.String("listen", defaultListenAddr, "IP:port (loopback by default)")
@@ -84,9 +83,6 @@ func configure(args []string, stdout, stderr *os.File) error {
 				*baseURL = "https://api.deepseek.com/anthropic/v1"
 			}
 		}
-		if *protocol == "both" && *anthropicBaseURL == "" {
-			*anthropicBaseURL = "https://api.deepseek.com/anthropic/v1"
-		}
 		if *model == "" {
 			*model = "deepseek-flash"
 		}
@@ -117,7 +113,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 		schedule = gateway.ReportSchedule{Time: normalized, Channel: "macos"}
 	}
-	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, AnthropicBaseURL: *anthropicBaseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, Protocol: *protocol, BaseURL: *baseURL, Model: *model, UpstreamID: *protocol + "-primary", APIVersion: "2023-06-01", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if err = c.Validate(); err != nil {
 		return err
 	}

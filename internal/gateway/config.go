@@ -37,9 +37,8 @@ type Config struct {
 	ModelCapabilities               ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits                          adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr                      string                   `json:"listen_addr"`
-	Protocol                        string                   `json:"protocol"`
+	Protocol                        string                   `json:"protocol"` // upstream provider protocol
 	BaseURL                         string                   `json:"base_url"`
-	AnthropicBaseURL                string                   `json:"anthropic_base_url,omitempty"`
 	Model                           string                   `json:"model"`
 	UpstreamID                      string                   `json:"upstream_id"`
 	APIVersion                      string                   `json:"anthropic_version,omitempty"`
@@ -99,19 +98,11 @@ func (c Config) Validate() error {
 	if !ip.IsLoopback() && host != "0.0.0.0" {
 		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
-	if c.Protocol != "openai" && c.Protocol != "anthropic" && c.Protocol != "both" {
-		return errors.New("protocol must be openai, anthropic or both")
+	if c.Protocol != "openai" && c.Protocol != "anthropic" {
+		return errors.New("protocol must be openai or anthropic")
 	}
 	if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
 		return err
-	}
-	if c.AnthropicBaseURL != "" {
-		if c.Protocol != "both" {
-			return errors.New("anthropic_base_url requires protocol both")
-		}
-		if err := validateBaseURL(c.AnthropicBaseURL, "anthropic_base_url"); err != nil {
-			return err
-		}
 	}
 	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
 		return errors.New("model and upstream_id are required")
@@ -128,7 +119,7 @@ func (c Config) Validate() error {
 	if len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n") {
 		return errors.New("upstream_id must be a short non-secret label")
 	}
-	if c.Protocol == "anthropic" || c.Protocol == "both" {
+	if c.Protocol == "anthropic" {
 		if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
 			return errors.New("anthropic_version must be YYYY-MM-DD")
 		}

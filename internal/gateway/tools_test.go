@@ -47,10 +47,10 @@ func TestToolConversationThroughGateway(t *testing.T) {
 			}
 			defer closeDB()
 			var input map[string]any
-			json.Unmarshal([]byte(requestBody(protocol)), &input)
+			json.Unmarshal([]byte(requestBody("openai")), &input)
 			for turn := 0; turn < 2; turn++ {
 				body, _ := json.Marshal(input)
-				req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(string(body)))
+				req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(string(body)))
 				req.Header.Set("Authorization", "Bearer local-secret")
 				w := httptest.NewRecorder()
 				h.ServeHTTP(w, req)
@@ -61,12 +61,8 @@ func TestToolConversationThroughGateway(t *testing.T) {
 					var response map[string]any
 					json.Unmarshal(w.Body.Bytes(), &response)
 					messages := input["messages"].([]any)
-					if protocol == "openai" {
-						assistant := response["choices"].([]any)[0].(map[string]any)["message"]
-						messages = append(messages, assistant, map[string]any{"role": "tool", "tool_call_id": "call1", "content": "fixture-result"})
-					} else {
-						messages = append(messages, map[string]any{"role": "assistant", "content": response["content"]}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call1", "content": "fixture-result"}}})
-					}
+					assistant := response["choices"].([]any)[0].(map[string]any)["message"]
+					messages = append(messages, assistant, map[string]any{"role": "tool", "tool_call_id": "call1", "content": "fixture-result"})
 					input["messages"] = messages
 				}
 			}

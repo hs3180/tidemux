@@ -88,10 +88,6 @@ func TestServeProcessBothProtocols(t *testing.T) {
 			}
 			route := "/v1/chat/completions"
 			body := `{"messages":[{"role":"user","content":"test"}]}`
-			if protocol == "anthropic" {
-				route = "/v1/messages"
-				body = `{"max_tokens":8,"messages":[{"role":"user","content":"test"}]}`
-			}
 			req, _ := http.NewRequest("POST", address+route, strings.NewReader(body))
 			req.Header.Set("Authorization", "Bearer local-secret")
 			client := http.Client{Timeout: 10 * time.Second}

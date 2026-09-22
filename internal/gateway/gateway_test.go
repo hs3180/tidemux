@@ -51,9 +51,6 @@ func TestOpenAllowsExplicitExternalListen(t *testing.T) {
 }
 
 func endpoint(protocol string) string {
-	if protocol == "anthropic" {
-		return "/v1/messages"
-	}
 	return "/v1/chat/completions"
 }
 func TestBothProtocolsAndFailureAudit(t *testing.T) {
@@ -169,67 +166,47 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 	}
 }
 
-func TestBothProtocolRoutesShareCredentialsAndLedger(t *testing.T) {
-	var paths []string
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		switch r.URL.Path {
-		case "/openai/v1/chat/completions":
-			if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("x-api-key") != "" {
-				t.Errorf("OpenAI authentication = %q/%q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
+func TestProviderProtocolsShareOpenAIClientRoute(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol, func(t *testing.T) {
+			var paths []string
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				if protocol == "anthropic" {
+					if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != "2023-06-01" || r.Header.Get("Authorization") != "" {
+						t.Errorf("Anthropic authentication = %q/%q/%q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"), r.Header.Get("Authorization"))
+					}
+					io.WriteString(w, responseBody("anthropic"))
+					return
+				}
+				if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("x-api-key") != "" {
+					t.Errorf("OpenAI authentication = %q/%q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
+				}
+				io.WriteString(w, responseBody("openai"))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+			c.Protocol = protocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
 			}
-			io.WriteString(w, responseBody("openai"))
-		case "/anthropic/v1/messages":
-			if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != "2023-06-01" {
-				t.Errorf("Anthropic authentication = %q/%q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
+			defer closeDB()
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody("openai")))
+			req.Header.Set("Authorization", "Bearer local-secret")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != 200 || !strings.Contains(out.Body.String(), `"chat.completion"`) {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
 			}
-			io.WriteString(w, responseBody("anthropic"))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer up.Close()
-	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/openai/v1")
-	c.Protocol = "both"
-	c.AnthropicBaseURL = up.URL + "/anthropic/v1"
-	h, closeDB, err := NewHandler(c, up.Client())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeDB()
-
-	openAI := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody("openai")))
-	openAI.Header.Set("Authorization", "Bearer local-secret")
-	openAIOut := httptest.NewRecorder()
-	h.ServeHTTP(openAIOut, openAI)
-	if openAIOut.Code != 200 {
-		t.Fatalf("OpenAI status=%d body=%s", openAIOut.Code, openAIOut.Body.String())
-	}
-	anthropic := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(requestBody("anthropic")))
-	anthropic.Header.Set("x-api-key", "local-secret")
-	anthropicOut := httptest.NewRecorder()
-	h.ServeHTTP(anthropicOut, anthropic)
-	if anthropicOut.Code != 200 {
-		t.Fatalf("Anthropic status=%d body=%s", anthropicOut.Code, anthropicOut.Body.String())
-	}
-	if strings.Join(paths, ",") != "/openai/v1/chat/completions,/anthropic/v1/messages" {
-		t.Fatalf("upstream paths=%v", paths)
-	}
-	l, err := ledger.Open(c.LedgerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	rows, err := l.Recent(context.Background(), 10)
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("audits=%v err=%v", rows, err)
-	}
-	seen := map[string]bool{}
-	for _, row := range rows {
-		seen[row.Protocol] = true
-	}
-	if !seen["openai"] || !seen["anthropic"] {
-		t.Fatalf("protocol audits=%v", seen)
+			wantPath := "/provider/v1/chat/completions"
+			if protocol == "anthropic" {
+				wantPath = "/provider/v1/messages"
+			}
+			if strings.Join(paths, ",") != wantPath {
+				t.Fatalf("upstream paths=%v", paths)
+			}
+		})
 	}
 }
 func TestValidationNeverCallsUpstream(t *testing.T) {

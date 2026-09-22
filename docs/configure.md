@@ -49,10 +49,9 @@ replace it with the new schema using `tidemux budget` or recreate it with
 `tidemux configure --replace`.
 
 1. `configure` selects OpenAI format, `https://api.deepseek.com`, and
-   `deepseek-flash`. Use `--protocol both` to expose both OpenAI and Anthropic
-   routes in one gateway; the DeepSeek preset automatically uses
-   `https://api.deepseek.com/anthropic/v1` for the Anthropic route, or provide
-   `--anthropic-base-url` for another compatible endpoint. Before the **API key (hidden)** prompt, TideMux asks for a
+   `deepseek-flash`. Use `--protocol anthropic` when the upstream provider
+   exposes Anthropic Messages; the DeepSeek preset then selects
+   `https://api.deepseek.com/anthropic/v1` as the single provider root. Before the **API key (hidden)** prompt, TideMux asks for a
    daily report notification time in local time (`HH:MM`). Enter a time to enable
    scheduled notifications, or press Enter to leave them disabled. At the API-key
    prompt, paste your DeepSeek key and press Enter. The following **Gateway API

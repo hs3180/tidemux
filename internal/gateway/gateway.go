@@ -40,14 +40,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		return nil, nil, err
 	}
 	cache := adapter.NewPromptCache()
-	clients := make(map[string]*adapter.Client)
-	for _, protocol := range configuredProtocols(c) {
-		baseURL := c.BaseURL
-		if protocol == "anthropic" && c.AnthropicBaseURL != "" {
-			baseURL = c.AnthropicBaseURL
-		}
-		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: baseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: cache, Limits: c.Limits, HTTP: httpClient, Ledger: l, Gate: gate}
-	}
+	clients := map[string]*adapter.Client{c.Protocol: {Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: c.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}}
 	return &handler{config: c, ledger: l, sessions: sessions, clients: clients}, func() error {
 		stopReconciliation()
 		sessions.Close()
@@ -55,12 +48,6 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	}, nil
 }
 
-func configuredProtocols(c Config) []string {
-	if c.Protocol == "both" {
-		return []string{"openai", "anthropic"}
-	}
-	return []string{c.Protocol}
-}
 func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
 	h, closeLedger, err := NewHandler(c, client)
 	if err != nil {
@@ -103,10 +90,9 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string)
 }
 
 func (h *handler) protocolForRequest(r *http.Request) string {
-	if h.config.Protocol != "both" {
-		return h.config.Protocol
-	}
-	if r.URL.Path == "/v1/messages" || strings.HasPrefix(r.URL.Path, "/v1/messages/") {
+	// The stable client-facing route is OpenAI. Keep the native Anthropic route
+	// as a compatibility passthrough when the configured provider is Anthropic.
+	if h.config.Protocol == "anthropic" && (r.URL.Path == "/v1/messages" || strings.HasPrefix(r.URL.Path, "/v1/messages/")) {
 		return "anthropic"
 	}
 	return "openai"
@@ -217,7 +203,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	client := h.clients[protocol]
+	client := h.clients[h.config.Protocol]
 	if client == nil {
 		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 		return
@@ -266,7 +252,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lease.TouchOutput()
 			return nil
 		}
-		terminal, id, err := client.CallWithOptions(r.Context(), body, model, send, options)
+		terminal, id, err := client.CallFrom(protocol, r.Context(), body, model, send, options)
 		settle(id)
 		if err == nil {
 			send(id, terminal)
@@ -291,7 +277,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
 		return
 	}
-	response, id, err := client.CallWithOptions(r.Context(), body, model, nil, options)
+	response, id, err := client.CallFrom(protocol, r.Context(), body, model, nil, options)
 	settle(id)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)

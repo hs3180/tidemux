@@ -104,13 +104,11 @@ func TestValidateClientProtocol(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "claude", protocol: "anthropic"},
-		{name: "claude", protocol: "both"},
 		{name: "claude", protocol: "openai", wantErr: true},
 		{name: "kilo", protocol: "openai"},
-		{name: "kilo", protocol: "both"},
-		{name: "kilo-ide", protocol: "both"},
-		{name: "hermes", protocol: "both"},
-		{name: "hermes", protocol: "anthropic", wantErr: true},
+		{name: "kilo", protocol: "anthropic"},
+		{name: "kilo-ide", protocol: "anthropic"},
+		{name: "hermes", protocol: "anthropic"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"/"+tt.protocol, func(t *testing.T) {

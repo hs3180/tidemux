@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 development
+
+- Make the gateway's client boundary OpenAI-compatible while allowing the
+  configured provider protocol to be OpenAI or Anthropic.
+- Translate Anthropic requests, responses, tool calls and streaming events
+  through the single configured `base_url`; remove the separate Anthropic base
+  URL and native `protocol: both` configuration mode.
+
 ## 0.1.1 — 2026-09-21
 
 - Add independent daily usage reports with JSON history, private self-contained
