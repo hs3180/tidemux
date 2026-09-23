@@ -30,7 +30,13 @@ func configure(args []string, stdout, stderr *os.File) error {
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: tidemux configure [flags]")
-		fmt.Fprintln(stderr, "Without --provider, --base-url, --model or --preset, starts guided setup.")
+		fmt.Fprintln(stderr, "Setup modes:")
+		fmt.Fprintln(stderr, "  Guided:  tidemux configure")
+		fmt.Fprintln(stderr, "  Named:   --provider NAME,BASE_URL,MODEL (repeatable)")
+		fmt.Fprintln(stderr, "           or NAME,PROTOCOL,BASE_URL,MODEL to force the protocol")
+		fmt.Fprintln(stderr, "  Legacy:  --base-url URL --model ID")
+		fmt.Fprintln(stderr, "  Preset:  --preset deepseek-flash")
+		fmt.Fprintln(stderr, "Named providers support all models by default; use --provider-models to restrict the list.")
 		flags.PrintDefaults()
 	}
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")

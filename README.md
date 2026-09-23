@@ -39,22 +39,28 @@ For Kilo CLI or Hermes Agent:
 tidemux configure --preset deepseek-flash
 ```
 
-For a single upstream endpoint, TideMux detects its protocol from the API root.
-To use DeepSeek's Anthropic-compatible API as that endpoint, override the root:
+This preset uses the single-provider compatibility mode: TideMux detects the
+upstream protocol from the API root and exposes both client APIs, translating
+between them when needed. To use DeepSeek's Anthropic-compatible API as that
+endpoint, override the root:
 
 ```sh
 tidemux configure --preset deepseek-flash \
   --base-url https://api.deepseek.com/anthropic/v1
 ```
 
-To route client protocols to named upstream providers, configure each one with
-its protocol, endpoint and model, then select a default provider for each
-client protocol. See the
-[configuration guide](docs/configure.md#configure-protocol-routed-providers).
-
-Paste your API key at the hidden prompt; TideMux handles Keychain storage.
-Other OpenAI-compatible or Anthropic-compatible providers work through
-[custom API configuration](docs/configure.md#any-other-compatible-api).
+For another provider, run `tidemux configure` without flags for guided setup.
+Enter the provider API Base URL and API key; TideMux derives a name from the
+URL, detects the upstream protocol and discovers models when possible. It allows
+all model IDs by default: press Enter at the optional model-scope prompt, or
+enter a subset to restrict which IDs TideMux forwards. The upstream still
+determines which models are actually available. For command-line setup, use
+`--provider NAME,BASE_URL,MODEL` (add a protocol to force it) and, only when
+needed, `--provider-models NAME,MODEL[,MODEL...]` (include the fallback model).
+The key is still entered at a hidden prompt. Named providers serve only clients
+using the same protocol and do not cross-translate. To route both client
+protocols to named providers, configure one for each and select their defaults.
+See [configuration](docs/configure.md) for pricing, routing and other details.
 
 ### 2. Start the gateway
 
@@ -68,9 +74,9 @@ Next time, just run `tidemux serve` to reuse your configuration.
 
 ### 3. Launch your client
 
-In another terminal, from your project directory, run the client you want. The
-gateway exposes both client APIs at the same time; the upstream protocol is
-detected automatically:
+In another terminal, from your project directory, run the client you want. In
+the single-provider compatibility mode used by this preset, both client APIs
+are exposed and TideMux detects the upstream protocol automatically:
 
 ```sh
 # Anthropic API client
@@ -101,15 +107,16 @@ For client invocation options and setup details, see [client setup](docs/clients
 
 ## Compatibility
 
-The 0.2.0 development line exposes both OpenAI Chat Completions and Anthropic
-Messages client APIs simultaneously. A profile can use one detected upstream
-provider or configure independent OpenAI and Anthropic providers; client
-protocol determines routing when both are present, with translation retained
-when only one provider is configured. Gateway auth, session limits and ledger
-accounting remain shared. The three
-CLIs have passed DeepSeek file read/edit/test and continued conversation
-workflows. You can configure other compatible providers, though they have not
-been tested.
+The 0.2.0 development line exposes OpenAI Chat Completions and Anthropic
+Messages client APIs simultaneously. In single-provider compatibility mode
+(used by the preset and `--base-url`/`--model` setup), either client protocol
+can use the upstream through translation. Guided setup creates a named provider
+with one upstream protocol; it serves the matching client protocol only. To
+route both client protocols to separate endpoints, configure one named provider
+for each protocol and choose their defaults. Gateway auth, session limits and
+ledger accounting remain shared. The three CLIs have passed DeepSeek file
+read/edit/test and continued-conversation workflows. Other compatible providers
+can be configured, though they have not all been tested.
 
 Responses API, images/audio and IDE extensions are outside this release's
 scope. Supported bidirectional Chat Completions/Messages conversion is covered
