@@ -168,8 +168,10 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 
 func (h *handler) protocolForRequest(r *http.Request) string {
 	// Messages has a unique path. Model discovery shares /v1/models across
-	// protocols, so use Anthropic's authentication/version headers there.
-	if r.URL.Path == "/v1/messages" || r.Header.Get("anthropic-version") != "" || r.Header.Get("x-api-key") != "" {
+	// protocols, so use Anthropic's authentication/version headers only there;
+	// other client-only headers must not change the selected client protocol.
+	modelRoute := r.Method == http.MethodGet && (r.URL.Path == "/v1/models" || r.URL.Path == "/models" || strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/"))
+	if r.URL.Path == "/v1/messages" || modelRoute && (r.Header.Get("anthropic-version") != "" || r.Header.Get("x-api-key") != "") {
 		return "anthropic"
 	}
 	return "openai"
