@@ -39,14 +39,17 @@ For Kilo CLI or Hermes Agent:
 tidemux configure --preset deepseek-flash
 ```
 
-The provider protocol is detected automatically from the configured API root.
-For a provider's Anthropic-compatible API, pass that API root explicitly; do
-not select a protocol flag:
+For a single upstream endpoint, TideMux detects its protocol from the API root.
+To use DeepSeek's Anthropic-compatible API as that endpoint, override the root:
 
 ```sh
 tidemux configure --preset deepseek-flash \
   --base-url https://api.deepseek.com/anthropic/v1
 ```
+
+When a provider exposes both APIs, configure both roots to prefer the matching
+native endpoint for each client. Use `--openai-base-url` and
+`--anthropic-base-url`; see the [configuration guide](docs/configure.md#configure-both-upstream-protocols).
 
 Paste your API key at the hidden prompt; TideMux handles Keychain storage.
 Other OpenAI-compatible or Anthropic-compatible providers work through
@@ -97,13 +100,12 @@ For client invocation options and setup details, see [client setup](docs/clients
 
 ## Compatibility
 
-**0.1.1** supports one configured upstream provider per instance. The 0.2.0
-development line exposes both OpenAI Chat Completions and Anthropic Messages
-client APIs simultaneously. TideMux detects whether the configured provider
-speaks OpenAI or Anthropic format from its API root and model discovery, then
-passes through matching requests or translates them in the other direction.
-Credentials and ledger accounting remain shared. The three CLIs have passed
-DeepSeek file read/edit/test and continued conversation
+The 0.2.0 development line exposes both OpenAI Chat Completions and Anthropic
+Messages client APIs simultaneously. A profile can use one detected upstream
+endpoint or configure both protocol-specific endpoints; clients prefer the
+matching endpoint when present and use translation when only the other endpoint
+is configured. Credentials and ledger accounting remain shared. The three
+CLIs have passed DeepSeek file read/edit/test and continued conversation
 workflows. You can configure other compatible providers, though they have not
 been tested.
 

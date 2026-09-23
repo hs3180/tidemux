@@ -24,15 +24,30 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	if err := c.Validate(); err != nil {
 		return nil, nil, err
 	}
-	if c.APIKey == "" || c.AccessToken == "" || c.APIKey == c.AccessToken {
+	if c.AccessToken == "" {
 		return nil, nil, errors.New("distinct resolved credentials are required")
 	}
-	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
+	if len(c.Endpoints) == 0 {
+		if c.APIKey == "" || c.APIKey == c.AccessToken {
+			return nil, nil, errors.New("distinct resolved credentials are required")
+		}
+	} else {
+		for _, endpoint := range c.Endpoints {
+			if endpoint.APIKey == "" || endpoint.APIKey == c.AccessToken {
+				return nil, nil, errors.New("distinct resolved credentials are required")
+			}
+		}
+	}
+	endpoints, err := resolveProviderEndpoints(c, httpClient)
 	if err != nil {
 		return nil, nil, err
 	}
-	c.Protocol = protocol
-	c.APIVersion = apiVersion
+	if len(c.Endpoints) == 0 {
+		for protocol, endpoint := range endpoints {
+			c.Protocol = protocol
+			c.APIVersion = endpoint.APIVersion
+		}
+	}
 	if err := c.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -50,8 +65,19 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		return nil, nil, err
 	}
 	cache := adapter.NewPromptCache()
-	clients := map[string]*adapter.Client{c.Protocol: {Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: c.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}}
-	return &handler{config: c, ledger: l, sessions: sessions, clients: clients}, func() error {
+	clients := make(map[string]*adapter.Client, len(endpoints))
+	models := make(map[string][]string, len(endpoints))
+	modelsKnown := make(map[string]bool, len(endpoints))
+	for protocol, endpoint := range endpoints {
+		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: endpoint.BaseURL, APIKey: endpoint.APIKey, APIVersion: endpoint.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: c.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		if len(c.Endpoints) != 0 {
+			models[protocol], modelsKnown[protocol] = discoverProviderModels(endpoint, protocol, httpClient)
+		}
+		if len(c.Endpoints) == 0 && !modelsKnown[protocol] {
+			models[protocol] = []string{c.Model}
+		}
+	}
+	return &handler{config: c, ledger: l, sessions: sessions, clients: clients, models: models, modelsKnown: modelsKnown}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()
@@ -72,10 +98,39 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 }
 
 type handler struct {
-	config   Config
-	ledger   *ledger.Ledger
-	sessions *limiter.SessionLimiter
-	clients  map[string]*adapter.Client
+	config      Config
+	ledger      *ledger.Ledger
+	sessions    *limiter.SessionLimiter
+	clients     map[string]*adapter.Client
+	models      map[string][]string
+	modelsKnown map[string]bool
+}
+
+func (h *handler) clientForRequestProtocol(protocol string) *adapter.Client {
+	if client := h.clients[protocol]; client != nil {
+		return client
+	}
+	if protocol == "anthropic" {
+		return h.clients["openai"]
+	}
+	return h.clients["anthropic"]
+}
+
+func (h *handler) modelsForRequestProtocol(protocol string) ([]string, bool) {
+	client := h.clientForRequestProtocol(protocol)
+	if client == nil {
+		return nil, false
+	}
+	return h.models[client.Protocol], h.modelsKnown[client.Protocol]
+}
+
+func containsModel(models []string, model string) bool {
+	for _, candidate := range models {
+		if candidate == model {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string, param ...string) {
@@ -112,9 +167,9 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 }
 
 func (h *handler) protocolForRequest(r *http.Request) string {
-	// Both client-facing protocols are always available. The configured
-	// protocol only selects the upstream provider wire format.
-	if r.URL.Path == "/v1/messages" {
+	// Messages has a unique path. Model discovery shares /v1/models across
+	// protocols, so use Anthropic's authentication/version headers there.
+	if r.URL.Path == "/v1/messages" || r.Header.Get("anthropic-version") != "" || r.Header.Get("x-api-key") != "" {
 		return "anthropic"
 	}
 	return "openai"
@@ -137,30 +192,49 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelList := r.URL.Path == "/v1/models" || r.URL.Path == "/models"
 	modelDetail := strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/")
 	if r.Method == "GET" && (modelList || modelDetail) {
+		models, _ := h.modelsForRequestProtocol(protocol)
 		if modelDetail {
 			modelID := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
-			if modelID != h.config.Model {
+			if !containsModel(models, modelID) {
 				h.reject(w, r, protocol, 404, "model_not_found")
 				return
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		model := map[string]any{"id": h.config.Model, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
 		if protocol == "anthropic" {
-			model = map[string]any{"id": h.config.Model, "type": "model", "display_name": h.config.Model}
-			h.config.ModelCapabilities.addToModel(model)
 			if modelDetail {
+				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
+				model := map[string]any{"id": id, "type": "model", "display_name": id}
+				h.config.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"data": []any{model}, "has_more": false, "first_id": h.config.Model, "last_id": h.config.Model})
+			data := make([]map[string]any, 0, len(models))
+			for _, id := range models {
+				model := map[string]any{"id": id, "type": "model", "display_name": id}
+				h.config.ModelCapabilities.addToModel(model)
+				data = append(data, model)
+			}
+			result := map[string]any{"data": data, "has_more": false}
+			if len(models) > 0 {
+				result["first_id"], result["last_id"] = models[0], models[len(models)-1]
+			}
+			json.NewEncoder(w).Encode(result)
 		} else {
-			h.config.ModelCapabilities.addToModel(model)
 			if modelDetail {
+				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
+				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
+				h.config.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{model}})
+			data := make([]map[string]any, 0, len(models))
+			for _, id := range models {
+				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
+				h.config.ModelCapabilities.addToModel(model)
+				data = append(data, model)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 		}
 		return
 	}
@@ -189,6 +263,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
+		return
+	}
+	providerClient := h.clientForRequestProtocol(protocol)
+	if providerClient == nil {
+		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
+		return
+	}
+	if h.modelsKnown[providerClient.Protocol] && !containsModel(h.models[providerClient.Protocol], model) {
+		h.reject(w, r, protocol, 404, "model_not_found")
 		return
 	}
 	if options.SessionID == "" {
@@ -228,7 +311,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	client := h.clients[h.config.Protocol]
+	client := providerClient
 	if client == nil {
 		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 		return

@@ -1,11 +1,13 @@
 # Protocol support — 0.2.0 development
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
-`/v1/chat/completions`; Anthropic clients use `/v1/messages`. `base_url` is the
-single API root for the provider. At gateway startup TideMux identifies the
-provider protocol from a well-known API root or a safe `GET /models` response;
-the user does not need to choose `openai` or `anthropic`. Credentials, gateway
-authentication, model identity and the local ledger remain shared.
+`/v1/chat/completions`; Anthropic clients use `/v1/messages`. A legacy profile
+can keep one `base_url`, whose provider protocol TideMux detects at startup.
+New profiles may instead configure protocol-keyed `endpoints.openai` and
+`endpoints.anthropic` roots. When both are present, each client protocol prefers
+its matching native upstream; when only one is present, the other client route
+uses the existing translator. Credentials, gateway authentication, model
+identity and the local ledger remain shared.
 
 Detection is local for recognized roots such as OpenAI, Anthropic and the
 DeepSeek preset. For another root, TideMux sends an authenticated `GET` to
@@ -27,14 +29,17 @@ is available, `serve` stops with an actionable configuration error.
 | Streaming | Client format is preserved or translated to the selected provider format | Client format is preserved or translated to the selected provider format |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-The two client endpoints are independent of provider detection. For example,
-Claude Code can call `/v1/messages` while the detected provider speaks OpenAI,
-and an OpenAI client can call `/v1/chat/completions` while the detected provider
-speaks Anthropic. Matching pairs are passed through; non-matching pairs are
-translated. This is one provider configuration, not a second base URL or a
-`protocol: both` mode. Existing profiles that explicitly contain
-`"protocol": "openai"` or `"protocol": "anthropic"` remain compatible, but new
-profiles omit that field.
+The client endpoints are independent of upstream selection. A profile with one
+configured endpoint continues to support both clients through pass-through or
+translation. A profile with both endpoints routes each client to its matching
+endpoint. Each endpoint's `GET /models` response is used for that client route
+only when it is a complete, recognized OpenAI or Anthropic model list. Requests
+for a model absent from a recognized endpoint list receive `model_not_found`
+before an upstream completion is sent. If an endpoint does not expose a
+complete recognizable list, its route returns an empty model catalogue and
+does not claim the configured default model is available; direct requests are
+still passed to that endpoint. Existing profiles that explicitly contain
+`"protocol": "openai"` or `"protocol": "anthropic"` remain compatible.
 
 The translation boundary covers text, system/developer instructions, tools,
 tool calls/results, stop sequences, output schemas and streaming terminal
@@ -62,8 +67,9 @@ validated. Tools and history use the selected protocol's wire format; no tool
 execution occurs inside TideMux. Thinking/format options must match their wire
 schema, but actual reasoning and schema enforcement depend on the upstream.
 
-Unknown top-level request/config fields, duplicate JSON keys, multiple JSON
-documents, malformed tool envelopes and invalid beta headers are rejected.
+Unknown request fields are ignored with a gateway log warning. Unknown config
+fields, duplicate JSON keys, multiple JSON documents, malformed tool envelopes
+and invalid beta headers are rejected.
 Images, document/audio blocks, provider server tools, Responses API, embeddings,
 batches and token-counting endpoints are not implemented. These remain explicit
 boundaries; normal tested client workflows do not prove every client feature or

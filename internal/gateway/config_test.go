@@ -17,6 +17,13 @@ type testSecrets map[string]string
 func (s testSecrets) Lookup(_ context.Context, r KeychainReference) (string, error) {
 	return s[r.Service], nil
 }
+
+type keyedTestSecrets map[string]string
+
+func (s keyedTestSecrets) Lookup(_ context.Context, r KeychainReference) (string, error) {
+	return s[r.Service+"/"+r.Account], nil
+}
+
 func TestConfigCredentialsAndValidation(t *testing.T) {
 	c := testConfig("l.db", "https://example.com/prefix/v1")
 	resolved, err := c.ResolveCredentials(context.Background(), testSecrets{"test.provider": "provider-private", "test.gateway": "local-private"})
@@ -75,6 +82,57 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 		if _, err := LoadConfig(p); err == nil {
 			t.Fatal("bad config accepted")
 		}
+	}
+}
+
+func TestDualEndpointConfigResolvesSeparateKeychainCredentials(t *testing.T) {
+	c := testConfig("l.db", "https://example.com/v1")
+	c.BaseURL = ""
+	c.Protocol = ""
+	c.APIVersion = ""
+	c.UpstreamKeychain = KeychainReference{}
+	c.APIKey = ""
+	c.Endpoints = map[string]ProviderEndpoint{
+		"openai":    {BaseURL: "https://example.com/openai/v1", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic": {BaseURL: "https://example.com/anthropic/v1", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	secrets := keyedTestSecrets{
+		"test.provider/openai":    "openai-private",
+		"test.provider/anthropic": "anthropic-private",
+		"test.gateway/default":    "gateway-private",
+	}
+	resolved, err := c.ResolveCredentials(context.Background(), secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Endpoints["openai"].APIKey != "openai-private" || resolved.Endpoints["anthropic"].APIKey != "anthropic-private" {
+		t.Fatalf("endpoint credentials were not resolved: %#v", resolved.Endpoints)
+	}
+	data, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "private") {
+		t.Fatalf("resolved credential serialized: %s", data)
+	}
+
+	shared := c
+	shared.Endpoints = map[string]ProviderEndpoint{
+		"openai": c.Endpoints["openai"],
+		"anthropic": {
+			BaseURL:          "https://example.com/anthropic/v1",
+			UpstreamKeychain: c.Endpoints["openai"].UpstreamKeychain,
+		},
+	}
+	sharedResolved, err := shared.ResolveCredentials(context.Background(), keyedTestSecrets{
+		"test.provider/openai": "shared-private",
+		"test.gateway/default": "gateway-private",
+	})
+	if err != nil || sharedResolved.Endpoints["anthropic"].APIKey != "shared-private" {
+		t.Fatalf("shared endpoint credential resolution failed: err=%v", err)
 	}
 }
 

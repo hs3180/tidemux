@@ -1,7 +1,7 @@
 # Configure TideMux from Terminal
 
 No manual Keychain Access setup is required. `configure` reads your provider
-API key and optional gateway API key without echo. Leave the gateway prompt
+API key(s) and optional gateway API key without echo. Leave the gateway prompt
 empty to generate a random credential, or enter a custom value. Neither secret
 is accepted as a command-line argument or written into JSON.
 
@@ -48,7 +48,7 @@ profiles. If an existing profile contains conflicting legacy budget fields,
 replace it with the new schema using `tidemux budget` or recreate it with
 `tidemux configure --replace`.
 
-1. `configure` selects the provider API root and model. The DeepSeek preset
+1. `configure` selects the provider API root(s) and model. The DeepSeek preset
    uses `https://api.deepseek.com` and `deepseek-flash`; TideMux automatically
    detects the provider protocol from that root. To use DeepSeek's Anthropic
    compatible API, override the root with
@@ -224,15 +224,53 @@ To replace an existing local setup,
 stop the gateway first and add `--replace`. Inspect other options with
 `tidemux configure --help`.
 
+### Configure both upstream protocols
+
+When a provider exposes native OpenAI-compatible and Anthropic-compatible APIs,
+configure either or both roots in one profile. Omit a flag for an endpoint you
+do not use; the other client protocol will translate through the configured
+endpoint. This example configures both:
+
+```sh
+tidemux configure \
+  --openai-base-url https://provider.example/openai/v1 \
+  --anthropic-base-url https://provider.example/anthropic/v1 \
+  --model your-model-id \
+  --pricing-input-cache-hit 1 \
+  --pricing-input-cache-miss 2 \
+  --pricing-output 4
+```
+
+OpenAI clients use the OpenAI endpoint and Anthropic clients use the Anthropic
+endpoint. If only one endpoint is configured, both client APIs remain available
+through protocol translation to that endpoint. API keys are entered at hidden
+prompts; when configuring both, press Enter at the Anthropic key prompt to reuse
+the OpenAI key, or enter a separate key. The credentials are stored in Keychain,
+and the JSON config contains references only. Set `--anthropic-version
+YYYY-MM-DD` to override the default Anthropic API version. `--replace` updates
+the full profile while preserving a backup and old Keychain items.
+The resulting non-secret endpoint configuration is also shown in
+[`examples/dual-endpoints.json`](../examples/dual-endpoints.json).
+
+When an endpoint provides a complete, recognized `GET /models` response, TideMux
+uses that endpoint's list only on its matching client route and rejects models
+not listed there before forwarding. If a provider does not expose a complete
+recognizable list, TideMux returns an empty model catalogue rather than claiming
+the profile's default model is available; requests for that model are still
+forwarded to the selected endpoint.
+
 ## Update the current local configuration
 
 By default the command refuses to overwrite an existing file. To intentionally
 replace it, stop the server and repeat the configure command with `--replace`.
 New Keychain accounts are generated; old credentials and ledger data are retained
-in place. The command replaces the configuration as a whole, including the
-provider pricing selected alongside the new API key. Before restarting, review
-the new pricing and limits against the saved backup, and keep the existing
-`ledger_path` so billing continues to read your history.
+in place. Inspect the JSON configuration before replacing it: it contains the
+provider roots and Keychain references, never the API key values. When retaining
+a dual-endpoint profile, pass both endpoint flags again; omitting one removes it
+from the replacement profile. The command replaces the configuration as a
+whole, including the provider pricing selected alongside the new API key.
+Before restarting, review the new pricing and limits against the saved backup,
+and keep the existing `ledger_path` so billing continues to read your history.
 Remove unused old entries later in Keychain Access if desired. A failed setup
 rolls back newly saved entries; the previous configuration remains in place.
 

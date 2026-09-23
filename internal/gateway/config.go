@@ -19,6 +19,15 @@ type KeychainReference struct {
 	Account string `json:"account"`
 }
 
+// ProviderEndpoint describes one protocol-specific upstream API. APIKey is
+// populated only after resolving its Keychain reference and is never serialized.
+type ProviderEndpoint struct {
+	BaseURL          string            `json:"base_url"`
+	UpstreamKeychain KeychainReference `json:"upstream_keychain"`
+	APIVersion       string            `json:"anthropic_version,omitempty"`
+	APIKey           string            `json:"-"`
+}
+
 func (r KeychainReference) Validate(name string) error {
 	if strings.TrimSpace(r.Service) == "" || strings.TrimSpace(r.Account) == "" {
 		return errors.New(name + " requires service and account")
@@ -31,26 +40,27 @@ type SecretLookup interface {
 }
 
 type Config struct {
-	Budget                          ledger.BudgetPolicy      `json:"budget,omitempty"`
-	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
-	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
-	ModelCapabilities               ModelCapabilities        `json:"model_capabilities,omitempty"`
-	Limits                          adapter.Limits           `json:"limits,omitempty"`
-	ListenAddr                      string                   `json:"listen_addr"`
-	Protocol                        string                   `json:"protocol,omitempty"` // resolved provider protocol; empty/auto means detect; legacy values remain supported
-	BaseURL                         string                   `json:"base_url"`
-	Model                           string                   `json:"model"`
-	UpstreamID                      string                   `json:"upstream_id"`
-	APIVersion                      string                   `json:"anthropic_version,omitempty"`
-	UpstreamKeychain                KeychainReference        `json:"upstream_keychain"`
-	AccessTokenKeychain             KeychainReference        `json:"access_token_keychain"`
-	MaxInFlight                     int                      `json:"max_in_flight"`
-	MaxActiveSessions               int                      `json:"max_active_sessions,omitempty"`
-	ActiveSessionIdleTimeoutSeconds int                      `json:"active_session_idle_timeout_seconds,omitempty"`
-	LedgerPath                      string                   `json:"ledger_path"`
-	Prices                          map[string]adapter.Price `json:"prices,omitempty"`
-	APIKey                          string                   `json:"-"`
-	AccessToken                     string                   `json:"-"`
+	Budget                          ledger.BudgetPolicy         `json:"budget,omitempty"`
+	Reconciliation                  ReconciliationConfig        `json:"reconciliation,omitempty"`
+	ReportSchedule                  ReportSchedule              `json:"report_schedule,omitempty"`
+	ModelCapabilities               ModelCapabilities           `json:"model_capabilities,omitempty"`
+	Limits                          adapter.Limits              `json:"limits,omitempty"`
+	ListenAddr                      string                      `json:"listen_addr"`
+	Protocol                        string                      `json:"protocol,omitempty"` // resolved provider protocol; empty/auto means detect; legacy values remain supported
+	BaseURL                         string                      `json:"base_url,omitempty"`
+	Endpoints                       map[string]ProviderEndpoint `json:"endpoints,omitempty"`
+	Model                           string                      `json:"model"`
+	UpstreamID                      string                      `json:"upstream_id"`
+	APIVersion                      string                      `json:"anthropic_version,omitempty"`
+	UpstreamKeychain                KeychainReference           `json:"upstream_keychain,omitempty"`
+	AccessTokenKeychain             KeychainReference           `json:"access_token_keychain"`
+	MaxInFlight                     int                         `json:"max_in_flight"`
+	MaxActiveSessions               int                         `json:"max_active_sessions,omitempty"`
+	ActiveSessionIdleTimeoutSeconds int                         `json:"active_session_idle_timeout_seconds,omitempty"`
+	LedgerPath                      string                      `json:"ledger_path"`
+	Prices                          map[string]adapter.Price    `json:"prices,omitempty"`
+	APIKey                          string                      `json:"-"`
+	AccessToken                     string                      `json:"-"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -98,13 +108,50 @@ func (c Config) Validate() error {
 	if !ip.IsLoopback() && host != "0.0.0.0" {
 		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
-	switch normalizeProviderProtocol(c.Protocol) {
-	case "", "auto", "openai", "anthropic":
-	default:
-		return errors.New("protocol must be auto, openai or anthropic")
-	}
-	if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
-		return err
+	if len(c.Endpoints) == 0 {
+		switch normalizeProviderProtocol(c.Protocol) {
+		case "", "auto", "openai", "anthropic":
+		default:
+			return errors.New("protocol must be auto, openai or anthropic")
+		}
+		if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
+			return err
+		}
+		if err := c.UpstreamKeychain.Validate("upstream_keychain"); err != nil {
+			return err
+		}
+		if normalizeProviderProtocol(c.Protocol) == "anthropic" {
+			if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
+				return errors.New("anthropic_version must be YYYY-MM-DD")
+			}
+		}
+	} else {
+		if c.BaseURL != "" || c.Protocol != "" || c.APIVersion != "" || c.UpstreamKeychain != (KeychainReference{}) {
+			return errors.New("use either legacy single-endpoint fields or endpoints, not both")
+		}
+		if len(c.Endpoints) > 2 {
+			return errors.New("endpoints may contain only openai and anthropic")
+		}
+		for protocol, endpoint := range c.Endpoints {
+			if protocol != "openai" && protocol != "anthropic" {
+				return errors.New("endpoint names must be openai or anthropic")
+			}
+			name := "endpoints." + protocol
+			if err := validateBaseURL(endpoint.BaseURL, name+".base_url"); err != nil {
+				return err
+			}
+			if err := endpoint.UpstreamKeychain.Validate(name + ".upstream_keychain"); err != nil {
+				return err
+			}
+			if protocol == "openai" && endpoint.APIVersion != "" {
+				return errors.New("anthropic_version is valid only for the anthropic endpoint")
+			}
+			if protocol == "anthropic" && endpoint.APIVersion != "" {
+				if _, err := time.Parse("2006-01-02", endpoint.APIVersion); err != nil {
+					return errors.New("endpoints.anthropic.anthropic_version must be YYYY-MM-DD")
+				}
+			}
+		}
 	}
 	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
 		return errors.New("model and upstream_id are required")
@@ -121,11 +168,6 @@ func (c Config) Validate() error {
 	if len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n") {
 		return errors.New("upstream_id must be a short non-secret label")
 	}
-	if normalizeProviderProtocol(c.Protocol) == "anthropic" {
-		if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
-			return errors.New("anthropic_version must be YYYY-MM-DD")
-		}
-	}
 	if c.MaxInFlight < 1 || c.MaxInFlight > 1024 {
 		return errors.New("max_in_flight must be 1..1024")
 	}
@@ -137,9 +179,6 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.LedgerPath) == "" {
 		return errors.New("ledger_path is required")
-	}
-	if err := c.UpstreamKeychain.Validate("upstream_keychain"); err != nil {
-		return err
 	}
 	if err := c.AccessTokenKeychain.Validate("access_token_keychain"); err != nil {
 		return err
@@ -176,19 +215,37 @@ func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Co
 		return c, errors.New("Keychain lookup required")
 	}
 	var err error
-	c.APIKey, err = lookup.Lookup(ctx, c.UpstreamKeychain)
-	if err != nil {
-		return Config{}, errors.New("upstream Keychain item unavailable")
-	}
 	c.AccessToken, err = lookup.Lookup(ctx, c.AccessTokenKeychain)
 	if err != nil {
 		return Config{}, errors.New("gateway Keychain item unavailable")
 	}
-	if strings.TrimSpace(c.APIKey) == "" || strings.TrimSpace(c.AccessToken) == "" || strings.ContainsAny(c.APIKey+c.AccessToken, "\r\n") {
+	providerKeys := make([]string, 0, 2)
+	if len(c.Endpoints) == 0 {
+		c.APIKey, err = lookup.Lookup(ctx, c.UpstreamKeychain)
+		if err != nil {
+			return Config{}, errors.New("upstream Keychain item unavailable")
+		}
+		providerKeys = append(providerKeys, c.APIKey)
+	} else {
+		for protocol, endpoint := range c.Endpoints {
+			endpoint.APIKey, err = lookup.Lookup(ctx, endpoint.UpstreamKeychain)
+			if err != nil {
+				return Config{}, errors.New("upstream Keychain item unavailable")
+			}
+			providerKeys = append(providerKeys, endpoint.APIKey)
+			c.Endpoints[protocol] = endpoint
+		}
+	}
+	if strings.TrimSpace(c.AccessToken) == "" || strings.ContainsAny(c.AccessToken, "\r\n") {
 		return Config{}, errors.New("invalid Keychain credential")
 	}
-	if c.APIKey == c.AccessToken {
-		return Config{}, errors.New("use separate upstream and gateway credentials")
+	for _, key := range providerKeys {
+		if strings.TrimSpace(key) == "" || strings.ContainsAny(key, "\r\n") {
+			return Config{}, errors.New("invalid Keychain credential")
+		}
+		if key == c.AccessToken {
+			return Config{}, errors.New("use separate upstream and gateway credentials")
+		}
 	}
 	return c, nil
 }

@@ -39,6 +39,7 @@ commands:
 configuration examples:
   tidemux configure --preset deepseek-flash [options]
   tidemux configure --base-url URL --model ID [pricing options]
+  tidemux configure --openai-base-url URL --anthropic-base-url URL --model ID
 
 common examples:
   tidemux configure --preset deepseek-flash

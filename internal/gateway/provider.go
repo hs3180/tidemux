@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -43,6 +44,121 @@ func resolveProviderProtocol(c Config, httpClient *http.Client) (string, string,
 		}
 	}
 	return detected, apiVersion, nil
+}
+
+// resolveProviderEndpoints returns the protocol-indexed endpoints used by the
+// gateway. Legacy profiles still resolve their single API root exactly as
+// before; named endpoints have a protocol supplied by their map key.
+func resolveProviderEndpoints(c Config, httpClient *http.Client) (map[string]ProviderEndpoint, error) {
+	if len(c.Endpoints) != 0 {
+		resolved := make(map[string]ProviderEndpoint, len(c.Endpoints))
+		for protocol, endpoint := range c.Endpoints {
+			if protocol == "anthropic" {
+				if endpoint.APIVersion == "" {
+					endpoint.APIVersion = defaultAnthropicAPIVersion
+				}
+				if _, err := time.Parse("2006-01-02", endpoint.APIVersion); err != nil {
+					return nil, errors.New("endpoints.anthropic.anthropic_version must be YYYY-MM-DD")
+				}
+			}
+			resolved[protocol] = endpoint
+		}
+		return resolved, nil
+	}
+
+	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]ProviderEndpoint{
+		protocol: {
+			BaseURL:    c.BaseURL,
+			APIVersion: apiVersion,
+			APIKey:     c.APIKey,
+		},
+	}, nil
+}
+
+// discoverProviderModels makes a bounded, redirect-free GET /models request.
+// A false second result means the endpoint does not expose a complete,
+// recognizable model list, so callers must not claim model availability.
+func discoverProviderModels(endpoint ProviderEndpoint, protocol string, httpClient *http.Client) ([]string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint.BaseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, false
+	}
+	if protocol == "anthropic" {
+		request.Header.Set("x-api-key", endpoint.APIKey)
+		request.Header.Set("anthropic-version", endpoint.APIVersion)
+	} else {
+		request.Header.Set("Authorization", "Bearer "+endpoint.APIKey)
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	if httpClient != nil {
+		client = *httpClient
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, false
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	if err != nil || len(body) > 1<<20 {
+		return nil, false
+	}
+	var envelope struct {
+		Object  string `json:"object"`
+		HasMore *bool  `json:"has_more"`
+		Data    []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return nil, false
+	}
+	known := false
+	if protocol == "openai" {
+		known = envelope.Object == "list"
+	} else {
+		known = envelope.HasMore != nil
+		for _, item := range envelope.Data {
+			if item.Type == "model" {
+				known = true
+				break
+			}
+		}
+	}
+	if !known {
+		return nil, false
+	}
+	// Do not treat a truncated page as an authoritative model set. An
+	// incomplete list could incorrectly hide a model or advertise one on the
+	// wrong route until the provider's pagination contract is followed.
+	if envelope.HasMore != nil && *envelope.HasMore {
+		return nil, false
+	}
+	unique := make(map[string]struct{}, len(envelope.Data))
+	models := make([]string, 0, len(envelope.Data))
+	for _, item := range envelope.Data {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || len(id) > 256 || strings.ContainsAny(id, "\r\n\x00") {
+			continue
+		}
+		if _, exists := unique[id]; exists {
+			continue
+		}
+		unique[id] = struct{}{}
+		models = append(models, id)
+	}
+	sort.Strings(models)
+	return models, true
 }
 
 // detectProviderProtocol identifies the upstream wire format without making a

@@ -73,6 +73,57 @@ func TestConfigureSavesReferencesAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestSaveDualEndpointConfigurationSharesOrSeparatesKeychainItems(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		openAIKey    string
+		anthropicKey string
+		shared       bool
+		wantItems    int
+	}{
+		{name: "shared key", openAIKey: "same-provider-key", anthropicKey: "same-provider-key", shared: true, wantItems: 2},
+		{name: "separate keys", openAIKey: "openai-provider-key", anthropicKey: "anthropic-provider-key", wantItems: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.json")
+			c := gateway.Config{
+				ListenAddr: "127.0.0.1:8787", Model: "model", UpstreamID: "provider-primary", MaxInFlight: 1,
+				LedgerPath: filepath.Join(dir, "ledger.db"),
+				Endpoints: map[string]gateway.ProviderEndpoint{
+					"openai":    {BaseURL: "https://provider.example/openai/v1"},
+					"anthropic": {BaseURL: "https://provider.example/anthropic/v1"},
+				},
+			}
+			secrets := &memorySecrets{values: map[string]string{}}
+			providerKeys := map[string]string{"openai": test.openAIKey, "anthropic": test.anthropicKey}
+			if err := saveConfigurationWithProviderKeys(path, c, providerKeys, nil, false, secrets); err != nil {
+				t.Fatal(err)
+			}
+			if len(secrets.values) != test.wantItems {
+				t.Fatalf("Keychain items=%d want %d", len(secrets.values), test.wantItems)
+			}
+			loaded, err := gateway.LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			openAIRef := loaded.Endpoints["openai"].UpstreamKeychain
+			anthropicRef := loaded.Endpoints["anthropic"].UpstreamKeychain
+			if (openAIRef == anthropicRef) != test.shared {
+				t.Fatalf("shared refs=%v openai=%+v anthropic=%+v", openAIRef == anthropicRef, openAIRef, anthropicRef)
+			}
+			resolved, err := loaded.ResolveCredentials(context.Background(), secrets)
+			if err != nil || resolved.Endpoints["openai"].APIKey != test.openAIKey || resolved.Endpoints["anthropic"].APIKey != test.anthropicKey {
+				t.Fatalf("resolved endpoint keys mismatch: err=%v", err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || strings.Contains(string(data), "provider-key") {
+				t.Fatalf("provider secret written to config: err=%v", err)
+			}
+		})
+	}
+}
+
 func TestSaveConfigurationOmitsAutoProtocol(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

@@ -1,0 +1,28 @@
+{
+  "listen_addr": "127.0.0.1:4000",
+  "endpoints": {
+    "openai": {
+      "base_url": "https://provider.example/openai/v1",
+      "upstream_keychain": {
+        "service": "com.tidemux.provider",
+        "account": "openai-key"
+      }
+    },
+    "anthropic": {
+      "base_url": "https://provider.example/anthropic/v1",
+      "anthropic_version": "2023-06-01",
+      "upstream_keychain": {
+        "service": "com.tidemux.provider",
+        "account": "anthropic-key"
+      }
+    }
+  },
+  "model": "replace-with-your-model-id",
+  "upstream_id": "provider-primary",
+  "access_token_keychain": {
+    "service": "com.tidemux.gateway",
+    "account": "default"
+  },
+  "max_in_flight": 1,
+  "ledger_path": "/Users/you/Library/Application Support/TideMux/ledger.db"
+}
