@@ -83,6 +83,9 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, m
 		}
 		return resolved, routes, nil
 	}
+	if c.BaseURL == "" {
+		return nil, nil, errors.New("no upstream provider is configured; run `tidemux provider add`")
+	}
 
 	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
 	if err != nil {

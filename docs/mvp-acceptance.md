@@ -28,7 +28,7 @@ The final candidate is checked with:
 - `go test ./...`, `CGO_ENABLED=0 go test ./...`, `go vet ./...` and
   `go test -race ./...`;
 - `python3 scripts/test_install.py`, `python3 scripts/test_client_commands.py`,
-  `python3 scripts/test_configure_pty.py` and `python3 scripts/licenses.py`;
+  `python3 scripts/test_provider_add_pty.py` and `python3 scripts/licenses.py`;
 - `python3 scripts/release.py`, checksum verification and packaged-binary
   version/installation smoke checks.
 
@@ -46,7 +46,7 @@ The final candidate is checked with:
   provider's current prices; when usage is absent, configured pricing enables a
   clearly marked local content estimate, while requests without a usable price
   remain unknown.
-- Interactive configure: PTY covers automatic unlock, the daily report notification
+- Guided provider add: PTY covers automatic unlock, the daily report notification
   time prompt, no unnecessary prompt, wrong-password/cancellation stop, hidden API
   key input and no plaintext config; rollback is tested. Real isolated Keychain
   writes/read-back preserve existing items.

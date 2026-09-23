@@ -112,7 +112,7 @@ a different transport, creating separate auditable attempts.
 
 Defaults remain 1 MiB request, 8 MiB non-streaming response, 64 MiB SSE stream,
 1 MiB SSE event, and 60 seconds after concurrency admission. All are configurable
-through `limits`; see [configuration](configure.md). Retained active sessions use
+through `limits`; see [provider and gateway CLI](provider-cli.md). Retained active sessions use
 a five-minute input/output idle timeout by default, configurable independently.
 Queue waiting is cancelable and reported separately. Upstream redirects are not
 followed.

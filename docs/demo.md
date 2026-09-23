@@ -28,10 +28,10 @@ verified. See [installation](install.md) for release downloads and Homebrew.
 Paste your DeepSeek API key at the hidden prompt and press Enter. The CLI creates
 the application directory, stores both secrets in Keychain, writes a private JSON
 config, and verifies local readiness. It does not send a billable request.
-See [configuration guide](configure.md) for other providers, Anthropic mode,
-reconfiguration and unlocking a locked login keychain. That page also documents
-newer development-only named-provider and active-session options; use its
-single-provider `--base-url` instructions and the 0.1.x samples for this release.
+See the [provider and gateway CLI guide](provider-cli.md) for the 0.2.0
+development interface, including named providers and active-session settings.
+Those commands are not available in the 0.1.1 release shown here; use the
+single-provider commands and 0.1.x samples in this guide for the release.
 The JSON samples linked below are 0.1.x single-provider examples; see the
 [examples index](../examples/README.md) for their version scope and the 0.2.0
 named-provider sample.

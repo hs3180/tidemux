@@ -16,6 +16,9 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	if err := c.Validate(); err != nil {
 		return nil, nil, err
 	}
+	if len(c.Providers) == 0 && c.BaseURL == "" {
+		return nil, nil, errors.New("no upstream provider is configured; run `tidemux provider add`")
+	}
 	if c.AccessToken == "" {
 		return nil, nil, errors.New("distinct resolved credentials are required")
 	}

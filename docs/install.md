@@ -48,9 +48,9 @@ tidemux version
 ```
 
 Add the PATH line to `~/.zshrc` for new terminals. For a source build from this
-development branch, use the [current `configure` guide](configure.md). The
-README quick start describes the target 0.2.0 `provider` commands, which are not
-available in this build yet.
+development branch, use the [provider and gateway CLI guide](provider-cli.md).
+The published 0.1.1 binary continues to use the release-specific legacy setup
+documented in the demo guide.
 
 For clickable daily-report notifications, install the small macOS notification
 helper once:

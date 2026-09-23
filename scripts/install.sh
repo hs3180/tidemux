@@ -50,4 +50,4 @@ case ":$PATH:" in
   *":$install_dir:"*) ;;
   *) printf 'Add this directory to your shell PATH: %s\n' "$install_dir" ;;
 esac
-printf 'Next: tidemux configure\n'
+printf 'Next: tidemux provider add\n'

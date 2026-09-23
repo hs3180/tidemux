@@ -83,7 +83,7 @@ func LoadConfig(path string) (Config, error) {
 		if json.Unmarshal(data, &raw) == nil {
 			for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
 				if _, ok := raw.Budget[key]; ok {
-					return c, errors.New("legacy budget fields conflict with the current schema; run tidemux budget or configure --replace")
+					return c, errors.New("legacy budget fields conflict with the current schema; run `tidemux budget` before using provider commands")
 				}
 			}
 		}
@@ -116,27 +116,33 @@ func (c Config) Validate() error {
 		return err
 	}
 	if len(c.Providers) == 0 {
-		if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
-			return err
-		}
 		if len(c.DefaultProviders) != 0 {
 			return errors.New("default_providers requires named providers")
 		}
-		switch normalizeProviderProtocol(c.Protocol) {
-		case "", "auto", "openai", "anthropic":
-		default:
-			return errors.New("protocol must be auto, openai or anthropic")
-		}
-		if err := c.UpstreamKeychain.Validate("upstream_keychain"); err != nil {
-			return err
-		}
-		if normalizeProviderProtocol(c.Protocol) == "anthropic" {
-			if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
-				return errors.New("anthropic_version must be YYYY-MM-DD")
+		if c.BaseURL == "" {
+			if c.Protocol != "" || c.APIVersion != "" || !credentialReferenceEmpty(c.UpstreamKeychain) || c.Model != "" || c.UpstreamID != "" || c.ModelCapabilities != (ModelCapabilities{}) || len(c.Prices) != 0 || c.APIKey != "" {
+				return errors.New("incomplete legacy provider configuration")
 			}
-		}
-		if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
-			return errors.New("model and upstream_id are required")
+		} else {
+			if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
+				return err
+			}
+			switch normalizeProviderProtocol(c.Protocol) {
+			case "", "auto", "openai", "anthropic":
+			default:
+				return errors.New("protocol must be auto, openai or anthropic")
+			}
+			if err := c.UpstreamKeychain.Validate("upstream_keychain"); err != nil {
+				return err
+			}
+			if normalizeProviderProtocol(c.Protocol) == "anthropic" {
+				if _, err := time.Parse("2006-01-02", c.APIVersion); err != nil {
+					return errors.New("anthropic_version must be YYYY-MM-DD")
+				}
+			}
+			if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
+				return errors.New("model and upstream_id are required")
+			}
 		}
 	} else {
 		if c.BaseURL != "" || c.Protocol != "" || c.APIVersion != "" || c.UpstreamKeychain != (KeychainReference{}) || c.Model != "" || c.UpstreamID != "" || c.ModelCapabilities != (ModelCapabilities{}) || len(c.Prices) != 0 || c.APIKey != "" {
@@ -201,6 +207,9 @@ func (c Config) Validate() error {
 			if c.Budget != (ledger.BudgetPolicy{}) {
 				price, ok := provider.Prices[provider.Model]
 				if !ok {
+					price, ok = adapter.BuiltInPrice(provider.BaseURL, provider.Model, time.Now())
+				}
+				if !ok {
 					return errors.New("budget requires pricing for each configured provider model, including " + name)
 				}
 				if price.Currency != c.Budget.Currency {
@@ -227,8 +236,11 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	if len(c.Providers) == 0 && c.Budget != (ledger.BudgetPolicy{}) {
+	if len(c.Providers) == 0 && c.BaseURL != "" && c.Budget != (ledger.BudgetPolicy{}) {
 		price, ok := c.Prices[c.Model]
+		if !ok {
+			price, ok = adapter.BuiltInPrice(c.BaseURL, c.Model, time.Now())
+		}
 		if !ok {
 			return errors.New("budget requires pricing for configured model")
 		}
@@ -265,6 +277,10 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func credentialReferenceEmpty(ref KeychainReference) bool {
+	return ref.Service == "" && ref.Account == ""
 }
 
 func validProviderName(name string) bool {
@@ -323,13 +339,13 @@ func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Co
 		return Config{}, errors.New("gateway Keychain item unavailable")
 	}
 	providerKeys := make([]string, 0, len(c.Providers))
-	if len(c.Providers) == 0 {
+	if len(c.Providers) == 0 && c.BaseURL != "" {
 		c.APIKey, err = lookup.Lookup(ctx, c.UpstreamKeychain)
 		if err != nil {
 			return Config{}, errors.New("upstream Keychain item unavailable")
 		}
 		providerKeys = append(providerKeys, c.APIKey)
-	} else {
+	} else if len(c.Providers) > 0 {
 		for name, provider := range c.Providers {
 			provider.APIKey, err = lookup.Lookup(ctx, provider.UpstreamKeychain)
 			if err != nil {

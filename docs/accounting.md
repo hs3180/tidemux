@@ -63,9 +63,8 @@ separate cache-write price.
 Rates are stored per model with currency, source and version. TideMux supplies a
 fixed peak price for recognized DeepSeek endpoints and models; custom `prices`
 entries override those built-in rates. In the 0.1.x CLI, provider prices are
-entered through `configure`, which remains the setup command in the current
-development build; the target 0.2.0 CLI manages them with
-`tidemux provider pricing`. There is no generic price discovery, default
+entered through the release's top-level `configure` command. The 0.2.0
+development CLI manages them with `tidemux provider pricing`. There is no generic price discovery, default
 currency, or provider discount calculation.
 The gateway's configuration supplies the upstream context. Successful requests
 retain a copy of the selected price with their record, so later configuration
@@ -241,9 +240,8 @@ An optional `budget` config section applies to one ledger and one currency. It
 does not convert currencies. A matching configured `prices` entry for the
 configured model is required whenever `budget` is enabled. DeepSeek's peak
 built-in and custom rates are stored with provider configuration; `budget` only
-changes limits. The current `configure` CLI writes this configuration; the
-target 0.2.0 interface keeps pricing under `provider pricing` and budget limits
-under the budget command/settings. If pricing is absent or uses another
+changes limits. The development CLI sets prices under `provider pricing` and
+budget limits under `tidemux budget`. If pricing is absent or uses another
 currency, TideMux refuses to start and never sends an upstream request. Budget
 windows are rolling five-hour and seven-day periods.
 

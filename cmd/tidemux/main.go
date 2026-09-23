@@ -26,7 +26,8 @@ const (
 commands:
   serve       start the local gateway
   doctor      check the configuration, Keychain and local state directory
-  configure   create or replace a provider configuration
+  provider    add and manage upstream providers
+  gateway     configure gateway-wide settings
   billing     inspect local usage and cost records (--details for requests)
   budget      set the rolling budget limits
   report      generate, view or deliver usage reports
@@ -36,21 +37,14 @@ commands:
   hermes      launch Hermes Agent through the gateway
   version     print the TideMux version
 
-configuration examples:
-  tidemux configure (guided setup; pass provider fields for command-line setup)
-  tidemux configure --base-url URL --model ID [pricing options]
-  tidemux configure --provider NAME,BASE_URL,MODEL [--default-provider PROTOCOL=NAME]
-
 common examples:
-  tidemux configure --base-url https://api.deepseek.com --model deepseek-flash
-  tidemux configure --help
+  tidemux provider add https://api.deepseek.com --model deepseek-flash
+  tidemux provider list
+  tidemux gateway configure --listen loopback
   tidemux serve --config /path/to/config.json
 
-Named providers each use one API protocol, endpoint and Keychain credential.
-Their protocol is detected from the endpoint unless explicitly forced; the
-default provider map selects a profile when multiple providers share a protocol.
-Running configure without --provider, --base-url or --model starts the guided
-terminal setup.
+Each provider uses one API protocol, endpoint and Keychain credential. Provider
+protocol is detected from its endpoint unless explicitly forced.
 `
 )
 
@@ -69,8 +63,11 @@ func run(args []string, stdout, stderr *os.File) error {
 	if command == "claude" || command == "kilo" || command == "hermes" || command == "kilo-ide" {
 		return launch(args, stdout, stderr)
 	}
-	if command == "configure" {
-		return configure(args[1:], stdout, stderr)
+	if command == "provider" {
+		return providerCommand(args[1:], stdout, stderr)
+	}
+	if command == "gateway" {
+		return gatewayCommand(args[1:], stdout, stderr)
 	}
 	if command == "billing" {
 		return billing(args[1:], stdout, stderr)
@@ -114,6 +111,9 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "doctor" && diagnostics {
 		return doctorDiagnostics(config.LedgerPath, diagnosticJSON, stdout)
+	}
+	if command == "doctor" && len(config.Providers) == 0 && config.BaseURL == "" {
+		return errors.New("no upstream provider is configured; run `tidemux provider add`")
 	}
 	resolved, err := config.ResolveCredentials(context.Background(), gateway.MacOSKeychain{})
 	if err != nil {

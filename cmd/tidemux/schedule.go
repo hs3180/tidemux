@@ -38,7 +38,7 @@ func promptReportSchedule(in, out *os.File) (gateway.ReportSchedule, error) {
 	return gateway.ReportSchedule{Time: normalized, Channel: "macos"}, nil
 }
 
-// readTerminalLine avoids bufio read-ahead before configure switches to the
+// readTerminalLine avoids bufio read-ahead before a setup prompt switches to the
 // password reader on the same controlling terminal.
 func readTerminalLine(in *os.File) (string, error) {
 	var line []byte

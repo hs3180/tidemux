@@ -325,6 +325,22 @@ func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 	}
 }
 
+func TestNamedProviderBudgetAcceptsMatchingBuiltInPrice(t *testing.T) {
+	c := testConfig("l.db", "https://legacy.example/v1")
+	c.Protocol, c.APIVersion, c.UpstreamKeychain, c.APIKey = "", "", KeychainReference{}, ""
+	c.Model, c.UpstreamID, c.BaseURL = "", "", ""
+	c.ModelCapabilities, c.Prices = ModelCapabilities{}, nil
+	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
+	c.Providers = map[string]Provider{"deepseek": {
+		Protocol: "openai", BaseURL: "https://api.deepseek.com/v1", Model: "deepseek-flash",
+		UpstreamID: "deepseek", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "deepseek"},
+	}}
+	c.DefaultProviders = map[string]string{"openai": "deepseek"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("built-in price should satisfy budget pricing: %v", err)
+	}
+}
+
 func TestLegacyBudgetConfigReportsConflict(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{"budget":{"daily_limit":1,"monthly_limit":2,"timezone":"UTC","reserve_amount":1}}`), 0600); err != nil {

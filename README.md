@@ -53,10 +53,9 @@ that omit a model; it does not restrict the allowed model list. Use
 `tidemux provider models REF --only MODEL[,MODEL...]` only when you want to
 restrict that list. To configure just one protocol, add only its endpoint.
 
-These examples describe the target 0.2.0 interface. The current executable
-still uses `tidemux configure` until the provider subcommands are implemented;
-that command is not the target interface. Use the linked 0.1.1 guide to run the
-currently released CLI.
+These commands are available in the 0.2.0 development build. The published
+0.1.1 release still uses its legacy `tidemux configure` setup; see the
+[0.1.1 demo guide](docs/demo.md#recommended-configure-with-the-cli).
 
 ### 2. Start the gateway
 
@@ -89,8 +88,8 @@ without overwriting its existing settings.
 Run `tidemux billing` for a readable summary of the current calendar month in
 your computer's local timezone. It reads your existing local ledger from the
 default TideMux configuration. Add `--details` to inspect request records or
-`--json` for structured output. Cost estimates require
-[configured model prices](docs/configure.md); unknown amounts stay unknown.
+`--json` for structured output. Cost estimates require a built-in or configured
+[model price](docs/provider-cli.md#provider-pricing); unknown amounts stay unknown.
 Use the [DeepSeek USD rates](docs/deepseek-pricing.md) for this example.
 Reconciliation runs automatically with the gateway. Place normalized supplier
 CSVs in the `statements` directory beside the ledger. Use
@@ -123,20 +122,20 @@ and [protocol support](docs/protocols.md) for the 0.2.0 routing contract.
 
 ## CLI design principles
 
-The target CLI is resource-oriented: a top-level noun identifies what is being
+The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
-under `tidemux provider`; the old top-level `tidemux configure` provider flow is
-not a second mode or compatibility alias to preserve. Gateway-wide settings
-belong under `tidemux gateway`. The commands below define the intended
-contract; the current build still uses `tidemux configure`, so see
-[configuration](docs/configure.md) for syntax that is available today.
+under `tidemux provider`; the old top-level `tidemux configure` command is not
+retained as a compatibility alias. Gateway-wide settings belong under
+`tidemux gateway`. The published 0.1.1 binary is version-scoped separately in
+the [release guide](docs/demo.md); the commands below describe the 0.2.0
+development CLI.
 
 | Command | Semantics |
 | --- | --- |
-| `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model ID]` | Add exactly one provider without replacing others. With no endpoint, guide the user through setup; with an endpoint, infer protocol and discover models, prompting only for missing choices. |
+| `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model ID]` | Add exactly one provider without replacing others. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol and discover models, prompting only for missing choices. |
 | `tidemux provider list [--json]` | List provider references, endpoint, protocol, default model, model scope and whether each is a protocol default. Never reveal credentials. |
 | `tidemux provider show REF` | Show one provider's effective settings, but not its API key. |
-| `tidemux provider update REF [options]` | Change only the supplied fields. Updating a key uses hidden input; omitted fields and other providers remain unchanged. |
+| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID] [--anthropic-version DATE] [--rotate-key]` | Change only the supplied fields. Updating a key uses hidden input; omitted fields and other providers remain unchanged. |
 | `tidemux provider remove REF [--default REF] [--yes]` | Remove only that provider. Confirm interactively; without a terminal require `--yes`. If it is a protocol default and alternatives remain, prompt for a replacement or require `--default`; if none remain, clear the route. Delete a Keychain item only when no remaining provider references it. |
 | `tidemux provider default PROTOCOL REF` | Select the provider used by default for OpenAI or Anthropic clients. The provider must serve that protocol. Adding another provider never silently changes an existing default. |
 | `tidemux provider models REF [--only MODELS] [--all]` | With no scope option, query and display the provider's models when available. `--only` restricts allowed IDs; `--all` removes that restriction. The options are mutually exclusive. This is not a separate top-level `models` command. |
@@ -146,17 +145,21 @@ contract; the current build still uses `tidemux configure`, so see
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
 
 Provider identity does not depend on a user-chosen name. TideMux creates and
-prints a stable reference and derives a readable label from the endpoint;
-`--name` may set an optional display label. Multiple profiles may use the same
-endpoint (for example, separate accounts); each `add` creates a distinct
-reference and never silently updates or replaces an existing provider. The
-endpoint determines the protocol by default, with
+prints a stable reference derived from the endpoint; `--name` optionally
+overrides that reference. Multiple profiles may use the same endpoint (for
+example, separate accounts); each `add` creates a distinct reference and never
+silently updates or replaces an existing provider. The endpoint determines the protocol by default, with
 `--protocol openai|anthropic` available only to override inference. API keys
 are always collected through hidden input, never command-line arguments or
 configuration JSON; they are stored in macOS Keychain. Without a terminal for
 that prompt, setup fails before changing configuration. Model discovery uses
 the authenticated model-list endpoint only; setup never sends a completion
 request to select a model.
+
+On a first guided setup, TideMux also asks whether to schedule a daily local-time
+notification for usage reports. Leave it blank to skip. Set or change this later
+with `tidemux report schedule --time HH:MM`; disable it with
+`tidemux report schedule --disable`.
 
 All model IDs are allowed by default. A provider's default model is only the
 fallback for clients that omit a model; it is separate from the optional model
@@ -165,10 +168,11 @@ several and no default is supplied, interactive setup asks the user to choose;
 if discovery is unavailable, setup asks for the fallback model. The first
 provider for a protocol becomes its default; later providers do not replace it
 implicitly. Explicit `provider update`, `provider remove`, and default-route
-operations affect only the selected provider or route. An update that would
-make a default route invalid must also select a valid replacement. Every
-mutation is validated and written atomically; a failure leaves the previous
-configuration and credentials intact.
+operations affect only the selected provider or route. Before changing a
+default provider's protocol, select a replacement route if multiple providers
+remain on its old protocol. Configuration writes are validated and atomic;
+credentials created for a provider addition are rolled back if its config
+write fails.
 
 Provider-specific values (endpoint, credentials, protocol, model scope and
 prices) stay with the provider. Gateway-wide values such as listen mode and
@@ -197,7 +201,7 @@ tidemux gateway configure --listen loopback
 
 ## Documentation
 
-[Current development CLI setup (`configure`)](docs/configure.md) ·
+[Provider and gateway CLI](docs/provider-cli.md) ·
 [0.1.1 client setup](docs/clients.md) ·
 [Configuration examples](examples/README.md) ·
 [Accounting](docs/accounting.md) ·
