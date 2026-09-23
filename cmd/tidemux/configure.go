@@ -41,11 +41,15 @@ func (values *repeatedFlag) Set(value string) error {
 
 func parseProviderFlag(value string) (string, gateway.Provider, error) {
 	parts := strings.Split(value, ",")
-	if len(parts) != 4 {
-		return "", gateway.Provider{}, errors.New("--provider must be NAME,PROTOCOL,BASE_URL,MODEL")
+	if len(parts) != 3 && len(parts) != 4 {
+		return "", gateway.Provider{}, errors.New("--provider must be NAME,BASE_URL,MODEL (automatic) or NAME,PROTOCOL,BASE_URL,MODEL (forced protocol)")
 	}
-	name, protocol := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-	baseURL, model := strings.TrimSpace(parts[2]), strings.TrimSpace(parts[3])
+	name, protocol := strings.TrimSpace(parts[0]), "auto"
+	baseURL, model := strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+	if len(parts) == 4 {
+		protocol = strings.ToLower(strings.TrimSpace(parts[1]))
+		baseURL, model = strings.TrimSpace(parts[2]), strings.TrimSpace(parts[3])
+	}
 	return name, gateway.Provider{Protocol: protocol, BaseURL: baseURL, Model: model, UpstreamID: name}, nil
 }
 
@@ -89,7 +93,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	var providerFlags, defaultProviderFlags repeatedFlag
-	flags.Var(&providerFlags, "provider", "named provider NAME,PROTOCOL,BASE_URL,MODEL (repeatable)")
+	flags.Var(&providerFlags, "provider", "named provider NAME,BASE_URL,MODEL (auto) or NAME,PROTOCOL,BASE_URL,MODEL (forced; repeatable)")
 	flags.Var(&defaultProviderFlags, "default-provider", "default route PROTOCOL=NAME (repeatable)")
 	anthropicVersion := flags.String("anthropic-version", "", "Anthropic API version (default: 2023-06-01)")
 	model := flags.String("model", "", "default model ID")
@@ -193,7 +197,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 			if _, exists := c.Providers[name]; exists {
 				return fmt.Errorf("duplicate provider name %q", name)
 			}
-			if provider.Protocol == "anthropic" {
+			if provider.Protocol == "anthropic" || provider.Protocol == "auto" {
 				provider.APIVersion = *anthropicVersion
 			}
 			provider.UpstreamKeychain = pending
@@ -238,7 +242,11 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if namedProviderConfig {
 		for _, name := range sortedProviderNames(c.Providers) {
 			provider := c.Providers[name]
-			fmt.Fprintf(stdout, "Provider %s (%s): %s, model %s\n", name, provider.Protocol, provider.BaseURL, provider.Model)
+			protocol := provider.Protocol
+			if protocol == "auto" {
+				protocol = "automatic detection"
+			}
+			fmt.Fprintf(stdout, "Provider %s (%s): %s, model %s\n", name, protocol, provider.BaseURL, provider.Model)
 		}
 		fmt.Fprintf(stdout, "Default provider routes: %s\nConfig: %s\n", formatDefaultProviderRoutes(c.DefaultProviders), abs)
 	} else {

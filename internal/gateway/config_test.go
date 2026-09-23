@@ -144,6 +144,39 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	}
 }
 
+func TestNamedProviderProtocolMayBeAutomaticallyDetected(t *testing.T) {
+	c := testConfig("l.db", "https://legacy.example/v1")
+	c.BaseURL = ""
+	c.Protocol = ""
+	c.APIVersion = ""
+	c.UpstreamKeychain = KeychainReference{}
+	c.APIKey = ""
+	c.Model = ""
+	c.UpstreamID = ""
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
+		"auto-provider": {
+			Protocol:         "auto",
+			BaseURL:          "https://provider.example/v1",
+			Model:            "model",
+			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "auto"},
+		},
+	}
+	c.DefaultProviders = nil
+	if err := c.Validate(); err != nil {
+		t.Fatalf("automatic provider protocol was rejected: %v", err)
+	}
+
+	bad := c
+	provider := bad.Providers["auto-provider"]
+	provider.Protocol = "both"
+	bad.Providers["auto-provider"] = provider
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "protocol must be auto, openai or anthropic") {
+		t.Fatalf("invalid protocol error=%v", err)
+	}
+}
+
 func TestIndependentProviderExampleValidates(t *testing.T) {
 	config, err := LoadConfig(filepath.Join("..", "..", "examples", "named-providers.json"))
 	if err != nil {

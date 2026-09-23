@@ -145,12 +145,21 @@ func (c Config) Validate() error {
 			return errors.New("providers may contain at most 128 named entries")
 		}
 		availableProtocols := make(map[string]bool, 2)
+		protocolCounts := make(map[string]int, 2)
+		hasAutoProvider := false
 		for name, provider := range c.Providers {
 			if !validProviderName(name) {
 				return errors.New("provider names must be short non-secret labels using letters, numbers, dots, underscores or hyphens")
 			}
-			if provider.Protocol != "openai" && provider.Protocol != "anthropic" {
-				return errors.New("providers." + name + ".protocol must be openai or anthropic")
+			protocol := normalizeProviderProtocol(provider.Protocol)
+			switch protocol {
+			case "", "auto":
+				hasAutoProvider = true
+			case "openai", "anthropic":
+				availableProtocols[protocol] = true
+				protocolCounts[protocol]++
+			default:
+				return errors.New("providers." + name + ".protocol must be auto, openai or anthropic")
 			}
 			if err := validateBaseURL(provider.BaseURL, "providers."+name+".base_url"); err != nil {
 				return err
@@ -161,10 +170,10 @@ func (c Config) Validate() error {
 			if strings.TrimSpace(provider.Model) == "" {
 				return errors.New("providers." + name + ".model is required")
 			}
-			if provider.Protocol == "openai" && provider.APIVersion != "" {
+			if protocol == "openai" && provider.APIVersion != "" {
 				return errors.New("anthropic_version is valid only for the anthropic endpoint")
 			}
-			if provider.Protocol == "anthropic" && provider.APIVersion != "" {
+			if (protocol == "anthropic" || protocol == "auto") && provider.APIVersion != "" {
 				if _, err := time.Parse("2006-01-02", provider.APIVersion); err != nil {
 					return errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
 				}
@@ -175,7 +184,6 @@ func (c Config) Validate() error {
 			if err := validatePrices(provider.Prices); err != nil {
 				return err
 			}
-			availableProtocols[provider.Protocol] = true
 			if c.Budget != (ledger.BudgetPolicy{}) {
 				price, ok := provider.Prices[provider.Model]
 				if !ok {
@@ -186,9 +194,6 @@ func (c Config) Validate() error {
 				}
 			}
 		}
-		if len(c.DefaultProviders) == 0 {
-			return errors.New("default_providers must select a provider for each configured protocol")
-		}
 		for protocol, name := range c.DefaultProviders {
 			if protocol != "openai" && protocol != "anthropic" {
 				return errors.New("default_providers keys must be openai or anthropic")
@@ -197,12 +202,13 @@ func (c Config) Validate() error {
 			if !ok {
 				return errors.New("default_providers." + protocol + " must reference a configured provider name")
 			}
-			if provider.Protocol != protocol {
+			providerProtocol := normalizeProviderProtocol(provider.Protocol)
+			if providerProtocol != "" && providerProtocol != "auto" && providerProtocol != protocol {
 				return errors.New("default_providers." + protocol + " must reference a provider with the same protocol")
 			}
 		}
 		for protocol := range availableProtocols {
-			if _, ok := c.DefaultProviders[protocol]; !ok {
+			if _, ok := c.DefaultProviders[protocol]; !ok && protocolCounts[protocol] > 1 && !hasAutoProvider {
 				return errors.New("default_providers must select a default for the " + protocol + " protocol")
 			}
 		}

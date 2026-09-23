@@ -48,6 +48,9 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 			c.Protocol = provider.Protocol
 			c.APIVersion = provider.APIVersion
 		}
+	} else {
+		c.Providers = providers
+		c.DefaultProviders = providerRoutes
 	}
 	if err := c.Validate(); err != nil {
 		return nil, nil, err

@@ -53,22 +53,33 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, m
 	if len(c.Providers) != 0 {
 		resolved := make(map[string]Provider, len(c.Providers))
 		for name, provider := range c.Providers {
-			if provider.Protocol == "anthropic" {
+			protocol := normalizeProviderProtocol(provider.Protocol)
+			if protocol == "" || protocol == "auto" {
+				var err error
+				protocol, err = detectProviderProtocol(context.Background(), provider.BaseURL, provider.APIKey, provider.APIVersion, httpClient)
+				if err != nil {
+					return nil, nil, errors.New("cannot determine protocol for providers." + name + ": " + err.Error())
+				}
+			}
+			provider.Protocol = protocol
+			if protocol == "anthropic" {
 				if provider.APIVersion == "" {
 					provider.APIVersion = defaultAnthropicAPIVersion
 				}
 				if _, err := time.Parse("2006-01-02", provider.APIVersion); err != nil {
 					return nil, nil, errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
 				}
+			} else if provider.APIVersion != "" {
+				return nil, nil, errors.New("providers." + name + ".anthropic_version is valid only for the anthropic endpoint")
 			}
 			if provider.UpstreamID == "" {
 				provider.UpstreamID = name
 			}
 			resolved[name] = provider
 		}
-		routes := make(map[string]string, len(c.DefaultProviders))
-		for protocol, name := range c.DefaultProviders {
-			routes[protocol] = name
+		routes, err := resolveDefaultProviderRoutes(resolved, c.DefaultProviders)
+		if err != nil {
+			return nil, nil, err
 		}
 		return resolved, routes, nil
 	}
@@ -89,6 +100,39 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, m
 		Prices:            c.Prices,
 	}
 	return map[string]Provider{name: provider}, map[string]string{"openai": name, "anthropic": name}, nil
+}
+
+func resolveDefaultProviderRoutes(providers map[string]Provider, configured map[string]string) (map[string]string, error) {
+	routes := make(map[string]string, 2)
+	for protocol, name := range configured {
+		if protocol != "openai" && protocol != "anthropic" {
+			return nil, errors.New("default_providers keys must be openai or anthropic")
+		}
+		provider, ok := providers[name]
+		if !ok {
+			return nil, errors.New("default_providers." + protocol + " must reference a configured provider name")
+		}
+		if provider.Protocol != protocol {
+			return nil, errors.New("default_providers." + protocol + " must reference a provider with the same protocol")
+		}
+		routes[protocol] = name
+	}
+
+	providersByProtocol := map[string][]string{"openai": {}, "anthropic": {}}
+	for name, provider := range providers {
+		providersByProtocol[provider.Protocol] = append(providersByProtocol[provider.Protocol], name)
+	}
+	for protocol, names := range providersByProtocol {
+		if _, ok := routes[protocol]; ok || len(names) == 0 {
+			continue
+		}
+		if len(names) != 1 {
+			sort.Strings(names)
+			return nil, errors.New("default_providers." + protocol + " must select one of the providers: " + strings.Join(names, ", "))
+		}
+		routes[protocol] = names[0]
+	}
+	return routes, nil
 }
 
 // discoverProviderModels makes a bounded, redirect-free GET /models request.

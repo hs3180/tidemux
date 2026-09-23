@@ -227,8 +227,25 @@ stop the gateway first and add `--replace`. Inspect other options with
 ### Configure protocol-routed providers
 
 Each named provider uses exactly one upstream API protocol, endpoint and API
-key. Provider specs are repeatable and use `NAME,PROTOCOL,BASE_URL,MODEL`;
-`--default-provider` selects which profile serves each client protocol:
+key. Provider specs are repeatable. By default, the protocol is inferred from
+the endpoint; explicitly include a protocol to force it:
+
+```sh
+tidemux configure \
+  --provider openai-service,https://api.example.com/v1,model-id \
+  --pricing-input-cache-hit 0.5 \
+  --pricing-input-cache-miss 1 \
+  --pricing-output 2
+```
+
+The automatic form is `NAME,BASE_URL,MODEL`. TideMux first checks recognizable
+endpoint host/path hints, then—when needed—uses the provider API key to inspect
+`GET /models` with OpenAI and Anthropic authentication. It never sends a billable
+completion to identify the protocol. This detection happens when the gateway
+starts. If the endpoint cannot be identified or does not expose a recognizable
+model list, startup reports that provider by name. To force the protocol and
+skip detection, use the four-part form. In JSON, omit `protocol` or set it to
+`auto` for detection; setting it to `openai` or `anthropic` forces that format.
 
 ```sh
 tidemux configure \
@@ -243,13 +260,16 @@ tidemux configure \
 
 OpenAI clients route to the provider named by `default_providers.openai`, and
 Anthropic clients to `default_providers.anthropic`; their upstream paths are
-`/chat/completions` and `/messages`. Each provider may use a different API root
-and credential. Multiple providers may use the same protocol; changing that
-protocol's default name switches the route. Requests use only the selected
-provider and are never retried through another profile. API keys are entered
-at hidden prompts and stored in Keychain; the JSON config contains references
-only. Pricing flags seed each provider's price table using that provider's
-model. `--anthropic-version YYYY-MM-DD` applies to Anthropic provider entries.
+`/chat/completions` and `/messages`. If there is only one provider for a detected
+protocol, it is selected as that protocol's default automatically. When multiple
+providers resolve to the same protocol, use `--default-provider PROTOCOL=NAME`
+to choose one. Each provider may use a different API root and credential.
+Requests use only the selected provider and are never retried through another
+profile. API keys are entered at hidden prompts and stored in Keychain; the JSON
+config contains references only. Pricing flags seed each provider's price table
+using that provider's model. `--anthropic-version YYYY-MM-DD` applies to
+Anthropic providers; when using automatic detection, the version is checked
+after the protocol is identified.
 `--replace` updates the full configuration while preserving a backup and old
 Keychain items.
 

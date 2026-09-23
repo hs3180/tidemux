@@ -2,7 +2,6 @@
   "listen_addr": "127.0.0.1:4000",
   "providers": {
     "deepseek-openai": {
-      "protocol": "openai",
       "base_url": "https://api.deepseek.com/v1",
       "model": "openai-model-id",
       "upstream_id": "deepseek-openai",
@@ -12,7 +11,6 @@
       }
     },
     "deepseek-anthropic": {
-      "protocol": "anthropic",
       "base_url": "https://api.deepseek.com/anthropic/v1",
       "anthropic_version": "2023-06-01",
       "model": "anthropic-model-id",

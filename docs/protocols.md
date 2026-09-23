@@ -2,25 +2,30 @@
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Named profiles
-are keyed by provider name and each has one `protocol`, its own `base_url`,
+are keyed by provider name and each has one inferred or explicitly selected
+`protocol`, its own `base_url`,
 Keychain reference, default model, billing identity, model limits and prices.
 `default_providers` maps each client protocol to the named provider that serves
 it. Multiple named providers may use the same protocol; only the selected
-default receives requests. Gateway authentication, active-session limits and
-the local ledger remain shared.
+default receives requests. A single provider is automatically selected for a
+protocol when no default is configured; an explicit default is required when
+multiple profiles resolve to the same protocol. Gateway authentication,
+active-session limits and the local ledger remain shared.
 
 Legacy single-provider configs retain their prior behavior: TideMux detects or
 uses the configured upstream protocol and translates client requests as
 needed. New named provider entries are strict protocol-specific routes and do
 not fall back to another provider or cross-protocol translation.
 
-Automatic detection applies only to legacy configs. It is local for recognized
-roots such as OpenAI, Anthropic and the DeepSeek preset. For another root,
-TideMux sends an authenticated `GET` to `base_url + /models` using the two
-standard authentication shapes and classifies the returned model objects. It
-never sends a completion or message just to detect the protocol. Named provider
-profiles declare their protocol explicitly and use their own `/models` endpoint
-for discovery.
+Automatic detection applies to legacy and named provider configs. An explicitly
+configured `protocol` of `openai` or `anthropic` forces that upstream format and
+skips detection. Otherwise TideMux checks recognized endpoint host/path hints
+such as OpenAI, Anthropic and DeepSeek. For other roots it sends an authenticated
+`GET` to `base_url + /models` using OpenAI and Anthropic authentication shapes,
+then classifies the returned model objects. It never sends a completion or
+message just to detect the protocol. If it cannot confidently identify the
+format, startup fails with the provider name so the user can explicitly set the
+protocol. Model discovery then uses the resolved protocol and the same endpoint.
 
 | Feature | Named OpenAI provider | Named Anthropic provider |
 | --- | --- | --- |

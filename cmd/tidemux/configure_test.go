@@ -318,6 +318,10 @@ func TestParseNamedProviderFlags(t *testing.T) {
 	if err != nil || name != "deepseek-alt" || provider.Protocol != "openai" || provider.BaseURL != "https://api.deepseek.com/v1" || provider.Model != "deepseek-chat" {
 		t.Fatalf("parsed provider = %q, %+v, err=%v", name, provider, err)
 	}
+	name, provider, err = parseProviderFlag("automatic,https://api.example.com/v1,model-id")
+	if err != nil || name != "automatic" || provider.Protocol != "auto" || provider.BaseURL != "https://api.example.com/v1" || provider.Model != "model-id" {
+		t.Fatalf("parsed automatic provider = %q, %+v, err=%v", name, provider, err)
+	}
 	protocol, defaultName, err := parseDefaultProviderFlag("openai=deepseek-alt")
 	if err != nil || protocol != "openai" || defaultName != "deepseek-alt" {
 		t.Fatalf("parsed default = %q=%q, err=%v", protocol, defaultName, err)

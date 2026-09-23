@@ -39,7 +39,7 @@ commands:
 configuration examples:
   tidemux configure --preset deepseek-flash [options]
   tidemux configure --base-url URL --model ID [pricing options]
-  tidemux configure --provider NAME,PROTOCOL,BASE_URL,MODEL --default-provider PROTOCOL=NAME
+  tidemux configure --provider NAME,BASE_URL,MODEL [--default-provider PROTOCOL=NAME]
 
 common examples:
   tidemux configure --preset deepseek-flash
@@ -47,7 +47,8 @@ common examples:
   tidemux serve --config /path/to/config.json
 
 Named providers each use one API protocol, endpoint and Keychain credential.
-The default provider map selects which named profile serves each client protocol.
+Their protocol is detected from the endpoint unless explicitly forced; the
+default provider map selects a profile when multiple providers share a protocol.
 `
 )
 
