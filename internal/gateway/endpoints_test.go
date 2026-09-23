@@ -165,9 +165,11 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 
 func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 	providerCalls := map[string]int{"primary": 0, "secondary": 0}
+	providerDiscoveries := map[string]int{"primary": 0, "secondary": 0}
 	newProvider := func(name string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet {
+				providerDiscoveries[name]++
 				model := name + "-model"
 				_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"`+model+`","object":"model"}]}`)
 				return
@@ -234,8 +236,8 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 			}
 		})
 	}
-	if providerCalls["primary"] != 1 || providerCalls["secondary"] != 1 {
-		t.Fatalf("selected provider calls=%v", providerCalls)
+	if providerCalls["primary"] != 1 || providerCalls["secondary"] != 1 || providerDiscoveries["primary"] != 1 || providerDiscoveries["secondary"] != 1 {
+		t.Fatalf("selected provider calls=%v discoveries=%v", providerCalls, providerDiscoveries)
 	}
 }
 
