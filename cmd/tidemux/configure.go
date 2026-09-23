@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +31,51 @@ type secretWriter interface {
 
 const defaultListenAddr = "127.0.0.1:4000"
 
+type repeatedFlag []string
+
+func (values *repeatedFlag) String() string { return strings.Join(*values, ",") }
+func (values *repeatedFlag) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+func parseProviderFlag(value string) (string, gateway.Provider, error) {
+	parts := strings.Split(value, ",")
+	if len(parts) != 4 {
+		return "", gateway.Provider{}, errors.New("--provider must be NAME,PROTOCOL,BASE_URL,MODEL")
+	}
+	name, protocol := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	baseURL, model := strings.TrimSpace(parts[2]), strings.TrimSpace(parts[3])
+	return name, gateway.Provider{Protocol: protocol, BaseURL: baseURL, Model: model, UpstreamID: name}, nil
+}
+
+func parseDefaultProviderFlag(value string) (string, string, error) {
+	parts := strings.SplitN(value, "=", 2)
+	if len(parts) != 2 {
+		return "", "", errors.New("--default-provider must be PROTOCOL=NAME")
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+}
+
+func sortedProviderNames(providers map[string]gateway.Provider) []string {
+	names := make([]string, 0, len(providers))
+	for name := range providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func formatDefaultProviderRoutes(routes map[string]string) string {
+	ordered := make([]string, 0, len(routes))
+	for _, protocol := range []string{"openai", "anthropic"} {
+		if name, ok := routes[protocol]; ok {
+			ordered = append(ordered, protocol+"="+name)
+		}
+	}
+	return strings.Join(ordered, ", ")
+}
+
 func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -42,9 +88,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 	flags.SetOutput(stderr)
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
-	dualProvider := flags.Bool("dual-provider", false, "configure OpenAI and Anthropic provider profiles at the shared --base-url")
-	openAIModel := flags.String("openai-model", "", "default model for the OpenAI provider (defaults to --model)")
-	anthropicModel := flags.String("anthropic-model", "", "default model for the Anthropic provider (defaults to --model)")
+	var providerFlags, defaultProviderFlags repeatedFlag
+	flags.Var(&providerFlags, "provider", "named provider NAME,PROTOCOL,BASE_URL,MODEL (repeatable)")
+	flags.Var(&defaultProviderFlags, "default-provider", "default route PROTOCOL=NAME (repeatable)")
 	anthropicVersion := flags.String("anthropic-version", "", "Anthropic API version (default: 2023-06-01)")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
@@ -79,8 +125,11 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if *preset != "" && *preset != "deepseek-flash" {
 		return errors.New("unknown preset; use --base-url")
 	}
-	protocolProviderConfig := *dualProvider
+	namedProviderConfig := len(providerFlags) != 0
 	if *preset == "deepseek-flash" {
+		if namedProviderConfig {
+			return errors.New("--preset cannot be combined with named --provider entries")
+		}
 		if *baseURL == "" {
 			*baseURL = "https://api.deepseek.com"
 		}
@@ -88,29 +137,15 @@ func configure(args []string, stdout, stderr *os.File) error {
 			*model = "deepseek-flash"
 		}
 	}
-	if !protocolProviderConfig && (*model == "" || *baseURL == "") {
-		return errors.New("use configure --preset deepseek-flash, or provide --base-url/--model; add --dual-provider to configure both protocol-specific providers")
-	}
-	if protocolProviderConfig && *baseURL == "" {
-		return errors.New("--dual-provider requires a shared --base-url")
-	}
-	providerModels := map[string]string{}
-	if protocolProviderConfig {
-		for _, protocol := range []string{"openai", "anthropic"} {
-			providerModel := *model
-			if protocol == "openai" && *openAIModel != "" {
-				providerModel = *openAIModel
-			}
-			if protocol == "anthropic" && *anthropicModel != "" {
-				providerModel = *anthropicModel
-			}
-			if strings.TrimSpace(providerModel) == "" {
-				return fmt.Errorf("--%s-model or --model is required for the %s provider", protocol, protocol)
-			}
-			providerModels[protocol] = providerModel
+	if namedProviderConfig {
+		if *baseURL != "" || *model != "" {
+			return errors.New("use either named --provider entries or the legacy --base-url/--model options")
 		}
-	} else if *openAIModel != "" || *anthropicModel != "" {
-		return errors.New("--openai-model and --anthropic-model require --dual-provider")
+	} else if *model == "" || *baseURL == "" {
+		return errors.New("use configure --preset deepseek-flash, provide --base-url/--model, or define named --provider entries")
+	}
+	if !namedProviderConfig && len(defaultProviderFlags) != 0 {
+		return errors.New("--default-provider requires named --provider entries")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("configure requires macOS Keychain")
@@ -120,7 +155,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return errors.New("invalid config path")
 	}
 	prices := map[string]adapter.Price{}
-	if !protocolProviderConfig {
+	if !namedProviderConfig {
 		prices, err = configurePrices(flags, *preset, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
 		if err != nil {
 			return err
@@ -140,24 +175,46 @@ func configure(args []string, stdout, stderr *os.File) error {
 	}
 	capabilities := gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}
 	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: capabilities, ListenAddr: *listen, BaseURL: *baseURL, Model: *model, UpstreamID: "provider-primary", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
-	if protocolProviderConfig {
+	if namedProviderConfig {
+		c.BaseURL = ""
 		c.UpstreamKeychain = gateway.KeychainReference{}
 		c.Model = ""
 		c.UpstreamID = ""
 		c.Prices = nil
 		c.ModelCapabilities = gateway.ModelCapabilities{}
-		c.Providers = make(map[string]gateway.Provider, 2)
+		c.Providers = make(map[string]gateway.Provider, len(providerFlags))
+		c.DefaultProviders = make(map[string]string, len(defaultProviderFlags))
 		pending := gateway.KeychainReference{Service: "pending", Account: "pending"}
-		providerPrices, priceErr := configurePrices(flags, *preset, *baseURL, providerModels["openai"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
-		if priceErr != nil {
-			return fmt.Errorf("openai provider: %w", priceErr)
+		for _, value := range providerFlags {
+			name, provider, parseErr := parseProviderFlag(value)
+			if parseErr != nil {
+				return parseErr
+			}
+			if _, exists := c.Providers[name]; exists {
+				return fmt.Errorf("duplicate provider name %q", name)
+			}
+			if provider.Protocol == "anthropic" {
+				provider.APIVersion = *anthropicVersion
+			}
+			provider.UpstreamKeychain = pending
+			provider.ModelCapabilities = capabilities
+			providerPrices, priceErr := configurePrices(flags, "", provider.BaseURL, provider.Model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+			if priceErr != nil {
+				return fmt.Errorf("provider %s: %w", name, priceErr)
+			}
+			provider.Prices = providerPrices
+			c.Providers[name] = provider
 		}
-		c.Providers["openai"] = gateway.Provider{UpstreamKeychain: pending, Model: providerModels["openai"], UpstreamID: "openai", ModelCapabilities: capabilities, Prices: providerPrices}
-		providerPrices, priceErr = configurePrices(flags, *preset, *baseURL, providerModels["anthropic"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
-		if priceErr != nil {
-			return fmt.Errorf("anthropic provider: %w", priceErr)
+		for _, value := range defaultProviderFlags {
+			protocol, name, parseErr := parseDefaultProviderFlag(value)
+			if parseErr != nil {
+				return parseErr
+			}
+			if _, exists := c.DefaultProviders[protocol]; exists {
+				return fmt.Errorf("duplicate default provider for %s", protocol)
+			}
+			c.DefaultProviders[protocol] = name
 		}
-		c.Providers["anthropic"] = gateway.Provider{UpstreamKeychain: pending, APIVersion: *anthropicVersion, Model: providerModels["anthropic"], UpstreamID: "anthropic", ModelCapabilities: capabilities, Prices: providerPrices}
 	} else if *anthropicVersion != "" {
 		c.APIVersion = *anthropicVersion
 	}
@@ -178,18 +235,12 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err := unlockKeychainIfNeeded(context.Background(), tty); err != nil {
 		return err
 	}
-	if protocolProviderConfig {
-		fmt.Fprintf(stdout, "Shared provider API root: %s\n", c.BaseURL)
-		for _, protocol := range []string{"openai", "anthropic"} {
-			if provider, ok := c.Providers[protocol]; ok {
-				name := "OpenAI"
-				if protocol == "anthropic" {
-					name = "Anthropic"
-				}
-				fmt.Fprintf(stdout, "%s provider model: %s\n", name, provider.Model)
-			}
+	if namedProviderConfig {
+		for _, name := range sortedProviderNames(c.Providers) {
+			provider := c.Providers[name]
+			fmt.Fprintf(stdout, "Provider %s (%s): %s, model %s\n", name, provider.Protocol, provider.BaseURL, provider.Model)
 		}
-		fmt.Fprintf(stdout, "Provider routing: client protocol selects its matching provider\nConfig: %s\n", abs)
+		fmt.Fprintf(stdout, "Default provider routes: %s\nConfig: %s\n", formatDefaultProviderRoutes(c.DefaultProviders), abs)
 	} else {
 		fmt.Fprintf(stdout, "Provider API root: %s\nProvider protocol: automatic (checked when the gateway starts)\nModel: %s\nConfig: %s\n", c.BaseURL, c.Model, abs)
 	}
@@ -215,43 +266,21 @@ func configure(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, "Daily report notification: disabled")
 	}
 	providerSecrets := map[string]string{}
-	if protocolProviderConfig {
-		var openAISecret []byte
-		if _, ok := c.Providers["openai"]; ok {
-			fmt.Fprint(tty, "OpenAI provider API key (hidden; paste then press Enter): ")
-			openAISecret, err = term.ReadPassword(int(tty.Fd()))
-			fmt.Fprintln(tty)
-			if err != nil {
-				return errors.New("could not read OpenAI provider API key")
-			}
-			defer func() {
-				for i := range openAISecret {
-					openAISecret[i] = 0
-				}
-			}()
-			providerSecrets["openai"] = string(openAISecret)
-		}
-		if _, ok := c.Providers["anthropic"]; ok {
-			prompt := "Anthropic provider API key (hidden; paste then press Enter): "
-			if len(openAISecret) != 0 {
-				prompt = "Anthropic provider API key (hidden; press Enter to reuse the OpenAI key): "
-			}
-			fmt.Fprint(tty, prompt)
-			anthropicSecret, readErr := term.ReadPassword(int(tty.Fd()))
+	if namedProviderConfig {
+		for _, name := range sortedProviderNames(c.Providers) {
+			protocol := c.Providers[name].Protocol
+			fmt.Fprintf(tty, "Provider %q (%s) API key (hidden; paste then press Enter): ", name, protocol)
+			secret, readErr := term.ReadPassword(int(tty.Fd()))
 			fmt.Fprintln(tty)
 			if readErr != nil {
-				return errors.New("could not read Anthropic provider API key")
+				return fmt.Errorf("could not read API key for provider %q", name)
 			}
-			if len(anthropicSecret) == 0 && len(openAISecret) != 0 {
-				providerSecrets["anthropic"] = providerSecrets["openai"]
-			} else {
-				providerSecrets["anthropic"] = string(anthropicSecret)
-			}
-			defer func() {
-				for i := range anthropicSecret {
-					anthropicSecret[i] = 0
+			defer func(secret []byte) {
+				for i := range secret {
+					secret[i] = 0
 				}
-			}()
+			}(secret)
+			providerSecrets[name] = string(secret)
 		}
 	} else {
 		fmt.Fprint(tty, "API key (hidden; paste then press Enter): ")
@@ -352,9 +381,9 @@ func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSe
 		return errors.New("an API key is required for each configured provider")
 	}
 	if len(c.Providers) > 0 {
-		for protocol := range c.Providers {
-			if _, ok := providerSecrets[protocol]; !ok {
-				return fmt.Errorf("API key required for %s provider", protocol)
+		for name := range c.Providers {
+			if _, ok := providerSecrets[name]; !ok {
+				return fmt.Errorf("API key required for provider %q", name)
 			}
 		}
 	}
@@ -415,12 +444,9 @@ func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSe
 		c.UpstreamKeychain = ref
 		providerEntries = append(providerEntries, keychainEntry{reference: ref, secret: providerSecrets["legacy"]})
 	} else {
-		for _, protocol := range []string{"openai", "anthropic"} {
-			provider, ok := c.Providers[protocol]
-			if !ok {
-				continue
-			}
-			secret := providerSecrets[protocol]
+		for _, name := range sortedProviderNames(c.Providers) {
+			provider := c.Providers[name]
+			secret := providerSecrets[name]
 			ref, shared := sharedReferences[secret]
 			if !shared {
 				ref, err = newReference("com.tidemux.provider")
@@ -431,7 +457,7 @@ func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSe
 				providerEntries = append(providerEntries, keychainEntry{reference: ref, secret: secret})
 			}
 			provider.UpstreamKeychain = ref
-			c.Providers[protocol] = provider
+			c.Providers[name] = provider
 		}
 	}
 	gatewayCredential := gatewayKey

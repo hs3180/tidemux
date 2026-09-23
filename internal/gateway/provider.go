@@ -46,43 +46,49 @@ func resolveProviderProtocol(c Config, httpClient *http.Client) (string, string,
 	return detected, apiVersion, nil
 }
 
-// resolveProviders returns protocol-keyed profiles. All profiles use the one
-// shared API root in Config.BaseURL; legacy profiles still detect one upstream
-// protocol and expose the other client protocol through translation.
-func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, error) {
+// resolveProviders returns named profiles plus the selected profile for each
+// client protocol. Legacy configurations keep their historical single-profile
+// protocol detection and translation behavior.
+func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, map[string]string, error) {
 	if len(c.Providers) != 0 {
 		resolved := make(map[string]Provider, len(c.Providers))
-		for protocol, provider := range c.Providers {
-			if protocol == "anthropic" {
+		for name, provider := range c.Providers {
+			if provider.Protocol == "anthropic" {
 				if provider.APIVersion == "" {
 					provider.APIVersion = defaultAnthropicAPIVersion
 				}
 				if _, err := time.Parse("2006-01-02", provider.APIVersion); err != nil {
-					return nil, errors.New("providers.anthropic.anthropic_version must be YYYY-MM-DD")
+					return nil, nil, errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
 				}
 			}
 			if provider.UpstreamID == "" {
-				provider.UpstreamID = protocol
+				provider.UpstreamID = name
 			}
-			resolved[protocol] = provider
+			resolved[name] = provider
 		}
-		return resolved, nil
+		routes := make(map[string]string, len(c.DefaultProviders))
+		for protocol, name := range c.DefaultProviders {
+			routes[protocol] = name
+		}
+		return resolved, routes, nil
 	}
 
 	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return map[string]Provider{
-		protocol: {
-			APIVersion:        apiVersion,
-			APIKey:            c.APIKey,
-			Model:             c.Model,
-			UpstreamID:        c.UpstreamID,
-			ModelCapabilities: c.ModelCapabilities,
-			Prices:            c.Prices,
-		},
-	}, nil
+	name := "legacy"
+	provider := Provider{
+		Protocol:          protocol,
+		BaseURL:           c.BaseURL,
+		APIVersion:        apiVersion,
+		APIKey:            c.APIKey,
+		Model:             c.Model,
+		UpstreamID:        c.UpstreamID,
+		ModelCapabilities: c.ModelCapabilities,
+		Prices:            c.Prices,
+	}
+	return map[string]Provider{name: provider}, map[string]string{"openai": name, "anthropic": name}, nil
 }
 
 // discoverProviderModels makes a bounded, redirect-free GET /models request.

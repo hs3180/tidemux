@@ -47,9 +47,9 @@ tidemux configure --preset deepseek-flash \
   --base-url https://api.deepseek.com/anthropic/v1
 ```
 
-To route the two client protocols to separate upstream providers, configure
-one shared `--base-url` with `--dual-provider`; use `--openai-model` and
-`--anthropic-model` if their model IDs differ. See the
+To route client protocols to named upstream providers, configure each one with
+its protocol, endpoint and model, then select a default provider for each
+client protocol. See the
 [configuration guide](docs/configure.md#configure-protocol-routed-providers).
 
 Paste your API key at the hidden prompt; TideMux handles Keychain storage.

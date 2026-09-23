@@ -1,41 +1,45 @@
 # Protocol support — 0.2.0 development
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
-`/v1/chat/completions`; Anthropic clients use `/v1/messages`. A legacy profile
-can keep one `base_url`, whose provider protocol TideMux detects at startup.
-New profiles may instead configure independent protocol-keyed
-`providers.openai` and `providers.anthropic` records below one shared
-`base_url`. Each provider owns its Keychain reference, default model, billing
-identity, model limits and prices. When both are present, each client protocol
-routes strictly to its matching provider at that common API root; when only one
-is present, the other client route uses the existing translator. Gateway
-authentication, active-session limits and the local ledger remain shared.
+`/v1/chat/completions`; Anthropic clients use `/v1/messages`. Named profiles
+are keyed by provider name and each has one `protocol`, its own `base_url`,
+Keychain reference, default model, billing identity, model limits and prices.
+`default_providers` maps each client protocol to the named provider that serves
+it. Multiple named providers may use the same protocol; only the selected
+default receives requests. Gateway authentication, active-session limits and
+the local ledger remain shared.
 
-Detection is local for recognized roots such as OpenAI, Anthropic and the
-DeepSeek preset. For another root, TideMux sends an authenticated `GET` to
-`base_url + /models` using the two standard authentication shapes and classifies
-the returned model objects. It never sends a completion or message just to
-detect the protocol. If neither a root hint nor a recognizable model response
-is available, `serve` stops with an actionable configuration error.
+Legacy single-provider configs retain their prior behavior: TideMux detects or
+uses the configured upstream protocol and translates client requests as
+needed. New named provider entries are strict protocol-specific routes and do
+not fall back to another provider or cross-protocol translation.
 
-| Feature | Detected OpenAI provider | Detected Anthropic provider |
+Automatic detection applies only to legacy configs. It is local for recognized
+roots such as OpenAI, Anthropic and the DeepSeek preset. For another root,
+TideMux sends an authenticated `GET` to `base_url + /models` using the two
+standard authentication shapes and classifies the returned model objects. It
+never sends a completion or message just to detect the protocol. Named provider
+profiles declare their protocol explicitly and use their own `/models` endpoint
+for discovery.
+
+| Feature | Named OpenAI provider | Named Anthropic provider |
 | --- | --- | --- |
 | OpenAI client endpoint | `/v1/chat/completions` | `/v1/chat/completions` |
 | Anthropic client endpoint | `/v1/messages` | `/v1/messages` |
 | Upstream endpoint | `/chat/completions` | `/messages` |
 | Upstream credential | Bearer key | `x-api-key` |
 | Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
-| Provider model discovery | OpenAI-shaped `/models` or root hint | Anthropic-shaped `/models` or root hint |
-| OpenAI client ↔ provider | Passed through after validation | Chat Completions translated to/from Messages |
-| Anthropic client ↔ provider | Messages translated to/from Chat Completions | Passed through after validation |
-| Streaming | Client format is preserved or translated to the selected provider format | Client format is preserved or translated to the selected provider format |
+| Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
+| Matching client protocol | OpenAI client passes through after validation | Anthropic client passes through after validation |
+| Non-matching client protocol | Not routed to this provider | Not routed to this provider |
+| Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-The client endpoints are independent of upstream selection. A profile with one
-configured provider continues to support both clients through pass-through or
-translation. A profile with both providers routes each client to its matching
-provider, with no cross-provider retry. Each provider's `GET /models` response
-is used only on its client route when it is a complete, recognized model list.
+The client endpoints are independent of upstream selection. Legacy single-
+provider profiles support both clients through pass-through or translation.
+Named provider profiles route each client to the configured default with the
+same protocol, with no cross-provider retry. Each named provider's `GET /models`
+response is used only on its client route when it is a complete, recognized model list.
 Requests for a model absent from a recognized provider list receive
 `model_not_found` before an upstream completion is sent. If a provider does not
 expose a complete recognizable list, its route returns an empty model catalogue
@@ -44,20 +48,20 @@ are still sent to that provider. Existing single-provider profiles that
 explicitly contain `"protocol": "openai"` or `"protocol": "anthropic"` remain
 compatible.
 
-The translation boundary covers text, system/developer instructions, tools,
-tool calls/results, stop sequences, output schemas and streaming terminal
-events in both directions. Provider-specific features that have no equivalent
-on the other wire format remain explicitly unsupported rather than silently
-forwarded.
+Legacy single-provider translation covers text, system/developer instructions,
+tools, tool calls/results, stop sequences, output schemas and streaming
+terminal events in both directions. Provider-specific features that have no
+equivalent on the other wire format remain explicitly unsupported rather than
+silently forwarded. Named provider profiles do not translate between formats.
 
 Explicit parameters are retained; provider acceptance is not inferred from the
-model name. Native Anthropic client requests can include Anthropic-compatible
-system-role messages and cache markers when the upstream is Anthropic. When the
-upstream is OpenAI, only the supported top-level system/text subset is
-translated; unsupported provider-only blocks are rejected. Claude's observed
-requests carry a mid-conversation-system beta declaration. Providers can
-reject this or other beta features; TideMux does not change system instructions
-into user text.
+model name. In legacy cross-protocol mode, native Anthropic client requests can
+include Anthropic-compatible system-role messages and cache markers when the
+upstream is Anthropic. When that legacy upstream is OpenAI, only the supported
+top-level system/text subset is translated; unsupported provider-only blocks
+are rejected. Claude's observed requests carry a mid-conversation-system beta
+declaration. Providers can reject this or other beta features; TideMux does not
+change system instructions into user text.
 
 The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
 configured provider unchanged. If active-session limiting is enabled and the

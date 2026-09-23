@@ -226,51 +226,49 @@ stop the gateway first and add `--replace`. Inspect other options with
 
 ### Configure protocol-routed providers
 
-Use one shared API root and configure OpenAI and Anthropic as separate
-providers beneath it. Each provider has its own hidden API-key prompt, default
-model, billing identity, model limits and price table. `--model` is a shorthand
-default for both; use the protocol-specific model flags when they differ:
+Each named provider uses exactly one upstream API protocol, endpoint and API
+key. Provider specs are repeatable and use `NAME,PROTOCOL,BASE_URL,MODEL`;
+`--default-provider` selects which profile serves each client protocol:
 
 ```sh
 tidemux configure \
-  --base-url https://provider.example/v1 \
-  --dual-provider \
-  --openai-model openai-model-id \
-  --anthropic-model anthropic-model-id \
+  --provider deepseek-openai,openai,https://api.deepseek.com/v1,openai-model-id \
+  --provider deepseek-anthropic,anthropic,https://api.deepseek.com/anthropic/v1,anthropic-model-id \
+  --default-provider openai=deepseek-openai \
+  --default-provider anthropic=deepseek-anthropic \
   --pricing-input-cache-hit 1 \
   --pricing-input-cache-miss 2 \
   --pricing-output 4
 ```
 
-OpenAI clients route to the OpenAI provider and Anthropic clients to the
-Anthropic provider, using the same API root and their respective protocol
-paths (`/chat/completions` and `/messages`). Both upstream APIs must be
-available beneath that shared root. A legacy single-provider configuration
-still supports both client APIs through protocol translation. API keys are
-entered at hidden prompts; when configuring both, press Enter at the Anthropic key
-prompt to reuse the OpenAI key, or enter a separate key. Credentials are stored
-in Keychain; the JSON config contains references only. The pricing flags seed
-each configured provider's own price table. `--anthropic-version YYYY-MM-DD`
-overrides the Anthropic provider's API version. `--replace` updates the full
-configuration while preserving a backup and old Keychain items.
+OpenAI clients route to the provider named by `default_providers.openai`, and
+Anthropic clients to `default_providers.anthropic`; their upstream paths are
+`/chat/completions` and `/messages`. Each provider may use a different API root
+and credential. Multiple providers may use the same protocol; changing that
+protocol's default name switches the route. Requests use only the selected
+provider and are never retried through another profile. API keys are entered
+at hidden prompts and stored in Keychain; the JSON config contains references
+only. Pricing flags seed each provider's price table using that provider's
+model. `--anthropic-version YYYY-MM-DD` applies to Anthropic provider entries.
+`--replace` updates the full configuration while preserving a backup and old
+Keychain items.
 
-Each provider's `GET /models` response is used only on its matching client route
+The selected provider's `GET /models` response is used only on its client route
 when it is a complete, recognized model list. A provider without a complete
 recognizable list returns an empty model catalogue rather than claiming its
 default model is available; direct requests are still sent to that provider.
-See the non-secret [provider configuration example](../examples/dual-providers.json).
+See the non-secret [named provider configuration example](../examples/named-providers.json).
 
 ## Update the current local configuration
 
 By default the command refuses to overwrite an existing file. To intentionally
 replace it, stop the server and repeat the configure command with `--replace`.
 New Keychain accounts are generated; old credentials and ledger data are retained
-in place. Inspect the JSON configuration before replacing it: it contains the
-shared provider root and Keychain references, never the API key values. When retaining
-both protocol providers, pass `--dual-provider` again; omitting it replaces the
-configuration with the legacy single-provider profile. The command replaces
-the configuration as a whole, including provider pricing selected alongside
-the new API keys.
+in place. Inspect the JSON configuration before replacing it: it contains each
+provider endpoint and Keychain references, never the API key values. To retain
+named providers, pass all desired `--provider` entries and
+`--default-provider` mappings again. The command replaces the configuration as
+a whole, including provider pricing selected alongside the new API keys.
 Before restarting, review the new pricing and limits against the saved backup,
 and keep the existing `ledger_path` so billing continues to read your history.
 Remove unused old entries later in Keychain Access if desired. A failed setup

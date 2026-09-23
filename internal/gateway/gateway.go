@@ -39,13 +39,13 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		}
 	}
 	legacySingleProvider := len(c.Providers) == 0
-	providers, err := resolveProviders(c, httpClient)
+	providers, providerRoutes, err := resolveProviders(c, httpClient)
 	if err != nil {
 		return nil, nil, err
 	}
 	if legacySingleProvider {
-		for protocol, provider := range providers {
-			c.Protocol = protocol
+		for _, provider := range providers {
+			c.Protocol = provider.Protocol
 			c.APIVersion = provider.APIVersion
 		}
 	}
@@ -69,16 +69,16 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	clients := make(map[string]*adapter.Client, len(providers))
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
-	for protocol, provider := range providers {
-		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: c.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+	for name, provider := range providers {
+		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		if !legacySingleProvider {
-			models[protocol], modelsKnown[protocol] = discoverProviderModels(c.BaseURL, provider, protocol, httpClient)
+			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
-		if legacySingleProvider && !modelsKnown[protocol] {
-			models[protocol] = []string{provider.Model}
+		if legacySingleProvider && !modelsKnown[name] {
+			models[name] = []string{provider.Model}
 		}
 	}
-	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, clients: clients, models: models, modelsKnown: modelsKnown}, func() error {
+	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, providerRoutes: providerRoutes, clients: clients, models: models, modelsKnown: modelsKnown}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()
@@ -99,41 +99,34 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 }
 
 type handler struct {
-	config      Config
-	ledger      *ledger.Ledger
-	sessions    *limiter.SessionLimiter
-	providers   map[string]Provider
-	clients     map[string]*adapter.Client
-	models      map[string][]string
-	modelsKnown map[string]bool
+	config         Config
+	ledger         *ledger.Ledger
+	sessions       *limiter.SessionLimiter
+	providers      map[string]Provider
+	providerRoutes map[string]string
+	clients        map[string]*adapter.Client
+	models         map[string][]string
+	modelsKnown    map[string]bool
 }
 
 func (h *handler) clientForRequestProtocol(protocol string) *adapter.Client {
-	return h.clients[h.providerProtocolForRequest(protocol)]
+	return h.clients[h.providerNameForRequest(protocol)]
 }
 
-func (h *handler) providerProtocolForRequest(protocol string) string {
-	if _, ok := h.providers[protocol]; ok {
-		return protocol
-	}
-	if len(h.providers) == 1 {
-		for configured := range h.providers {
-			return configured
-		}
-	}
-	return ""
+func (h *handler) providerNameForRequest(protocol string) string {
+	return h.providerRoutes[protocol]
 }
 
 func (h *handler) providerForRequestProtocol(protocol string) Provider {
-	return h.providers[h.providerProtocolForRequest(protocol)]
+	return h.providers[h.providerNameForRequest(protocol)]
 }
 
 func (h *handler) modelsForRequestProtocol(protocol string) ([]string, bool) {
-	providerProtocol := h.providerProtocolForRequest(protocol)
-	if providerProtocol == "" {
+	providerName := h.providerNameForRequest(protocol)
+	if providerName == "" {
 		return nil, false
 	}
-	return h.models[providerProtocol], h.modelsKnown[providerProtocol]
+	return h.models[providerName], h.modelsKnown[providerName]
 }
 
 func containsModel(models []string, model string) bool {
@@ -207,8 +200,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelDetail := strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/")
 	if r.Method == "GET" && (modelList || modelDetail) {
 		provider := h.providerForRequestProtocol(protocol)
-		if h.providerProtocolForRequest(protocol) == "" {
-			h.reject(w, r, protocol, 500, "protocol_client_unavailable")
+		if h.providerNameForRequest(protocol) == "" {
+			h.reject(w, r, protocol, 503, "provider_not_configured")
 			return
 		}
 		models, _ := h.modelsForRequestProtocol(protocol)
@@ -267,8 +260,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	providerClient := h.clientForRequestProtocol(protocol)
 	provider := h.providerForRequestProtocol(protocol)
-	if providerClient == nil || h.providerProtocolForRequest(protocol) == "" {
-		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
+	if providerClient == nil || h.providerNameForRequest(protocol) == "" {
+		h.reject(w, r, protocol, 503, "provider_not_configured")
 		return
 	}
 	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
@@ -290,8 +283,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
-	providerProtocol := h.providerProtocolForRequest(protocol)
-	if h.modelsKnown[providerProtocol] && !containsModel(h.models[providerProtocol], model) {
+	providerName := h.providerNameForRequest(protocol)
+	if h.modelsKnown[providerName] && !containsModel(h.models[providerName], model) {
 		h.reject(w, r, protocol, 404, "model_not_found")
 		return
 	}

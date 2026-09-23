@@ -1,24 +1,31 @@
 {
   "listen_addr": "127.0.0.1:4000",
-  "base_url": "https://provider.example/v1",
   "providers": {
-    "openai": {
+    "deepseek-openai": {
+      "protocol": "openai",
+      "base_url": "https://api.deepseek.com/v1",
       "model": "openai-model-id",
-      "upstream_id": "openai-provider",
+      "upstream_id": "deepseek-openai",
       "upstream_keychain": {
         "service": "com.tidemux.provider",
-        "account": "openai-key"
+        "account": "deepseek-openai-key"
       }
     },
-    "anthropic": {
+    "deepseek-anthropic": {
+      "protocol": "anthropic",
+      "base_url": "https://api.deepseek.com/anthropic/v1",
       "anthropic_version": "2023-06-01",
       "model": "anthropic-model-id",
-      "upstream_id": "anthropic-provider",
+      "upstream_id": "deepseek-anthropic",
       "upstream_keychain": {
         "service": "com.tidemux.provider",
-        "account": "anthropic-key"
+        "account": "deepseek-anthropic-key"
       }
     }
+  },
+  "default_providers": {
+    "openai": "deepseek-openai",
+    "anthropic": "deepseek-anthropic"
   },
   "access_token_keychain": {
     "service": "com.tidemux.gateway",

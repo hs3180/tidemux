@@ -19,9 +19,11 @@ type KeychainReference struct {
 	Account string `json:"account"`
 }
 
-// Provider is an independently configured upstream API. APIKey is populated
-// only after resolving its Keychain reference and is never serialized.
+// Provider is a named, single-protocol upstream API profile. APIKey is
+// populated only after resolving its Keychain reference and is never serialized.
 type Provider struct {
+	Protocol          string                   `json:"protocol"`
+	BaseURL           string                   `json:"base_url"`
 	UpstreamKeychain  KeychainReference        `json:"upstream_keychain"`
 	APIVersion        string                   `json:"anthropic_version,omitempty"`
 	Model             string                   `json:"model"`
@@ -52,6 +54,7 @@ type Config struct {
 	Protocol                        string                   `json:"protocol,omitempty"` // resolved provider protocol; empty/auto means detect; legacy values remain supported
 	BaseURL                         string                   `json:"base_url,omitempty"`
 	Providers                       map[string]Provider      `json:"providers,omitempty"`
+	DefaultProviders                map[string]string        `json:"default_providers,omitempty"`
 	Model                           string                   `json:"model,omitempty"`
 	UpstreamID                      string                   `json:"upstream_id,omitempty"`
 	APIVersion                      string                   `json:"anthropic_version,omitempty"`
@@ -108,13 +111,16 @@ func (c Config) Validate() error {
 	if !ip.IsLoopback() && host != "0.0.0.0" {
 		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
-	if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
-		return err
-	}
 	if err := c.ModelCapabilities.Validate(); err != nil {
 		return err
 	}
 	if len(c.Providers) == 0 {
+		if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
+			return err
+		}
+		if len(c.DefaultProviders) != 0 {
+			return errors.New("default_providers requires named providers")
+		}
 		switch normalizeProviderProtocol(c.Protocol) {
 		case "", "auto", "openai", "anthropic":
 		default:
@@ -132,29 +138,35 @@ func (c Config) Validate() error {
 			return errors.New("model and upstream_id are required")
 		}
 	} else {
-		if c.Protocol != "" || c.APIVersion != "" || c.UpstreamKeychain != (KeychainReference{}) || c.Model != "" || c.UpstreamID != "" || c.ModelCapabilities != (ModelCapabilities{}) || len(c.Prices) != 0 || c.APIKey != "" {
+		if c.BaseURL != "" || c.Protocol != "" || c.APIVersion != "" || c.UpstreamKeychain != (KeychainReference{}) || c.Model != "" || c.UpstreamID != "" || c.ModelCapabilities != (ModelCapabilities{}) || len(c.Prices) != 0 || c.APIKey != "" {
 			return errors.New("use either legacy single-provider fields or providers, not both")
 		}
-		if len(c.Providers) > 2 {
-			return errors.New("providers may contain only openai and anthropic")
+		if len(c.Providers) > 128 {
+			return errors.New("providers may contain at most 128 named entries")
 		}
-		for protocol, provider := range c.Providers {
-			if protocol != "openai" && protocol != "anthropic" {
-				return errors.New("provider names must be openai or anthropic")
+		availableProtocols := make(map[string]bool, 2)
+		for name, provider := range c.Providers {
+			if !validProviderName(name) {
+				return errors.New("provider names must be short non-secret labels using letters, numbers, dots, underscores or hyphens")
 			}
-			name := "providers." + protocol
-			if err := provider.UpstreamKeychain.Validate(name + ".upstream_keychain"); err != nil {
+			if provider.Protocol != "openai" && provider.Protocol != "anthropic" {
+				return errors.New("providers." + name + ".protocol must be openai or anthropic")
+			}
+			if err := validateBaseURL(provider.BaseURL, "providers."+name+".base_url"); err != nil {
+				return err
+			}
+			if err := provider.UpstreamKeychain.Validate("providers." + name + ".upstream_keychain"); err != nil {
 				return err
 			}
 			if strings.TrimSpace(provider.Model) == "" {
-				return errors.New(name + ".model is required")
+				return errors.New("providers." + name + ".model is required")
 			}
-			if protocol == "openai" && provider.APIVersion != "" {
+			if provider.Protocol == "openai" && provider.APIVersion != "" {
 				return errors.New("anthropic_version is valid only for the anthropic endpoint")
 			}
-			if protocol == "anthropic" && provider.APIVersion != "" {
+			if provider.Protocol == "anthropic" && provider.APIVersion != "" {
 				if _, err := time.Parse("2006-01-02", provider.APIVersion); err != nil {
-					return errors.New("providers.anthropic.anthropic_version must be YYYY-MM-DD")
+					return errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
 				}
 			}
 			if err := provider.ModelCapabilities.Validate(); err != nil {
@@ -163,14 +175,35 @@ func (c Config) Validate() error {
 			if err := validatePrices(provider.Prices); err != nil {
 				return err
 			}
+			availableProtocols[provider.Protocol] = true
 			if c.Budget != (ledger.BudgetPolicy{}) {
 				price, ok := provider.Prices[provider.Model]
 				if !ok {
-					return errors.New("budget requires pricing for each configured provider model")
+					return errors.New("budget requires pricing for each configured provider model, including " + name)
 				}
 				if price.Currency != c.Budget.Currency {
-					return errors.New("budget currency must match each provider model pricing currency")
+					return errors.New("budget currency must match each provider model pricing currency, including " + name)
 				}
+			}
+		}
+		if len(c.DefaultProviders) == 0 {
+			return errors.New("default_providers must select a provider for each configured protocol")
+		}
+		for protocol, name := range c.DefaultProviders {
+			if protocol != "openai" && protocol != "anthropic" {
+				return errors.New("default_providers keys must be openai or anthropic")
+			}
+			provider, ok := c.Providers[name]
+			if !ok {
+				return errors.New("default_providers." + protocol + " must reference a configured provider name")
+			}
+			if provider.Protocol != protocol {
+				return errors.New("default_providers." + protocol + " must reference a provider with the same protocol")
+			}
+		}
+		for protocol := range availableProtocols {
+			if _, ok := c.DefaultProviders[protocol]; !ok {
+				return errors.New("default_providers must select a default for the " + protocol + " protocol")
 			}
 		}
 	}
@@ -186,9 +219,9 @@ func (c Config) Validate() error {
 	if len(c.Providers) == 0 && (len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n")) {
 		return errors.New("upstream_id must be a short non-secret label")
 	}
-	for protocol, provider := range c.Providers {
+	for name, provider := range c.Providers {
 		if len(provider.UpstreamID) > 80 || strings.ContainsAny(provider.UpstreamID, " /:@?\r\n") {
-			return errors.New("providers." + protocol + ".upstream_id must be a short non-secret label")
+			return errors.New("providers." + name + ".upstream_id must be a short non-secret label")
 		}
 	}
 	if c.MaxInFlight < 1 || c.MaxInFlight > 1024 {
@@ -212,6 +245,18 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validProviderName(name string) bool {
+	if name == "" || name != strings.TrimSpace(name) || len(name) > 80 {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func validatePrices(prices map[string]adapter.Price) error {
@@ -251,7 +296,7 @@ func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Co
 	if err != nil {
 		return Config{}, errors.New("gateway Keychain item unavailable")
 	}
-	providerKeys := make([]string, 0, 2)
+	providerKeys := make([]string, 0, len(c.Providers))
 	if len(c.Providers) == 0 {
 		c.APIKey, err = lookup.Lookup(ctx, c.UpstreamKeychain)
 		if err != nil {
@@ -259,13 +304,13 @@ func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Co
 		}
 		providerKeys = append(providerKeys, c.APIKey)
 	} else {
-		for protocol, provider := range c.Providers {
+		for name, provider := range c.Providers {
 			provider.APIKey, err = lookup.Lookup(ctx, provider.UpstreamKeychain)
 			if err != nil {
 				return Config{}, errors.New("upstream Keychain item unavailable")
 			}
 			providerKeys = append(providerKeys, provider.APIKey)
-			c.Providers[protocol] = provider
+			c.Providers[name] = provider
 		}
 	}
 	if strings.TrimSpace(c.AccessToken) == "" || strings.ContainsAny(c.AccessToken, "\r\n") {

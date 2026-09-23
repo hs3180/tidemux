@@ -39,17 +39,15 @@ commands:
 configuration examples:
   tidemux configure --preset deepseek-flash [options]
   tidemux configure --base-url URL --model ID [pricing options]
-  tidemux configure --base-url URL --dual-provider --model ID [pricing options]
-  tidemux configure --base-url URL --dual-provider --openai-model ID --anthropic-model ID
+  tidemux configure --provider NAME,PROTOCOL,BASE_URL,MODEL --default-provider PROTOCOL=NAME
 
 common examples:
   tidemux configure --preset deepseek-flash
   tidemux configure --help
   tidemux serve --config /path/to/config.json
 
-For a legacy single-provider profile, the upstream protocol is detected
-automatically. With --dual-provider, each client protocol selects its matching
-provider profile at the shared API root.
+Named providers each use one API protocol, endpoint and Keychain credential.
+The default provider map selects which named profile serves each client protocol.
 `
 )
 

@@ -47,7 +47,8 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 	defer upstream.Close()
 
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-	c.BaseURL = upstream.URL + "/shared/v1"
+	providerURL := upstream.URL + "/shared/v1"
+	c.BaseURL = ""
 	c.Protocol = ""
 	c.APIVersion = ""
 	c.APIKey = ""
@@ -57,17 +58,20 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
 	c.Providers = map[string]Provider{
-		"openai": {
+		"openai-main": {
+			Protocol: "openai", BaseURL: providerURL,
 			APIKey: "openai-provider-key",
 			Model:  "openai-only", UpstreamID: "openai-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 		},
-		"anthropic": {
+		"anthropic-main": {
+			Protocol: "anthropic", BaseURL: providerURL,
 			APIKey: "anthropic-provider-key",
 			Model:  "anthropic-only", UpstreamID: "anthropic-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 		},
 	}
+	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +163,89 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 	}
 }
 
+func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
+	providerCalls := map[string]int{"primary": 0, "secondary": 0}
+	newProvider := func(name string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				model := name + "-model"
+				_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"`+model+`","object":"model"}]}`)
+				return
+			}
+			providerCalls[name]++
+			if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer "+name+"-key" {
+				t.Errorf("%s received %s %s auth=%q", name, r.Method, r.URL.Path, r.Header.Get("Authorization"))
+			}
+			_, _ = io.WriteString(w, responseBody("openai"))
+		}))
+	}
+	primary := newProvider("primary")
+	defer primary.Close()
+	secondary := newProvider("secondary")
+	defer secondary.Close()
+
+	for _, selected := range []string{"primary", "secondary"} {
+		t.Run(selected, func(t *testing.T) {
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
+			c.BaseURL = ""
+			c.Protocol = ""
+			c.APIVersion = ""
+			c.APIKey = ""
+			c.UpstreamKeychain = KeychainReference{}
+			c.Model = ""
+			c.UpstreamID = ""
+			c.ModelCapabilities = ModelCapabilities{}
+			c.Prices = nil
+			c.Providers = map[string]Provider{
+				"primary":   {Protocol: "openai", BaseURL: primary.URL + "/v1", APIKey: "primary-key", Model: "primary-model", UpstreamID: "primary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "primary"}},
+				"secondary": {Protocol: "openai", BaseURL: secondary.URL + "/v1", APIKey: "secondary-key", Model: "secondary-model", UpstreamID: "secondary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "secondary"}},
+			}
+			c.DefaultProviders = map[string]string{"openai": selected}
+			h, closeGateway, err := NewHandler(c, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeGateway()
+
+			modelReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			modelReq.Header.Set("Authorization", "Bearer local-secret")
+			modelOut := httptest.NewRecorder()
+			h.ServeHTTP(modelOut, modelReq)
+			if modelOut.Code != http.StatusOK || !strings.Contains(modelOut.Body.String(), selected+"-model") || strings.Contains(modelOut.Body.String(), otherProviderName(selected)+"-model") {
+				t.Fatalf("model route status=%d body=%s", modelOut.Code, modelOut.Body.String())
+			}
+
+			body := strings.Replace(requestBody("openai"), "custom-model", selected+"-model", 1)
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer local-secret")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != http.StatusOK {
+				t.Fatalf("completion status=%d body=%s", out.Code, out.Body.String())
+			}
+
+			unavailable := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody("anthropic")))
+			unavailable.Header.Set("x-api-key", "local-secret")
+			unavailable.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			unavailableOut := httptest.NewRecorder()
+			h.ServeHTTP(unavailableOut, unavailable)
+			if unavailableOut.Code != http.StatusServiceUnavailable || !strings.Contains(unavailableOut.Body.String(), "provider_not_configured") {
+				t.Fatalf("unconfigured protocol status=%d body=%s", unavailableOut.Code, unavailableOut.Body.String())
+			}
+		})
+	}
+	if providerCalls["primary"] != 1 || providerCalls["secondary"] != 1 {
+		t.Fatalf("selected provider calls=%v", providerCalls)
+	}
+}
+
+func otherProviderName(name string) string {
+	if name == "primary" {
+		return "secondary"
+	}
+	return "primary"
+}
+
 func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	var providerPath, providerAuth, providerBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -174,23 +261,11 @@ func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-	c.BaseURL = upstream.URL + "/shared/v1"
-	c.Protocol = ""
-	c.APIVersion = ""
-	c.APIKey = ""
-	c.UpstreamKeychain = KeychainReference{}
-	c.Model = ""
-	c.UpstreamID = ""
-	c.ModelCapabilities = ModelCapabilities{}
-	c.Prices = nil
-	c.Providers = map[string]Provider{
-		"openai": {
-			APIKey: "openai-provider-key",
-			Model:  "openai-model", UpstreamID: "openai-provider",
-			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
-		},
-	}
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/shared/v1")
+	c.Protocol = "openai"
+	c.APIKey = "openai-provider-key"
+	c.Model = "openai-model"
+	c.UpstreamID = "openai-provider"
 	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +320,8 @@ func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
 	defer upstream.Close()
 
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-	c.BaseURL = upstream.URL + "/shared/v1"
+	providerURL := upstream.URL + "/shared/v1"
+	c.BaseURL = ""
 	c.Protocol = ""
 	c.APIVersion = ""
 	c.APIKey = ""
@@ -255,9 +331,10 @@ func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
 	c.Providers = map[string]Provider{
-		"openai":    {APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-		"anthropic": {APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+		"openai-main":    {Protocol: "openai", BaseURL: providerURL, APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic-main": {Protocol: "anthropic", BaseURL: providerURL, APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 	}
+	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +401,8 @@ func TestIndependentProviderFailureDoesNotRetryOtherProvider(t *testing.T) {
 			defer upstream.Close()
 
 			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-			c.BaseURL = upstream.URL + "/shared/v1"
+			providerURL := upstream.URL + "/shared/v1"
+			c.BaseURL = ""
 			c.Protocol = ""
 			c.APIVersion = ""
 			c.APIKey = ""
@@ -334,9 +412,10 @@ func TestIndependentProviderFailureDoesNotRetryOtherProvider(t *testing.T) {
 			c.ModelCapabilities = ModelCapabilities{}
 			c.Prices = nil
 			c.Providers = map[string]Provider{
-				"openai":    {APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-				"anthropic": {APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+				"openai-main":    {Protocol: "openai", BaseURL: providerURL, APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+				"anthropic-main": {Protocol: "anthropic", BaseURL: providerURL, APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 			}
+			c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 			h, closeGateway, err := NewHandler(c, upstream.Client())
 			if err != nil {
 				t.Fatal(err)

@@ -95,10 +95,12 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	c.UpstreamID = ""
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
+	c.BaseURL = ""
 	c.Providers = map[string]Provider{
-		"openai":    {Model: "openai-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-		"anthropic": {Model: "anthropic-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+		"openai-main":    {Protocol: "openai", BaseURL: "https://openai.example/v1", Model: "openai-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic-main": {Protocol: "anthropic", BaseURL: "https://anthropic.example/v1", Model: "anthropic-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 	}
+	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +113,7 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Providers["openai"].APIKey != "openai-private" || resolved.Providers["anthropic"].APIKey != "anthropic-private" {
+	if resolved.Providers["openai-main"].APIKey != "openai-private" || resolved.Providers["anthropic-main"].APIKey != "anthropic-private" {
 		t.Fatalf("provider credentials were not resolved: %#v", resolved.Providers)
 	}
 	data, err := json.Marshal(resolved)
@@ -124,28 +126,68 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 
 	shared := c
 	shared.Providers = map[string]Provider{
-		"openai": c.Providers["openai"],
-		"anthropic": {
+		"openai-main": c.Providers["openai-main"],
+		"anthropic-main": {
+			Protocol:         "anthropic",
+			BaseURL:          "https://anthropic.example/v1",
 			Model:            "anthropic-model",
-			UpstreamKeychain: c.Providers["openai"].UpstreamKeychain,
+			UpstreamKeychain: c.Providers["openai-main"].UpstreamKeychain,
 		},
 	}
+	shared.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	sharedResolved, err := shared.ResolveCredentials(context.Background(), keyedTestSecrets{
 		"test.provider/openai": "shared-private",
 		"test.gateway/default": "gateway-private",
 	})
-	if err != nil || sharedResolved.Providers["anthropic"].APIKey != "shared-private" {
+	if err != nil || sharedResolved.Providers["anthropic-main"].APIKey != "shared-private" {
 		t.Fatalf("shared endpoint credential resolution failed: err=%v", err)
 	}
 }
 
 func TestIndependentProviderExampleValidates(t *testing.T) {
-	config, err := LoadConfig(filepath.Join("..", "..", "examples", "dual-providers.json"))
+	config, err := LoadConfig(filepath.Join("..", "..", "examples", "named-providers.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Providers["openai"].Model == config.Providers["anthropic"].Model {
+	if config.Providers["deepseek-openai"].Model == config.Providers["deepseek-anthropic"].Model {
 		t.Fatal("example should show independent provider model IDs")
+	}
+}
+
+func TestNamedProvidersAllowSameProtocolAndValidateDefaults(t *testing.T) {
+	c := testConfig("l.db", "https://legacy.example/v1")
+	c.BaseURL = ""
+	c.Protocol = ""
+	c.APIVersion = ""
+	c.APIKey = ""
+	c.UpstreamKeychain = KeychainReference{}
+	c.Model = ""
+	c.UpstreamID = ""
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
+		"openai-primary":   {Protocol: "openai", BaseURL: "https://primary.example/v1", Model: "primary", UpstreamKeychain: KeychainReference{Service: "test", Account: "primary"}},
+		"openai-secondary": {Protocol: "openai", BaseURL: "https://secondary.example/v1", Model: "secondary", UpstreamKeychain: KeychainReference{Service: "test", Account: "secondary"}},
+	}
+	c.DefaultProviders = map[string]string{"openai": "openai-secondary"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("same-protocol providers rejected: %v", err)
+	}
+
+	bad := c
+	bad.DefaultProviders = map[string]string{"openai": "missing"}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "configured provider name") {
+		t.Fatalf("unknown default provider error=%v", err)
+	}
+	bad = c
+	bad.DefaultProviders = map[string]string{"openai": "openai-primary", "anthropic": "openai-secondary"}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "same protocol") {
+		t.Fatalf("cross-protocol default error=%v", err)
+	}
+	bad = c
+	bad.DefaultProviders = nil
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "default_providers") {
+		t.Fatalf("missing default error=%v", err)
 	}
 }
 
@@ -171,25 +213,31 @@ func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 	c.UpstreamID = ""
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
+	c.BaseURL = ""
 	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
 	c.Providers = map[string]Provider{
-		"openai": {
+		"openai-main": {
+			Protocol:         "openai",
+			BaseURL:          "https://openai.example/v1",
 			Model:            "openai-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 			Prices:           map[string]adapter.Price{"openai-model": testPrice()},
 		},
-		"anthropic": {
+		"anthropic-main": {
+			Protocol:         "anthropic",
+			BaseURL:          "https://anthropic.example/v1",
 			Model:            "anthropic-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 			Prices:           map[string]adapter.Price{"anthropic-model": testPrice()},
 		},
 	}
+	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("independent provider pricing rejected: %v", err)
 	}
-	openAI := c.Providers["openai"]
+	openAI := c.Providers["openai-main"]
 	openAI.Prices = nil
-	c.Providers["openai"] = openAI
+	c.Providers["openai-main"] = openAI
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "each configured provider model") {
 		t.Fatalf("missing one provider's price accepted: %v", err)
 	}

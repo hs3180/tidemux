@@ -88,15 +88,16 @@ func TestSaveIndependentProviderConfigurationSharesOrSeparatesKeychainItems(t *t
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.json")
 			c := gateway.Config{
-				ListenAddr: "127.0.0.1:8787", BaseURL: "https://provider.example/v1", MaxInFlight: 1,
+				ListenAddr: "127.0.0.1:8787", MaxInFlight: 1,
 				LedgerPath: filepath.Join(dir, "ledger.db"),
 				Providers: map[string]gateway.Provider{
-					"openai":    {Model: "openai-model", UpstreamID: "openai"},
-					"anthropic": {Model: "anthropic-model", UpstreamID: "anthropic"},
+					"deepseek-openai":    {Protocol: "openai", BaseURL: "https://api.deepseek.com/v1", Model: "openai-model", UpstreamID: "deepseek-openai"},
+					"deepseek-anthropic": {Protocol: "anthropic", BaseURL: "https://api.deepseek.com/anthropic/v1", Model: "anthropic-model", UpstreamID: "deepseek-anthropic"},
 				},
+				DefaultProviders: map[string]string{"openai": "deepseek-openai", "anthropic": "deepseek-anthropic"},
 			}
 			secrets := &memorySecrets{values: map[string]string{}}
-			providerKeys := map[string]string{"openai": test.openAIKey, "anthropic": test.anthropicKey}
+			providerKeys := map[string]string{"deepseek-openai": test.openAIKey, "deepseek-anthropic": test.anthropicKey}
 			if err := saveConfigurationWithProviderKeys(path, c, providerKeys, nil, false, secrets); err != nil {
 				t.Fatal(err)
 			}
@@ -107,13 +108,13 @@ func TestSaveIndependentProviderConfigurationSharesOrSeparatesKeychainItems(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			openAIRef := loaded.Providers["openai"].UpstreamKeychain
-			anthropicRef := loaded.Providers["anthropic"].UpstreamKeychain
+			openAIRef := loaded.Providers["deepseek-openai"].UpstreamKeychain
+			anthropicRef := loaded.Providers["deepseek-anthropic"].UpstreamKeychain
 			if (openAIRef == anthropicRef) != test.shared {
 				t.Fatalf("shared refs=%v openai=%+v anthropic=%+v", openAIRef == anthropicRef, openAIRef, anthropicRef)
 			}
 			resolved, err := loaded.ResolveCredentials(context.Background(), secrets)
-			if err != nil || resolved.Providers["openai"].APIKey != test.openAIKey || resolved.Providers["anthropic"].APIKey != test.anthropicKey {
+			if err != nil || resolved.Providers["deepseek-openai"].APIKey != test.openAIKey || resolved.Providers["deepseek-anthropic"].APIKey != test.anthropicKey {
 				t.Fatalf("resolved provider keys mismatch: err=%v", err)
 			}
 			data, err := os.ReadFile(path)
@@ -303,6 +304,26 @@ func TestConfigureDoesNotAcceptPricingFile(t *testing.T) {
 func TestConfigureDoesNotAcceptProviderProtocolFlag(t *testing.T) {
 	if err := configure([]string{"--protocol", "openai"}, os.Stdout, os.Stderr); err == nil {
 		t.Fatal("configure still accepts --protocol")
+	}
+}
+
+func TestConfigureDoesNotAcceptDualProviderFlag(t *testing.T) {
+	if err := configure([]string{"--dual-provider"}, os.Stdout, os.Stderr); err == nil {
+		t.Fatal("configure still accepts --dual-provider")
+	}
+}
+
+func TestParseNamedProviderFlags(t *testing.T) {
+	name, provider, err := parseProviderFlag("deepseek-alt,openai,https://api.deepseek.com/v1,deepseek-chat")
+	if err != nil || name != "deepseek-alt" || provider.Protocol != "openai" || provider.BaseURL != "https://api.deepseek.com/v1" || provider.Model != "deepseek-chat" {
+		t.Fatalf("parsed provider = %q, %+v, err=%v", name, provider, err)
+	}
+	protocol, defaultName, err := parseDefaultProviderFlag("openai=deepseek-alt")
+	if err != nil || protocol != "openai" || defaultName != "deepseek-alt" {
+		t.Fatalf("parsed default = %q=%q, err=%v", protocol, defaultName, err)
+	}
+	if _, _, err := parseProviderFlag("missing-fields"); err == nil {
+		t.Fatal("malformed provider spec accepted")
 	}
 }
 
