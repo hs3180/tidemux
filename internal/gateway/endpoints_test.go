@@ -153,14 +153,47 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 		t.Fatalf("requests routed openai=%d anthropic=%d", openAICalls, anthropicCalls)
 	}
 
+	// A discovered model catalogue is informational by default. Without an
+	// explicit supported_models allowlist, requests continue to be forwarded to
+	// this protocol's configured provider even when a model is absent from GET /models.
 	wrongModel := strings.Replace(requestBody("openai"), "custom-model", "anthropic-only", 1)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(wrongModel))
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
 	h.ServeHTTP(out, req)
-	if out.Code != http.StatusNotFound || openAICalls != 2 || anthropicCalls != 2 {
-		t.Fatalf("unavailable model status=%d calls=%d/%d body=%s", out.Code, openAICalls, anthropicCalls, out.Body.String())
+	if out.Code != http.StatusOK || openAICalls != 3 || anthropicCalls != 2 {
+		t.Fatalf("unlisted model status=%d calls=%d/%d body=%s", out.Code, openAICalls, anthropicCalls, out.Body.String())
 	}
+
+	t.Run("explicit supported_models restricts discovery and requests", func(t *testing.T) {
+		scoped := c
+		scoped.LedgerPath = filepath.Join(t.TempDir(), "scoped-ledger.db")
+		provider := scoped.Providers["openai-main"]
+		provider.SupportedModels = []string{"openai-only"}
+		scoped.Providers["openai-main"] = provider
+		scopedHandler, closeScoped, err := NewHandler(scoped, upstream.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeScoped()
+
+		modelReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		modelReq.Header.Set("Authorization", "Bearer local-secret")
+		modelOut := httptest.NewRecorder()
+		scopedHandler.ServeHTTP(modelOut, modelReq)
+		if modelOut.Code != http.StatusOK || !strings.Contains(modelOut.Body.String(), "openai-only") || strings.Contains(modelOut.Body.String(), "anthropic-only") {
+			t.Fatalf("scoped model list status=%d body=%s", modelOut.Code, modelOut.Body.String())
+		}
+
+		callsBefore := openAICalls
+		denied := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(wrongModel))
+		denied.Header.Set("Authorization", "Bearer local-secret")
+		deniedOut := httptest.NewRecorder()
+		scopedHandler.ServeHTTP(deniedOut, denied)
+		if deniedOut.Code != http.StatusNotFound || openAICalls != callsBefore {
+			t.Fatalf("restricted model status=%d calls=%d/%d body=%s", deniedOut.Code, openAICalls, callsBefore, deniedOut.Body.String())
+		}
+	})
 }
 
 func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {

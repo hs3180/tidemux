@@ -133,6 +133,13 @@ func (h *handler) modelsForRequestProtocol(protocol string) ([]string, bool) {
 	if providerName == "" {
 		return nil, false
 	}
+	return h.modelsForProvider(providerName)
+}
+
+func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
+	if provider, ok := h.providers[providerName]; ok && len(provider.SupportedModels) > 0 {
+		return provider.SupportedModels, true
+	}
 	return h.models[providerName], h.modelsKnown[providerName]
 }
 
@@ -290,8 +297,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
-	providerName := h.providerNameForRequest(protocol)
-	if h.modelsKnown[providerName] && !containsModel(h.models[providerName], model) {
+	if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, model) {
 		h.reject(w, r, protocol, 404, "model_not_found")
 		return
 	}

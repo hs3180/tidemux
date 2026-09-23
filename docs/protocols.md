@@ -45,13 +45,14 @@ provider profiles support both clients through pass-through or translation.
 Named provider profiles route each client to the configured default with the
 same protocol, with no cross-provider retry. Each named provider's `GET /models`
 response is used only on its client route when it is a complete, recognized model list.
-Requests for a model absent from a recognized provider list receive
-`model_not_found` before an upstream completion is sent. If a provider does not
-expose a complete recognizable list, its route returns an empty model catalogue
-and does not claim its configured default model is available; direct requests
-are still sent to that provider. Existing single-provider profiles that
-explicitly contain `"protocol": "openai"` or `"protocol": "anthropic"` remain
-compatible.
+By default that catalogue is informational: any model ID is forwarded to the
+selected provider. Setting the provider's optional `supported_models` list
+restricts completion requests and the gateway's model listing to that subset.
+If a provider does not expose a complete recognizable list, its route returns
+an empty model catalogue unless an explicit allowlist is configured; direct
+requests are still sent to that provider. Existing single-provider profiles
+that explicitly contain `"protocol": "openai"` or `"protocol": "anthropic"`
+remain compatible.
 
 Legacy single-provider translation covers text, system/developer instructions,
 tools, tool calls/results, stop sequences, output schemas and streaming

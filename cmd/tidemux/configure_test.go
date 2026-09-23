@@ -344,6 +344,15 @@ func TestParseNamedProviderFlags(t *testing.T) {
 	if _, _, err := parseProviderFlag("missing-fields"); err == nil {
 		t.Fatal("malformed provider spec accepted")
 	}
+	providerName, supported, err := parseProviderModelsFlag("deepseek-alt,deepseek-chat,deepseek-reasoner")
+	if err != nil || providerName != "deepseek-alt" || strings.Join(supported, ",") != "deepseek-chat,deepseek-reasoner" {
+		t.Fatalf("parsed provider model scope=%q %v err=%v", providerName, supported, err)
+	}
+	for _, invalid := range []string{"missing-models", "provider,model,,other", "provider,model,model"} {
+		if _, _, err := parseProviderModelsFlag(invalid); err == nil {
+			t.Errorf("invalid provider model scope %q was accepted", invalid)
+		}
+	}
 }
 
 func TestProviderNameInferredFromBaseURL(t *testing.T) {
@@ -399,6 +408,48 @@ func TestChooseProviderModelUsesDiscoveryAndMinimalInput(t *testing.T) {
 		defer out.Close()
 		if _, err := chooseProviderModel(in, out, []string{"first", "second"}, true); err == nil {
 			t.Fatal("unlisted model accepted")
+		}
+	})
+}
+
+func TestChooseProviderModelsDefaultsToAllAndCanRestrict(t *testing.T) {
+	t.Run("blank means all discovered models", func(t *testing.T) {
+		in, out := promptTestFiles(t, "\n")
+		defer in.Close()
+		defer out.Close()
+		got, err := chooseProviderModels(in, out, []string{"first", "second"}, true, "first")
+		if err != nil || len(got) != 0 {
+			t.Fatalf("models=%v err=%v", got, err)
+		}
+	})
+
+	t.Run("numeric selection restricts and preserves catalog order", func(t *testing.T) {
+		in, out := promptTestFiles(t, "3,2\n")
+		defer in.Close()
+		defer out.Close()
+		got, err := chooseProviderModels(in, out, []string{"first", "second", "third"}, true, "second")
+		if err != nil || strings.Join(got, ",") != "second,third" {
+			t.Fatalf("models=%v err=%v", got, err)
+		}
+	})
+
+	t.Run("manual selection is available without discovery", func(t *testing.T) {
+		in, out := promptTestFiles(t, "custom-a,custom-b\n")
+		defer in.Close()
+		defer out.Close()
+		got, err := chooseProviderModels(in, out, nil, false, "custom-b")
+		if err != nil || strings.Join(got, ",") != "custom-a,custom-b" {
+			t.Fatalf("models=%v err=%v", got, err)
+		}
+	})
+
+	t.Run("a restricted scope must include the fallback model", func(t *testing.T) {
+		in, out := promptTestFiles(t, "2\n1\n")
+		defer in.Close()
+		defer out.Close()
+		got, err := chooseProviderModels(in, out, []string{"first", "second"}, true, "first")
+		if err != nil || strings.Join(got, ",") != "first" {
+			t.Fatalf("models=%v err=%v", got, err)
 		}
 	})
 }

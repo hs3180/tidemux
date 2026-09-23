@@ -65,6 +65,31 @@ func parseDefaultProviderFlag(value string) (string, string, error) {
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
+func parseProviderModelsFlag(value string) (string, []string, error) {
+	parts := strings.Split(value, ",")
+	if len(parts) < 2 {
+		return "", nil, errors.New("--provider-models must be NAME,MODEL[,MODEL...]")
+	}
+	name := strings.TrimSpace(parts[0])
+	if name == "" {
+		return "", nil, errors.New("--provider-models requires a provider name")
+	}
+	models := make([]string, 0, len(parts)-1)
+	seen := make(map[string]struct{}, len(parts)-1)
+	for _, part := range parts[1:] {
+		model := strings.TrimSpace(part)
+		if model == "" {
+			return "", nil, errors.New("--provider-models contains an empty model ID")
+		}
+		if _, exists := seen[model]; exists {
+			return "", nil, errors.New("--provider-models contains a duplicate model ID")
+		}
+		seen[model] = struct{}{}
+		models = append(models, model)
+	}
+	return name, models, nil
+}
+
 func sortedProviderNames(providers map[string]gateway.Provider) []string {
 	names := make([]string, 0, len(providers))
 	for name := range providers {
@@ -125,6 +150,8 @@ func providerNameFromBaseURL(baseURL string) string {
 	return name
 }
 
+const visibleProviderModels = 20
+
 func chooseProviderModel(in, out *os.File, models []string, modelsKnown bool) (string, error) {
 	if modelsKnown {
 		if len(models) == 1 {
@@ -135,10 +162,9 @@ func chooseProviderModel(in, out *os.File, models []string, modelsKnown bool) (s
 			return "", errors.New("the provider returned an empty model list")
 		}
 		fmt.Fprintln(out, "Available models:")
-		const visibleModels = 20
 		for i, model := range models {
-			if i == visibleModels {
-				fmt.Fprintf(out, "  ... and %d more (enter a model ID to use it)\n", len(models)-visibleModels)
+			if i == visibleProviderModels {
+				fmt.Fprintf(out, "  ... and %d more (enter a model ID to use it)\n", len(models)-visibleProviderModels)
 				break
 			}
 			fmt.Fprintf(out, "  %2d. %s\n", i+1, model)
@@ -155,7 +181,7 @@ func chooseProviderModel(in, out *os.File, models []string, modelsKnown bool) (s
 					return model, nil
 				}
 			}
-			if index, parseErr := strconv.Atoi(value); parseErr == nil && index > 0 && index <= visibleModels && index <= len(models) {
+			if index, parseErr := strconv.Atoi(value); parseErr == nil && index > 0 && index <= visibleProviderModels && index <= len(models) {
 				return models[index-1], nil
 			}
 			fmt.Fprintln(out, "Choose a listed model number or exact model ID.")
@@ -168,6 +194,105 @@ func chooseProviderModel(in, out *os.File, models []string, modelsKnown bool) (s
 		return "", errors.New("a default model ID is required")
 	}
 	return strings.TrimSpace(model), nil
+}
+
+func chooseProviderModels(in, out *os.File, models []string, modelsKnown bool, defaultModel string) ([]string, error) {
+	if modelsKnown && len(models) == 0 {
+		return nil, errors.New("the provider returned an empty model list")
+	}
+	if modelsKnown && len(models) == 1 {
+		return nil, nil
+	}
+	if modelsKnown {
+		fmt.Fprintln(out, "Supported-model scope defaults to all models.")
+	} else {
+		fmt.Fprintln(out, "Model discovery is unavailable; you may enter an optional model allowlist.")
+	}
+	for {
+		if modelsKnown {
+			fmt.Fprintf(out, "Supported models [all] (comma-separated numbers or IDs; include default model %q): ", defaultModel)
+		} else {
+			fmt.Fprintf(out, "Supported model IDs [all] (comma-separated IDs; include default model %q): ", defaultModel)
+		}
+		value, err := readTerminalLine(in)
+		if err != nil {
+			return nil, errors.New("could not read supported model scope")
+		}
+		value = strings.TrimSpace(value)
+		if value == "" || strings.EqualFold(value, "all") {
+			return nil, nil
+		}
+		selected, err := parseSupportedModelSelection(value, models, modelsKnown)
+		if err != nil {
+			fmt.Fprintf(out, "%v\n", err)
+			continue
+		}
+		if !containsConfiguredModel(selected, defaultModel) {
+			fmt.Fprintf(out, "The supported-model list must include default model %q.\n", defaultModel)
+			continue
+		}
+		return selected, nil
+	}
+}
+
+func containsConfiguredModel(models []string, model string) bool {
+	for _, candidate := range models {
+		if candidate == model {
+			return true
+		}
+	}
+	return false
+}
+
+func parseSupportedModelSelection(value string, models []string, modelsKnown bool) ([]string, error) {
+	selected := make(map[string]struct{})
+	for _, raw := range strings.Split(value, ",") {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			return nil, errors.New("enter model IDs separated by commas")
+		}
+		model := ""
+		if modelsKnown {
+			for _, candidate := range models {
+				if candidate == item {
+					model = candidate
+					break
+				}
+			}
+			if model == "" {
+				if index, err := strconv.Atoi(item); err == nil && index > 0 && index <= visibleProviderModels && index <= len(models) {
+					model = models[index-1]
+				}
+			}
+			if model == "" {
+				return nil, fmt.Errorf("%q is not a discovered model number or ID", item)
+			}
+		} else {
+			model = item
+		}
+		selected[model] = struct{}{}
+	}
+	if modelsKnown {
+		if len(selected) == len(models) {
+			return nil, nil
+		}
+		ordered := make([]string, 0, len(selected))
+		for _, model := range models {
+			if _, ok := selected[model]; ok {
+				ordered = append(ordered, model)
+			}
+		}
+		return ordered, nil
+	}
+	ordered := make([]string, 0, len(selected))
+	for _, raw := range strings.Split(value, ",") {
+		model := strings.TrimSpace(raw)
+		if _, ok := selected[model]; ok {
+			ordered = append(ordered, model)
+			delete(selected, model)
+		}
+	}
+	return ordered, nil
 }
 
 func promptProviderProtocol(in, out *os.File) (string, error) {
@@ -253,6 +378,13 @@ func promptNewProvider(in, out *os.File, anthropicVersion string, httpClient *ht
 		}
 		return interactiveProviderSetup{}, err
 	}
+	supportedModels, err := chooseProviderModels(in, out, models, modelsKnown, model)
+	if err != nil {
+		for i := range apiKey {
+			apiKey[i] = 0
+		}
+		return interactiveProviderSetup{}, err
+	}
 	version := ""
 	if protocol == "anthropic" {
 		version = anthropicVersion
@@ -261,7 +393,7 @@ func promptNewProvider(in, out *os.File, anthropicVersion string, httpClient *ht
 		Name: name,
 		Provider: gateway.Provider{
 			Protocol: protocol, BaseURL: baseURL, APIVersion: version,
-			Model: model, UpstreamID: name,
+			Model: model, SupportedModels: supportedModels, UpstreamID: name,
 		},
 		APIKey: apiKey,
 	}, nil
@@ -284,8 +416,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 	}
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
-	var providerFlags, defaultProviderFlags repeatedFlag
+	var providerFlags, providerModelFlags, defaultProviderFlags repeatedFlag
 	flags.Var(&providerFlags, "provider", "named provider NAME,BASE_URL,MODEL (auto) or NAME,PROTOCOL,BASE_URL,MODEL (forced; repeatable)")
+	flags.Var(&providerModelFlags, "provider-models", "restrict a named provider to MODEL IDs: NAME,MODEL[,MODEL...] (repeatable; include its default model; omit for all)")
 	flags.Var(&defaultProviderFlags, "default-provider", "default route PROTOCOL=NAME (repeatable)")
 	anthropicVersion := flags.String("anthropic-version", "", "Anthropic API version (default: 2023-06-01)")
 	model := flags.String("model", "", "default model ID")
@@ -317,6 +450,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected configure argument")
+	}
+	if len(providerModelFlags) > 0 && len(providerFlags) == 0 {
+		return errors.New("--provider-models requires command-line --provider entries")
 	}
 	if *preset != "" && *preset != "deepseek-flash" {
 		return errors.New("unknown preset; use --base-url")
@@ -428,6 +564,23 @@ func configure(args []string, stdout, stderr *os.File) error {
 			}
 			providersToConfigure[name] = provider
 		}
+		configuredModelScopes := make(map[string]struct{}, len(providerModelFlags))
+		for _, value := range providerModelFlags {
+			name, models, parseErr := parseProviderModelsFlag(value)
+			if parseErr != nil {
+				return parseErr
+			}
+			provider, exists := providersToConfigure[name]
+			if !exists {
+				return fmt.Errorf("--provider-models references unconfigured provider %q", name)
+			}
+			if _, duplicate := configuredModelScopes[name]; duplicate {
+				return fmt.Errorf("--provider-models was specified more than once for provider %q", name)
+			}
+			configuredModelScopes[name] = struct{}{}
+			provider.SupportedModels = models
+			providersToConfigure[name] = provider
+		}
 		for name, provider := range providersToConfigure {
 			if _, exists := c.Providers[name]; exists {
 				return fmt.Errorf("duplicate provider name %q", name)
@@ -482,7 +635,11 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if namedProviderConfig {
 		for _, name := range sortedProviderNames(c.Providers) {
 			provider := c.Providers[name]
-			fmt.Fprintf(stdout, "Provider %s (%s): %s, model %s\n", name, provider.Protocol, provider.BaseURL, provider.Model)
+			scope := "all models"
+			if len(provider.SupportedModels) > 0 {
+				scope = strings.Join(provider.SupportedModels, ", ")
+			}
+			fmt.Fprintf(stdout, "Provider %s (%s): %s, default model %s, supported models %s\n", name, provider.Protocol, provider.BaseURL, provider.Model, scope)
 		}
 		if wizardProvider != nil {
 			fmt.Fprintf(stdout, "Default route: inferred from provider protocol\nConfig: %s\n", abs)

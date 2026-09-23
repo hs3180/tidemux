@@ -27,6 +27,7 @@ type Provider struct {
 	UpstreamKeychain  KeychainReference        `json:"upstream_keychain"`
 	APIVersion        string                   `json:"anthropic_version,omitempty"`
 	Model             string                   `json:"model"`
+	SupportedModels   []string                 `json:"supported_models,omitempty"`
 	UpstreamID        string                   `json:"upstream_id,omitempty"`
 	ModelCapabilities ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Prices            map[string]adapter.Price `json:"prices,omitempty"`
@@ -169,6 +170,19 @@ func (c Config) Validate() error {
 			}
 			if strings.TrimSpace(provider.Model) == "" {
 				return errors.New("providers." + name + ".model is required")
+			}
+			seenModels := make(map[string]struct{}, len(provider.SupportedModels))
+			for _, model := range provider.SupportedModels {
+				if strings.TrimSpace(model) == "" || model != strings.TrimSpace(model) {
+					return errors.New("providers." + name + ".supported_models must contain non-empty model IDs without surrounding whitespace")
+				}
+				if _, exists := seenModels[model]; exists {
+					return errors.New("providers." + name + ".supported_models must not contain duplicate model IDs")
+				}
+				seenModels[model] = struct{}{}
+			}
+			if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, provider.Model) {
+				return errors.New("providers." + name + ".model must be included in supported_models")
 			}
 			if protocol == "openai" && provider.APIVersion != "" {
 				return errors.New("anthropic_version is valid only for the anthropic endpoint")

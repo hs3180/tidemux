@@ -13,9 +13,12 @@ API Base URL, derives a provider name from the host, then asks for the upstream
 API key using hidden input. TideMux infers the
 protocol from the endpoint or its authenticated `GET /models` response. If the
 endpoint returns exactly one model, that model is selected automatically; when
-it returns several, choose a model from the displayed list. If protocol or
-models cannot be discovered, the wizard asks only for the missing value. It
-never sends a completion request during setup.
+it returns several, choose a default model from the displayed list. By default,
+the provider supports all models: press Enter at the optional supported-models
+prompt, or enter a comma-separated subset to restrict it. If discovery is
+unavailable, model IDs for an optional allowlist can be entered directly. If
+protocol or the default model cannot be discovered, the wizard asks only for
+the missing value. It never sends a completion request during setup.
 
 To set provider details directly, pass them on the command line. The provider
 name is explicit, and the protocol may be inferred or forced:
@@ -29,6 +32,23 @@ tidemux configure \
 ```
 
 Use `--provider NAME,PROTOCOL,BASE_URL,MODEL` to force `openai` or `anthropic`.
+Omit `--provider-models` to allow all model IDs. To restrict one provider to a
+subset, repeat `--provider-models NAME,MODEL[,MODEL...]`:
+
+```sh
+tidemux configure \
+  --provider my-service,https://api.example.com/v1,my-model \
+  --provider-models my-service,my-model,another-model
+```
+
+The provider's `model` is the fallback used when a client omits its model and
+must also appear in an explicit allowlist. In JSON, `supported_models` is
+optional; omitted or empty means all models. To restrict a provider in JSON:
+
+```json
+"supported_models": ["my-model", "another-model"]
+```
+
 The upstream API key remains a hidden prompt so it is not exposed in shell
 history or process listings. For command-line setup, custom models require all
 three price flags shown above. The wizard uses TideMux's built-in price only
@@ -305,9 +325,12 @@ after the protocol is identified.
 Keychain items.
 
 The selected provider's `GET /models` response is used only on its client route
-when it is a complete, recognized model list. A provider without a complete
-recognizable list returns an empty model catalogue rather than claiming its
-default model is available; direct requests are still sent to that provider.
+when it is a complete, recognized model list. It populates model discovery but
+does not restrict completion requests by default; requests are forwarded to the
+selected provider unless `supported_models` is configured. An explicit
+allowlist also limits the gateway's `/models` response. A provider without a
+complete recognizable list returns an empty catalogue unless it has an explicit
+allowlist; direct requests are still sent to that provider.
 See the non-secret [named provider configuration example](../examples/named-providers.json).
 
 ## Update the current local configuration

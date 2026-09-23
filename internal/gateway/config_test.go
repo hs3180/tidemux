@@ -144,6 +144,55 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	}
 }
 
+func TestSupportedModelsAreOptionalAllowlist(t *testing.T) {
+	c := testConfig("l.db", "https://example.com/v1")
+	c.BaseURL = ""
+	c.Protocol = ""
+	c.APIVersion = ""
+	c.APIKey = ""
+	c.Model = ""
+	c.UpstreamID = ""
+	c.UpstreamKeychain = KeychainReference{}
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
+		"main": {
+			Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model-a",
+			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "main"},
+		},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("omitted allowlist should mean all models: %v", err)
+	}
+
+	provider := c.Providers["main"]
+	provider.SupportedModels = []string{"model-a", "model-b"}
+	c.Providers["main"] = provider
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid supported_models rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		models []string
+		model  string
+	}{
+		{name: "default model outside allowlist", models: []string{"model-b"}, model: "model-a"},
+		{name: "duplicate model", models: []string{"model-a", "model-a"}, model: "model-a"},
+		{name: "empty model", models: []string{"model-a", " "}, model: "model-a"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bad := c
+			badProvider := provider
+			badProvider.SupportedModels = test.models
+			badProvider.Model = test.model
+			bad.Providers = map[string]Provider{"main": badProvider}
+			if err := bad.Validate(); err == nil {
+				t.Fatal("invalid supported_models accepted")
+			}
+		})
+	}
+}
+
 func TestNamedProviderProtocolMayBeAutomaticallyDetected(t *testing.T) {
 	c := testConfig("l.db", "https://legacy.example/v1")
 	c.BaseURL = ""
