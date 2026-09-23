@@ -1,11 +1,18 @@
 # Configure TideMux from Terminal
 
+This page documents `tidemux configure` in the current 0.2.0 development build,
+before the resource-oriented provider and gateway subcommands are implemented.
+It is the available setup path in this build, not the target CLI; see the
+[README's CLI design contract](../README.md#cli-design-principles). The
+single-provider `--base-url` mode below is retained for 0.1.x compatibility and
+is not the 0.2.0 provider model.
+
 No manual Keychain Access setup is required. `configure` reads your provider
 API key(s) and optional gateway API key without echo. Leave the gateway prompt
 empty to generate a random credential, or enter a custom value. Neither secret
 is accepted as a command-line argument or written into JSON.
 
-## Guided and command-line setup
+## Guided setup
 
 Run `tidemux configure` without `--provider`, `--base-url` or `--model` for the
 guided terminal setup. It starts by asking for the provider
@@ -20,6 +27,10 @@ unavailable, model IDs for an optional allowlist can be entered directly. If
 protocol or the default model cannot be discovered, the wizard asks only for
 the missing value. It never sends a completion request during setup.
 
+### Current development CLI: direct provider flags
+
+The following `--provider` forms are available in this development build; they
+are not the 0.1.1 release syntax or the target `tidemux provider add` interface.
 To set provider details directly, pass them on the command line. The provider
 name is explicit, and the protocol may be inferred or forced:
 
@@ -55,10 +66,12 @@ price only when both endpoint and model match a verified entry; otherwise,
 provide all three price flags shown above. Guided setup leaves unknown pricing
 unset rather than guessing. A configured budget still requires matching prices.
 
-For a single-provider compatibility profile that exposes both client protocols
-and translates to the configured upstream protocol, use `--base-url URL
---model ID`. Use `--provider` when you want a named provider that serves only
-clients using its detected or explicitly selected protocol.
+For a 0.1.x single-provider compatibility profile that exposes both client
+protocols and translates to the configured upstream protocol, use
+`--base-url URL --model ID`. This historical behavior is not part of the 0.2.0
+provider model: in 0.2.0, add a separate provider for each upstream protocol
+you want to serve. The named `--provider` flags documented below are also the
+current `configure` syntax, not the target resource-oriented CLI.
 
 ## DeepSeek Flash: three commands
 
@@ -279,7 +292,7 @@ To replace an existing local setup,
 stop the gateway first and add `--replace`. Inspect other options with
 `tidemux configure --help`.
 
-### Configure protocol-routed providers
+### Current development CLI: configure protocol-routed providers
 
 Each named provider uses exactly one upstream API protocol, endpoint and API
 key. Provider specs are repeatable. By default, the protocol is inferred from
@@ -315,10 +328,12 @@ tidemux configure \
 
 OpenAI clients route to the provider named by `default_providers.openai`, and
 Anthropic clients to `default_providers.anthropic`; their upstream paths are
-`/chat/completions` and `/messages`. If there is only one provider for a detected
-protocol, it is selected as that protocol's default automatically. When multiple
-providers resolve to the same protocol, use `--default-provider PROTOCOL=NAME`
-to choose one. Each provider may use a different API root and credential.
+`/chat/completions` and `/messages`. In this current `configure` interface, one
+provider for a protocol is selected automatically; when configuring multiple
+providers for the same protocol, specify the route with
+`--default-provider PROTOCOL=NAME`. In the target 0.2.0 `provider add` flow, the
+first provider added for a protocol becomes its default and later additions do
+not replace it. Each provider may use a different API root and credential.
 Requests use only the selected provider and are never retried through another
 profile. API keys are entered at hidden prompts and stored in Keychain; the JSON
 config contains references only. Pricing flags seed each provider's price table
@@ -335,7 +350,8 @@ selected provider unless `supported_models` is configured. An explicit
 allowlist also limits the gateway's `/models` response. A provider without a
 complete recognizable list returns an empty catalogue unless it has an explicit
 allowlist; direct requests are still sent to that provider.
-See the non-secret [named provider configuration example](../examples/named-providers.json).
+See the [configuration examples index](../examples/README.md) for the target
+named-provider schema and the scope of the older single-provider samples.
 
 ## Update the current local configuration
 

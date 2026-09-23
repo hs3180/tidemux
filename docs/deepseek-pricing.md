@@ -1,5 +1,9 @@
 # DeepSeek pricing (USD)
 
+This page distinguishes the `configure`-based pricing syntax used by the 0.1.x
+release and still available in the current development build from the target
+0.2.0 provider-pricing command, which is not implemented yet.
+
 TideMux's built-in DeepSeek rates use the [English official pricing page](https://api-docs.deepseek.com/quick_start/pricing/), checked on **2026-09-12**.
 They intentionally use the peak rates for **deepseek-flash** (DeepSeek-V4.1-Flash),
 denominated in USD per one million tokens. TideMux does not switch rates by clock
@@ -14,7 +18,7 @@ or replace the provider's statement.
 Check the linked source for subsequent changes. Historical audit records retain
 the price snapshot used when they were written.
 
-## Configure with the API key
+## Current `configure` CLI: single-provider example
 
 When `configure` receives a matching DeepSeek endpoint and model, it stores these
 rates in the provider profile alongside the API key reference. The `budget`
@@ -37,6 +41,25 @@ Rates are per million tokens. All three rates are required. `--pricing-currency`
 defaults to `USD`; source and version default to `manual-cli` and `manual`. The
 same entry applies whichever provider protocol TideMux detects for the
 configured model.
+
+## Target 0.2.0 CLI
+
+The resource-oriented interface keeps prices with a provider and model. After
+adding a provider and obtaining its reference from `provider list`, the target
+command is:
+
+```sh
+tidemux provider pricing set REF deepseek-flash \
+  --input-cache-hit 0.006 \
+  --input-cache-miss 0.30 \
+  --output 1.20 \
+  --currency USD \
+  --source https://api-docs.deepseek.com/quick_start/pricing/ \
+  --version 2026-09-12
+```
+
+This command is part of the 0.2.0 design contract and is not yet available in
+the current executable.
 
 Prices are stored in the local provider profile, not in Keychain and not in the
 budget section. DeepSeek may change prices; update TideMux or use explicit custom

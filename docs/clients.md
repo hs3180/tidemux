@@ -1,5 +1,10 @@
 # Client connections (0.1.1)
 
+This is the launcher/setup guide for the 0.1.1 release. Its one-provider-per-
+process and cross-protocol compatibility examples describe that release only;
+they are not the 0.2.0 routing model. See [protocol support](protocols.md) for
+the 0.2.0 contract.
+
 Use `tidemux <client>` to start an installed client with TideMux settings.
 The direct commands replace the earlier `connect` interface. VS Code extension compatibility is outside the 0.1.1 scope.
 Each gateway process uses one provider profile. TideMux detects that provider's

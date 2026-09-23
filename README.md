@@ -28,6 +28,10 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
+This is the **target 0.2.0 CLI** walkthrough, not a command sequence for the
+published 0.1.1 binary. To set up the released CLI, follow the
+[0.1.1 demo guide](docs/demo.md#recommended-configure-with-the-cli).
+
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
 
@@ -49,9 +53,10 @@ that omit a model; it does not restrict the allowed model list. Use
 `tidemux provider models REF --only MODEL[,MODEL...]` only when you want to
 restrict that list. To configure just one protocol, add only its endpoint.
 
-These examples describe the target 0.2.0 interface. The executable still uses
-the old `configure` entry point until the provider subcommands are implemented;
-that command is not the target interface.
+These examples describe the target 0.2.0 interface. The current executable
+still uses `tidemux configure` until the provider subcommands are implemented;
+that command is not the target interface. Use the linked 0.1.1 guide to run the
+currently released CLI.
 
 ### 2. Start the gateway
 
@@ -94,25 +99,27 @@ details, or select a period with `--from` and `--to`. The summary shows its exac
 RFC3339 date bounds. Use `tidemux doctor --diagnostics` to inspect local request
 rejections. See [accounting](docs/accounting.md#billing-statistics-and-download)
 for periods, synchronization status, statement coverage and the CSV format.
-For client invocation options and setup details, see [client setup](docs/clients.md).
+For the currently released client launchers, see the
+[0.1.1 client setup guide](docs/clients.md).
 
 ## Compatibility
 
 The 0.2.0 development line exposes OpenAI Chat Completions and Anthropic
 Messages client APIs simultaneously. Each provider has one upstream protocol;
-requests route to that protocol's default provider. To serve both client APIs,
-configure one provider for each protocol—even when both endpoints belong to the
-same service. The gateway performs supported field conversions at the protocol
-boundary. Gateway auth, session limits and ledger accounting remain shared. The
-three CLIs have passed DeepSeek file read/edit/test and continued-conversation
-workflows. Other compatible providers can be configured, though they have not
-all been tested.
+requests route only to that protocol's default provider. To serve both client
+APIs, configure one provider for each protocol—even when both endpoints belong
+to the same service. Requests are validated and normalized within their selected
+protocol; an OpenAI client request is not translated to an Anthropic provider,
+or vice versa. Gateway auth, session limits and ledger accounting remain shared.
+The three CLI workflows were verified for the 0.1.1 release; that evidence does
+not certify the 0.2.0 named-provider routing. Other compatible providers can be
+configured, though they have not all been tested.
 
 Responses API, images/audio and IDE extensions are outside this release's
-scope. Supported bidirectional Chat Completions/Messages conversion is covered
-in the protocol boundary; provider-specific features without a client
-equivalent are not forwarded silently. See [tested clients](docs/client-compatibility.md)
-and [protocol support](docs/protocols.md).
+scope. Provider-specific features without an equivalent in the selected
+protocol are not forwarded silently. See the
+[0.1.1 tested-client matrix](docs/client-compatibility.md) for release evidence
+and [protocol support](docs/protocols.md) for the 0.2.0 routing contract.
 
 ## CLI design principles
 
@@ -190,7 +197,9 @@ tidemux gateway configure --listen loopback
 
 ## Documentation
 
-[Configuration](docs/configure.md) · [Client setup](docs/clients.md) ·
+[Current development CLI setup (`configure`)](docs/configure.md) ·
+[0.1.1 client setup](docs/clients.md) ·
+[Configuration examples](examples/README.md) ·
 [Accounting](docs/accounting.md) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
 [Privacy](PRIVACY.md) · [Security](SECURITY.md)

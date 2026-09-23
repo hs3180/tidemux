@@ -7,25 +7,28 @@ are keyed by provider name and each has one inferred or explicitly selected
 Keychain reference, default model, billing identity, model limits and prices.
 `default_providers` maps each client protocol to the named provider that serves
 it. Multiple named providers may use the same protocol; only the selected
-default receives requests. A single provider is automatically selected for a
-protocol when no default is configured; an explicit default is required when
-multiple profiles resolve to the same protocol. Gateway authentication,
-active-session limits and the local ledger remain shared.
+default receives requests. In the target `provider add` flow, the first
+provider added for a protocol is recorded as its default, and adding another
+provider does not replace it. A hand-written configuration with multiple
+providers for one protocol and no default must specify one explicitly. Gateway
+authentication, active-session limits and the local ledger remain shared.
 
-Legacy single-provider configs retain their prior behavior: TideMux detects or
-uses the configured upstream protocol and translates client requests as
-needed. New named provider entries are strict protocol-specific routes and do
-not fall back to another provider or cross-protocol translation.
+The 0.1.x single-provider configuration and its cross-protocol translation are
+historical compatibility behavior, not part of the 0.2.0 provider model. A 0.2.0
+provider serves only clients using its protocol; add one provider per protocol
+when both client APIs are needed. Do not rely on migration of a legacy
+single-provider configuration as a 0.2.0 compatibility guarantee.
 
-Automatic detection applies to legacy and named provider configs. An explicitly
-configured `protocol` of `openai` or `anthropic` forces that upstream format and
-skips detection. Otherwise TideMux checks recognized endpoint host/path hints
-such as OpenAI, Anthropic and DeepSeek. For other roots it sends an authenticated
-`GET` to `base_url + /models` using OpenAI and Anthropic authentication shapes,
-then classifies the returned model objects. It never sends a completion or
-message just to detect the protocol. If it cannot confidently identify the
-format, startup fails with the provider name so the user can explicitly set the
-protocol. Model discovery then uses the resolved protocol and the same endpoint.
+For named providers, an explicitly configured `protocol` of `openai` or
+`anthropic` forces that upstream format and skips detection. Otherwise TideMux
+checks recognized endpoint host/path hints such as OpenAI, Anthropic and
+DeepSeek. For other roots it sends an authenticated `GET` to `base_url + /models`
+using OpenAI and Anthropic authentication shapes, then classifies the returned
+model objects. It never sends a completion or message just to detect the
+protocol. If it cannot confidently identify the format, startup fails with the
+provider reference so the user can explicitly set the protocol. Model discovery
+then uses the resolved protocol and the same endpoint. The older single-provider
+detection behavior belongs to the 0.1.x compatibility path only.
 
 | Feature | Named OpenAI provider | Named Anthropic provider |
 | --- | --- | --- |
@@ -40,34 +43,34 @@ protocol. Model discovery then uses the resolved protocol and the same endpoint.
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-The client endpoints are independent of upstream selection. Legacy single-
-provider profiles support both clients through pass-through or translation.
-Named provider profiles route each client to the configured default with the
-same protocol, with no cross-provider retry. Each named provider's `GET /models`
+The client endpoints are independent of provider registration, but routing is
+protocol-specific: each client goes only to the configured default with the
+same protocol, with no cross-provider retry or cross-protocol translation. Each
+named provider's `GET /models`
 response is used only on its client route when it is a complete, recognized model list.
 By default that catalogue is informational: any model ID is forwarded to the
 selected provider. Setting the provider's optional `supported_models` list
 restricts completion requests and the gateway's model listing to that subset.
 If a provider does not expose a complete recognizable list, its route returns
 an empty model catalogue unless an explicit allowlist is configured; direct
-requests are still sent to that provider. Existing single-provider profiles
-that explicitly contain `"protocol": "openai"` or `"protocol": "anthropic"`
-remain compatible.
+requests are still sent to that provider. The current development build may
+accept existing 0.1.x single-provider configurations during transition; this is
+a compatibility bridge, not a 0.2.0 guarantee.
 
-Legacy single-provider translation covers text, system/developer instructions,
-tools, tool calls/results, stop sequences, output schemas and streaming
-terminal events in both directions. Provider-specific features that have no
-equivalent on the other wire format remain explicitly unsupported rather than
-silently forwarded. Named provider profiles do not translate between formats.
+The following translation details describe the historical 0.1.x
+single-provider mode only; they do not apply to 0.2.0 named-provider routing.
+That legacy mode translated text, system/developer instructions, tools, tool
+calls/results, stop sequences, output schemas and streaming terminal events in
+both directions. Provider-specific features without an equivalent on the other
+wire format remained unsupported rather than silently forwarded.
 
 Explicit parameters are retained; provider acceptance is not inferred from the
-model name. In legacy cross-protocol mode, native Anthropic client requests can
-include Anthropic-compatible system-role messages and cache markers when the
-upstream is Anthropic. When that legacy upstream is OpenAI, only the supported
-top-level system/text subset is translated; unsupported provider-only blocks
-are rejected. Claude's observed requests carry a mid-conversation-system beta
-declaration. Providers can reject this or other beta features; TideMux does not
-change system instructions into user text.
+model name. The 0.1.x compatibility adapter handled Anthropic system-role
+messages and cache markers when its upstream was Anthropic; for an OpenAI
+upstream it translated only the supported top-level system/text subset and
+rejected unsupported provider-only blocks. This historical behavior is not a
+cross-protocol routing promise for 0.2.0. Providers can reject beta features;
+TideMux does not change system instructions into user text.
 
 The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
 configured provider unchanged. If active-session limiting is enabled and the
@@ -86,7 +89,8 @@ and invalid beta headers are rejected.
 Images, document/audio blocks, provider server tools, Responses API, embeddings,
 batches and token-counting endpoints are not implemented. These remain explicit
 boundaries; normal tested client workflows do not prove every client feature or
-every upstream model is supported. See [client acceptance](client-compatibility.md).
+every upstream model is supported. See the [0.1.1 client acceptance matrix](client-compatibility.md)
+for prior-release evidence; it does not certify the 0.2.0 routing model.
 
 ## Streaming and errors
 

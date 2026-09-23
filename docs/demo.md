@@ -29,7 +29,12 @@ Paste your DeepSeek API key at the hidden prompt and press Enter. The CLI create
 the application directory, stores both secrets in Keychain, writes a private JSON
 config, and verifies local readiness. It does not send a billable request.
 See [configuration guide](configure.md) for other providers, Anthropic mode,
-reconfiguration and unlocking a locked login keychain.
+reconfiguration and unlocking a locked login keychain. That page also documents
+newer development-only named-provider and active-session options; use its
+single-provider `--base-url` instructions and the 0.1.x samples for this release.
+The JSON samples linked below are 0.1.x single-provider examples; see the
+[examples index](../examples/README.md) for their version scope and the 0.2.0
+named-provider sample.
 
 ## Manual configuration (optional)
 
@@ -97,9 +102,12 @@ Configure your HTTP client with the gateway API key/token (not the upstream key)
   authentication with the **local token**, body
   `{"model":"your-model","max_tokens":16,"messages":[{"role":"user","content":"Hi"}]}`.
 
-See [protocol support](protocols.md) for accepted fields. The response keeps
-the shape of the client API that was called; mismatched provider responses are
-translated. Every response adds `X-TideMux-Request-ID` for audit correlation.
+In the 0.1.1 single-provider mode, the response keeps the shape of the client
+API that was called and mismatched client/provider protocols are translated.
+See the [0.1.1 client compatibility notes](client-compatibility.md) for release
+evidence. This is not the 0.2.0 routing model; see
+[0.2.0 protocol support](protocols.md). Every response adds
+`X-TideMux-Request-ID` for audit correlation.
 
 Inspect the local ledger with:
 
