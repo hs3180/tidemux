@@ -37,6 +37,7 @@ commands:
   version     print the TideMux version
 
 configuration examples:
+  tidemux configure (guided setup; pass provider fields for command-line setup)
   tidemux configure --preset deepseek-flash [options]
   tidemux configure --base-url URL --model ID [pricing options]
   tidemux configure --provider NAME,BASE_URL,MODEL [--default-provider PROTOCOL=NAME]
@@ -49,6 +50,8 @@ common examples:
 Named providers each use one API protocol, endpoint and Keychain credential.
 Their protocol is detected from the endpoint unless explicitly forced; the
 default provider map selects a profile when multiple providers share a protocol.
+Running configure without --provider, --base-url, --model or --preset starts
+the guided terminal setup.
 `
 )
 

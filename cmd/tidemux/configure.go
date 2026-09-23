@@ -9,11 +9,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,6 +84,189 @@ func formatDefaultProviderRoutes(routes map[string]string) string {
 	return strings.Join(ordered, ", ")
 }
 
+type interactiveProviderSetup struct {
+	Name     string
+	Provider gateway.Provider
+	APIKey   []byte
+}
+
+func providerNameFromBaseURL(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "provider"
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || net.ParseIP(host) != nil {
+		return "local-provider"
+	}
+	labels := strings.Split(host, ".")
+	for len(labels) > 1 && (labels[0] == "api" || labels[0] == "www") {
+		labels = labels[1:]
+	}
+	candidate := labels[0]
+	var slug strings.Builder
+	lastHyphen := false
+	for _, r := range candidate {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			slug.WriteRune(r)
+			lastHyphen = false
+		} else if !lastHyphen && slug.Len() > 0 {
+			slug.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	name := strings.Trim(slug.String(), "-")
+	if name == "" {
+		return "provider"
+	}
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	return name
+}
+
+func chooseProviderModel(in, out *os.File, models []string, modelsKnown bool) (string, error) {
+	if modelsKnown {
+		if len(models) == 1 {
+			fmt.Fprintf(out, "Only one model was discovered; selecting %s.\n", models[0])
+			return models[0], nil
+		}
+		if len(models) == 0 {
+			return "", errors.New("the provider returned an empty model list")
+		}
+		fmt.Fprintln(out, "Available models:")
+		const visibleModels = 20
+		for i, model := range models {
+			if i == visibleModels {
+				fmt.Fprintf(out, "  ... and %d more (enter a model ID to use it)\n", len(models)-visibleModels)
+				break
+			}
+			fmt.Fprintf(out, "  %2d. %s\n", i+1, model)
+		}
+		for {
+			fmt.Fprint(out, "Default model (number or exact ID): ")
+			value, err := readTerminalLine(in)
+			if err != nil {
+				return "", errors.New("could not read default model")
+			}
+			value = strings.TrimSpace(value)
+			for _, model := range models {
+				if value == model {
+					return model, nil
+				}
+			}
+			if index, parseErr := strconv.Atoi(value); parseErr == nil && index > 0 && index <= visibleModels && index <= len(models) {
+				return models[index-1], nil
+			}
+			fmt.Fprintln(out, "Choose a listed model number or exact model ID.")
+		}
+	}
+
+	fmt.Fprint(out, "Default model ID (not available from endpoint): ")
+	model, err := readTerminalLine(in)
+	if err != nil || strings.TrimSpace(model) == "" {
+		return "", errors.New("a default model ID is required")
+	}
+	return strings.TrimSpace(model), nil
+}
+
+func promptProviderProtocol(in, out *os.File) (string, error) {
+	for {
+		fmt.Fprint(out, "Provider protocol could not be inferred. Enter openai or anthropic: ")
+		value, err := readTerminalLine(in)
+		if err != nil {
+			return "", errors.New("could not read provider protocol")
+		}
+		protocol := strings.ToLower(strings.TrimSpace(value))
+		if protocol == "openai" || protocol == "anthropic" {
+			return protocol, nil
+		}
+		fmt.Fprintln(out, "Provider protocol must be openai or anthropic.")
+	}
+}
+
+func promptNewProvider(in, out *os.File, anthropicVersion string, httpClient *http.Client) (interactiveProviderSetup, error) {
+	var baseURL string
+	for {
+		fmt.Fprint(out, "Provider API Base URL: ")
+		value, err := readTerminalLine(in)
+		if err != nil {
+			return interactiveProviderSetup{}, errors.New("could not read provider API Base URL")
+		}
+		baseURL = strings.TrimSpace(value)
+		if baseURL == "" {
+			fmt.Fprintln(out, "Provider API Base URL is required.")
+			continue
+		}
+		if err := gateway.ValidateProviderBaseURL(baseURL); err != nil {
+			fmt.Fprintf(out, "Invalid provider API Base URL: %v\n", err)
+			continue
+		}
+		break
+	}
+	name := providerNameFromBaseURL(baseURL)
+	fmt.Fprintf(out, "Provider name inferred from endpoint: %s\n", name)
+	var apiKey []byte
+	for {
+		fmt.Fprint(out, "Provider API key (hidden): ")
+		var err error
+		apiKey, err = term.ReadPassword(int(in.Fd()))
+		fmt.Fprintln(out)
+		if err != nil {
+			return interactiveProviderSetup{}, errors.New("could not read provider API key")
+		}
+		if strings.TrimSpace(string(apiKey)) != "" && !strings.ContainsAny(string(apiKey), "\r\n\x00") {
+			break
+		}
+		for i := range apiKey {
+			apiKey[i] = 0
+		}
+		fmt.Fprintln(out, "A valid provider API key is required.")
+	}
+
+	var err error
+	info, inspectErr := gateway.InspectProviderEndpoint(context.Background(), baseURL, string(apiKey), anthropicVersion, httpClient)
+	protocol := ""
+	models := []string(nil)
+	modelsKnown := false
+	if inspectErr != nil {
+		fmt.Fprintf(out, "Automatic protocol detection was unavailable: %v\n", inspectErr)
+		protocol, err = promptProviderProtocol(in, out)
+		if err != nil {
+			for i := range apiKey {
+				apiKey[i] = 0
+			}
+			return interactiveProviderSetup{}, err
+		}
+		models, modelsKnown = gateway.DiscoverProviderModels(baseURL, string(apiKey), anthropicVersion, protocol, httpClient)
+	} else {
+		protocol, models, modelsKnown = info.Protocol, info.Models, info.ModelsKnown
+		fmt.Fprintf(out, "Detected upstream protocol: %s\n", protocol)
+		if !modelsKnown {
+			fmt.Fprintln(out, "Model discovery is unavailable; the model ID will be entered manually.")
+		}
+	}
+	model, err := chooseProviderModel(in, out, models, modelsKnown)
+	if err != nil {
+		for i := range apiKey {
+			apiKey[i] = 0
+		}
+		return interactiveProviderSetup{}, err
+	}
+	version := ""
+	if protocol == "anthropic" {
+		version = anthropicVersion
+	}
+	return interactiveProviderSetup{
+		Name: name,
+		Provider: gateway.Provider{
+			Protocol: protocol, BaseURL: baseURL, APIVersion: version,
+			Model: model, UpstreamID: name,
+		},
+		APIKey: apiKey,
+	}, nil
+}
+
 func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -90,6 +277,11 @@ func defaultConfigPath() string {
 func configure(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("configure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: tidemux configure [flags]")
+		fmt.Fprintln(stderr, "Without --provider, --base-url, --model or --preset, starts guided setup.")
+		flags.PrintDefaults()
+	}
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	var providerFlags, defaultProviderFlags repeatedFlag
@@ -129,7 +321,8 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if *preset != "" && *preset != "deepseek-flash" {
 		return errors.New("unknown preset; use --base-url")
 	}
-	namedProviderConfig := len(providerFlags) != 0
+	interactiveMode := len(providerFlags) == 0 && *preset == "" && !flagWasSet(flags, "base-url", "model")
+	namedProviderConfig := len(providerFlags) != 0 || interactiveMode
 	if *preset == "deepseek-flash" {
 		if namedProviderConfig {
 			return errors.New("--preset cannot be combined with named --provider entries")
@@ -141,11 +334,14 @@ func configure(args []string, stdout, stderr *os.File) error {
 			*model = "deepseek-flash"
 		}
 	}
-	if namedProviderConfig {
+	if interactiveMode && len(defaultProviderFlags) != 0 {
+		return errors.New("--default-provider requires command-line --provider entries")
+	}
+	if namedProviderConfig && !interactiveMode {
 		if *baseURL != "" || *model != "" {
 			return errors.New("use either named --provider entries or the legacy --base-url/--model options")
 		}
-	} else if *model == "" || *baseURL == "" {
+	} else if !interactiveMode && (*model == "" || *baseURL == "") {
 		return errors.New("use configure --preset deepseek-flash, provide --base-url/--model, or define named --provider entries")
 	}
 	if !namedProviderConfig && len(defaultProviderFlags) != 0 {
@@ -157,6 +353,31 @@ func configure(args []string, stdout, stderr *os.File) error {
 	abs, err := filepath.Abs(*configPath)
 	if err != nil {
 		return errors.New("invalid config path")
+	}
+	if _, err = os.Lstat(abs); err == nil && !*replace {
+		return errors.New("config already exists; use --replace to update it with new credentials")
+	}
+	var tty *os.File
+	var wizardProvider *interactiveProviderSetup
+	if interactiveMode {
+		tty, err = os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			return errors.New("run configure in an interactive terminal; provider API keys are never accepted as command arguments")
+		}
+		defer tty.Close()
+		if !term.IsTerminal(int(tty.Fd())) {
+			return errors.New("interactive terminal required")
+		}
+		setup, setupErr := promptNewProvider(tty, tty, *anthropicVersion, nil)
+		if setupErr != nil {
+			return setupErr
+		}
+		wizardProvider = &setup
+		defer func() {
+			for i := range wizardProvider.APIKey {
+				wizardProvider.APIKey[i] = 0
+			}
+		}()
 	}
 	prices := map[string]adapter.Price{}
 	if !namedProviderConfig {
@@ -186,14 +407,28 @@ func configure(args []string, stdout, stderr *os.File) error {
 		c.UpstreamID = ""
 		c.Prices = nil
 		c.ModelCapabilities = gateway.ModelCapabilities{}
-		c.Providers = make(map[string]gateway.Provider, len(providerFlags))
+		providerCount := len(providerFlags)
+		if wizardProvider != nil {
+			providerCount++
+		}
+		c.Providers = make(map[string]gateway.Provider, providerCount)
 		c.DefaultProviders = make(map[string]string, len(defaultProviderFlags))
 		pending := gateway.KeychainReference{Service: "pending", Account: "pending"}
+		providersToConfigure := make(map[string]gateway.Provider, providerCount)
+		if wizardProvider != nil {
+			providersToConfigure[wizardProvider.Name] = wizardProvider.Provider
+		}
 		for _, value := range providerFlags {
 			name, provider, parseErr := parseProviderFlag(value)
 			if parseErr != nil {
 				return parseErr
 			}
+			if _, exists := providersToConfigure[name]; exists {
+				return fmt.Errorf("duplicate provider name %q", name)
+			}
+			providersToConfigure[name] = provider
+		}
+		for name, provider := range providersToConfigure {
 			if _, exists := c.Providers[name]; exists {
 				return fmt.Errorf("duplicate provider name %q", name)
 			}
@@ -202,7 +437,13 @@ func configure(args []string, stdout, stderr *os.File) error {
 			}
 			provider.UpstreamKeychain = pending
 			provider.ModelCapabilities = capabilities
-			providerPrices, priceErr := configurePrices(flags, "", provider.BaseURL, provider.Model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+			var providerPrices map[string]adapter.Price
+			var priceErr error
+			if wizardProvider != nil && name == wizardProvider.Name {
+				providerPrices, priceErr = configureWizardPrices(flags, provider.BaseURL, provider.Model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+			} else {
+				providerPrices, priceErr = configurePrices(flags, "", provider.BaseURL, provider.Model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+			}
 			if priceErr != nil {
 				return fmt.Errorf("provider %s: %w", name, priceErr)
 			}
@@ -225,16 +466,15 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err = c.Validate(); err != nil {
 		return err
 	}
-	if _, err = os.Lstat(abs); err == nil && !*replace {
-		return errors.New("config already exists; use --replace to update it with new credentials")
-	}
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return errors.New("run configure in an interactive terminal; API keys are never accepted as command arguments")
-	}
-	defer tty.Close()
-	if !term.IsTerminal(int(tty.Fd())) {
-		return errors.New("interactive terminal required")
+	if tty == nil {
+		tty, err = os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			return errors.New("run configure in an interactive terminal; API keys are never accepted as command arguments")
+		}
+		defer tty.Close()
+		if !term.IsTerminal(int(tty.Fd())) {
+			return errors.New("interactive terminal required")
+		}
 	}
 	if err := unlockKeychainIfNeeded(context.Background(), tty); err != nil {
 		return err
@@ -242,13 +482,13 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if namedProviderConfig {
 		for _, name := range sortedProviderNames(c.Providers) {
 			provider := c.Providers[name]
-			protocol := provider.Protocol
-			if protocol == "auto" {
-				protocol = "automatic detection"
-			}
-			fmt.Fprintf(stdout, "Provider %s (%s): %s, model %s\n", name, protocol, provider.BaseURL, provider.Model)
+			fmt.Fprintf(stdout, "Provider %s (%s): %s, model %s\n", name, provider.Protocol, provider.BaseURL, provider.Model)
 		}
-		fmt.Fprintf(stdout, "Default provider routes: %s\nConfig: %s\n", formatDefaultProviderRoutes(c.DefaultProviders), abs)
+		if wizardProvider != nil {
+			fmt.Fprintf(stdout, "Default route: inferred from provider protocol\nConfig: %s\n", abs)
+		} else {
+			fmt.Fprintf(stdout, "Default provider routes: %s\nConfig: %s\n", formatDefaultProviderRoutes(c.DefaultProviders), abs)
+		}
 	} else {
 		fmt.Fprintf(stdout, "Provider API root: %s\nProvider protocol: automatic (checked when the gateway starts)\nModel: %s\nConfig: %s\n", c.BaseURL, c.Model, abs)
 	}
@@ -276,6 +516,10 @@ func configure(args []string, stdout, stderr *os.File) error {
 	providerSecrets := map[string]string{}
 	if namedProviderConfig {
 		for _, name := range sortedProviderNames(c.Providers) {
+			if wizardProvider != nil && name == wizardProvider.Name {
+				providerSecrets[name] = string(wizardProvider.APIKey)
+				continue
+			}
 			protocol := c.Providers[name].Protocol
 			fmt.Fprintf(tty, "Provider %q (%s) API key (hidden; paste then press Enter): ", name, protocol)
 			secret, readErr := term.ReadPassword(int(tty.Fd()))
@@ -330,7 +574,14 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if *replace {
 		fmt.Fprintln(stdout, "If a config was replaced, its exact backup is beside it as <config>.backup-<id>; old Keychain items are retained.")
 	}
-	fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Pricing is stored with this provider profile.")
+	if wizardProvider != nil {
+		fmt.Fprintln(stdout, "Protocol and model discovery used GET /models only; no completion request was sent.")
+		if len(c.Providers[wizardProvider.Name].Prices) == 0 {
+			fmt.Fprintln(stdout, "No verified price is configured; cost estimates will remain unknown until pricing is added.")
+		}
+	} else {
+		fmt.Fprintln(stdout, "Local checks passed; no upstream request was sent. Pricing is stored with this provider profile.")
+	}
 	defaultPath, _ := filepath.Abs(defaultConfigPath())
 	if abs == defaultPath {
 		fmt.Fprintln(stdout, "Next: tidemux serve\nInspect: tidemux billing")
@@ -371,6 +622,18 @@ func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, sour
 	prices[model] = price
 	return prices, nil
 }
+
+func configureWizardPrices(flags *flag.FlagSet, baseURL, model, currency, source, version string, inputCacheHit, inputCacheMiss, output float64) (map[string]adapter.Price, error) {
+	pricingFlags := []string{"pricing-currency", "pricing-source", "pricing-version", "pricing-input-cache-hit", "pricing-input-cache-miss", "pricing-output"}
+	if flagWasSet(flags, pricingFlags...) {
+		return configurePrices(flags, "", baseURL, model, currency, source, version, inputCacheHit, inputCacheMiss, output)
+	}
+	if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
+		return map[string]adapter.Price{model: price}, nil
+	}
+	return map[string]adapter.Price{}, nil
+}
+
 func saveConfiguration(path string, c gateway.Config, secret string, gatewaySecret []byte, replace bool, store secretWriter) error {
 	return saveConfigurationWithProviderKeys(path, c, map[string]string{"legacy": secret}, gatewaySecret, replace, store)
 }

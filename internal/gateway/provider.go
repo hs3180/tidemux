@@ -141,33 +141,69 @@ func resolveDefaultProviderRoutes(providers map[string]Provider, configured map[
 func discoverProviderModels(baseURL string, provider Provider, protocol string, httpClient *http.Client) ([]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
-	if err != nil {
+	body, err := fetchProviderModels(ctx, baseURL, provider.APIKey, provider.APIVersion, protocol, httpClient)
+	if err != nil || len(body) == 0 {
 		return nil, false
 	}
-	if protocol == "anthropic" {
-		request.Header.Set("x-api-key", provider.APIKey)
-		request.Header.Set("anthropic-version", provider.APIVersion)
-	} else {
-		request.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	return parseProviderModels(body, protocol)
+}
+
+// ProviderEndpointInfo contains non-secret details inferred from an upstream
+// API root. ModelsKnown is false when discovery is unsupported or incomplete.
+type ProviderEndpointInfo struct {
+	Protocol    string
+	Models      []string
+	ModelsKnown bool
+}
+
+// InspectProviderEndpoint infers the upstream protocol and, when possible,
+// returns its complete model list. It only sends GET /models requests; redirects
+// are disabled so provider credentials cannot be forwarded to another host.
+func InspectProviderEndpoint(ctx context.Context, baseURL, apiKey, apiVersion string, httpClient *http.Client) (ProviderEndpointInfo, error) {
+	if err := validateBaseURL(baseURL, "base_url"); err != nil {
+		return ProviderEndpointInfo{}, err
 	}
-	client := http.Client{Timeout: 5 * time.Second}
-	if httpClient != nil {
-		client = *httpClient
+	if strings.TrimSpace(apiKey) == "" {
+		return ProviderEndpointInfo{}, errors.New("provider API key is required for endpoint inspection")
 	}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, false
+	if protocol := providerProtocolHint(baseURL); protocol != "" {
+		provider := Provider{APIKey: apiKey, APIVersion: apiVersion}
+		if protocol == "anthropic" && provider.APIVersion == "" {
+			provider.APIVersion = defaultAnthropicAPIVersion
+		}
+		models, known := discoverProviderModels(baseURL, provider, protocol, httpClient)
+		return ProviderEndpointInfo{Protocol: protocol, Models: models, ModelsKnown: known}, nil
 	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, false
+
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
-	if err != nil || len(body) > 1<<20 {
-		return nil, false
+	probeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for _, protocol := range []string{"openai", "anthropic"} {
+		body, err := fetchProviderModels(probeContext, baseURL, apiKey, apiVersion, protocol, httpClient)
+		if err != nil {
+			continue
+		}
+		if detected := classifyProviderModels(body); detected != "" {
+			models, known := parseProviderModels(body, detected)
+			return ProviderEndpointInfo{Protocol: detected, Models: models, ModelsKnown: known}, nil
+		}
 	}
+	return ProviderEndpointInfo{}, errors.New("cannot determine provider API protocol from endpoint or GET /models; choose openai or anthropic explicitly")
+}
+
+// DiscoverProviderModels fetches the model catalog using an explicitly chosen
+// provider protocol. A false second result means the list is unsupported,
+// incomplete or not recognizable.
+func DiscoverProviderModels(baseURL, apiKey, apiVersion, protocol string, httpClient *http.Client) ([]string, bool) {
+	if protocol == "anthropic" && apiVersion == "" {
+		apiVersion = defaultAnthropicAPIVersion
+	}
+	return discoverProviderModels(baseURL, Provider{APIKey: apiKey, APIVersion: apiVersion}, protocol, httpClient)
+}
+
+func parseProviderModels(body []byte, protocol string) ([]string, bool) {
 	var envelope struct {
 		Object  string `json:"object"`
 		HasMore *bool  `json:"has_more"`
@@ -182,7 +218,7 @@ func discoverProviderModels(baseURL string, provider Provider, protocol string, 
 	known := false
 	if protocol == "openai" {
 		known = envelope.Object == "list"
-	} else {
+	} else if protocol == "anthropic" {
 		known = envelope.HasMore != nil
 		for _, item := range envelope.Data {
 			if item.Type == "model" {
@@ -215,6 +251,43 @@ func discoverProviderModels(baseURL string, provider Provider, protocol string, 
 	}
 	sort.Strings(models)
 	return models, true
+}
+
+func fetchProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, protocol string, httpClient *http.Client) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	switch protocol {
+	case "openai":
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	case "anthropic":
+		request.Header.Set("x-api-key", apiKey)
+		if apiVersion == "" {
+			apiVersion = defaultAnthropicAPIVersion
+		}
+		request.Header.Set("anthropic-version", apiVersion)
+	default:
+		return nil, errors.New("unknown provider protocol")
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	if httpClient != nil {
+		client = *httpClient
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	if err != nil || len(body) > 1<<20 {
+		return nil, errors.New("provider model response is unreadable or too large")
+	}
+	return body, nil
 }
 
 // detectProviderProtocol identifies the upstream wire format without making a
@@ -263,39 +336,12 @@ func providerProtocolHint(baseURL string) string {
 }
 
 func probeProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, auth string, httpClient *http.Client) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	body, err := fetchProviderModels(ctx, baseURL, apiKey, apiVersion, auth, httpClient)
 	if err != nil {
 		return "", err
 	}
-	switch auth {
-	case "openai":
-		request.Header.Set("Authorization", "Bearer "+apiKey)
-	case "anthropic":
-		request.Header.Set("x-api-key", apiKey)
-		if apiVersion == "" {
-			apiVersion = defaultAnthropicAPIVersion
-		}
-		request.Header.Set("anthropic-version", apiVersion)
-	default:
-		return "", errors.New("unknown provider probe authentication")
-	}
-	client := http.Client{Timeout: 5 * time.Second}
-	if httpClient != nil {
-		client = *httpClient
-	}
-	// Provider discovery must never forward the API key through a redirect.
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+	if len(body) == 0 {
 		return "", nil
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return "", err
 	}
 	return classifyProviderModels(body), nil
 }

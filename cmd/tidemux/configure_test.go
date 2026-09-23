@@ -295,6 +295,21 @@ func TestConfigurePricesRequiresCustomRatesForNonPreset(t *testing.T) {
 	}
 }
 
+func TestConfigureWizardPricesNeverGuessesUnknownRates(t *testing.T) {
+	flags := flag.NewFlagSet("wizard-pricing", flag.ContinueOnError)
+	if err := flags.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	prices, err := configureWizardPrices(flags, "https://api.example.com/v1", "custom-model", "USD", "manual-cli", "manual", 0, 0, 0)
+	if err != nil || len(prices) != 0 {
+		t.Fatalf("unknown provider pricing=%v err=%v", prices, err)
+	}
+	prices, err = configureWizardPrices(flags, "https://api.deepseek.com", "deepseek-flash", "USD", "manual-cli", "manual", 0, 0, 0)
+	if err != nil || len(prices) != 1 {
+		t.Fatalf("built-in provider pricing=%v err=%v", prices, err)
+	}
+}
+
 func TestConfigureDoesNotAcceptPricingFile(t *testing.T) {
 	if err := configure([]string{"--pricing-file", "pricing.json"}, os.Stdout, os.Stderr); err == nil {
 		t.Fatal("configure still accepts --pricing-file")
@@ -329,6 +344,81 @@ func TestParseNamedProviderFlags(t *testing.T) {
 	if _, _, err := parseProviderFlag("missing-fields"); err == nil {
 		t.Fatal("malformed provider spec accepted")
 	}
+}
+
+func TestProviderNameInferredFromBaseURL(t *testing.T) {
+	for _, test := range []struct {
+		baseURL string
+		want    string
+	}{
+		{baseURL: "https://api.deepseek.com/anthropic/v1", want: "deepseek"},
+		{baseURL: "https://api.openai.com/v1", want: "openai"},
+		{baseURL: "https://localhost:8443/v1", want: "local-provider"},
+		{baseURL: "http://127.0.0.1:4000/v1", want: "local-provider"},
+	} {
+		if got := providerNameFromBaseURL(test.baseURL); got != test.want {
+			t.Errorf("providerNameFromBaseURL(%q)=%q, want %q", test.baseURL, got, test.want)
+		}
+	}
+}
+
+func TestChooseProviderModelUsesDiscoveryAndMinimalInput(t *testing.T) {
+	t.Run("single discovered model needs no input", func(t *testing.T) {
+		in, out := promptTestFiles(t, "")
+		defer in.Close()
+		defer out.Close()
+		got, err := chooseProviderModel(in, out, []string{"only-model"}, true)
+		if err != nil || got != "only-model" {
+			t.Fatalf("model=%q err=%v", got, err)
+		}
+	})
+
+	t.Run("multiple models accept an index", func(t *testing.T) {
+		in, out := promptTestFiles(t, "2\n")
+		defer in.Close()
+		defer out.Close()
+		got, err := chooseProviderModel(in, out, []string{"first", "second"}, true)
+		if err != nil || got != "second" {
+			t.Fatalf("model=%q err=%v", got, err)
+		}
+	})
+
+	t.Run("unavailable model list asks for an ID", func(t *testing.T) {
+		in, out := promptTestFiles(t, "custom-model\n")
+		defer in.Close()
+		defer out.Close()
+		got, err := chooseProviderModel(in, out, nil, false)
+		if err != nil || got != "custom-model" {
+			t.Fatalf("model=%q err=%v", got, err)
+		}
+	})
+
+	t.Run("known catalog rejects an unlisted model", func(t *testing.T) {
+		in, out := promptTestFiles(t, "not-listed\n")
+		defer in.Close()
+		defer out.Close()
+		if _, err := chooseProviderModel(in, out, []string{"first", "second"}, true); err == nil {
+			t.Fatal("unlisted model accepted")
+		}
+	})
+}
+
+func promptTestFiles(t *testing.T, input string) (*os.File, *os.File) {
+	t.Helper()
+	inputPath := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(inputPath, []byte(input), 0600); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		in.Close()
+		t.Fatal(err)
+	}
+	return in, out
 }
 
 func TestConfigureRejectsOldDeepSeekPresetName(t *testing.T) {

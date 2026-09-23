@@ -265,6 +265,12 @@ func validProviderName(name string) bool {
 	return true
 }
 
+// ValidateProviderBaseURL validates an upstream API root before discovery or
+// configuration. Credentials, query parameters and fragments are never allowed.
+func ValidateProviderBaseURL(value string) error {
+	return validateBaseURL(value, "base_url")
+}
+
 func validatePrices(prices map[string]adapter.Price) error {
 	for model, p := range prices {
 		if strings.TrimSpace(model) == "" {

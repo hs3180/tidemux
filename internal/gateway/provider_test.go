@@ -71,6 +71,51 @@ func TestProviderProtocolHintAvoidsProbe(t *testing.T) {
 	}
 }
 
+func TestInspectProviderEndpointDetectsProtocolAndReturnsModels(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path=%s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion {
+			t.Errorf("Anthropic auth headers = %q / %q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
+		}
+		_, _ = w.Write([]byte(`{"data":[{"type":"model","id":"z-model"},{"type":"model","id":"a-model"}],"has_more":false}`))
+	}))
+	defer server.Close()
+
+	info, err := InspectProviderEndpoint(context.Background(), server.URL+"/v1", "provider-secret", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Protocol != "anthropic" || !info.ModelsKnown || strings.Join(info.Models, ",") != "a-model,z-model" {
+		t.Fatalf("endpoint info = %+v", info)
+	}
+	if calls != 2 {
+		t.Fatalf("probe calls=%d, want two authentication attempts", calls)
+	}
+}
+
+func TestDiscoverProviderModelsCanUseAnExplicitProtocol(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("x-api-key") != "" {
+			t.Errorf("auth headers = %q / %q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
+		}
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"custom-model"}]}`))
+	}))
+	defer server.Close()
+
+	models, known := DiscoverProviderModels(server.URL+"/v1", "provider-secret", "", "openai", server.Client())
+	if !known || strings.Join(models, ",") != "custom-model" {
+		t.Fatalf("models=%v known=%v", models, known)
+	}
+}
+
 func TestResolveNamedProviderAutomaticallyDetectsProtocolAndDefaultRoute(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

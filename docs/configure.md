@@ -5,6 +5,37 @@ API key(s) and optional gateway API key without echo. Leave the gateway prompt
 empty to generate a random credential, or enter a custom value. Neither secret
 is accepted as a command-line argument or written into JSON.
 
+## Two provider setup modes
+
+Run `tidemux configure` without `--provider`, `--base-url`, `--model` or
+`--preset` for the guided terminal setup. It starts by asking for the provider
+API Base URL, derives a provider name from the host, then asks for the upstream
+API key using hidden input. TideMux infers the
+protocol from the endpoint or its authenticated `GET /models` response. If the
+endpoint returns exactly one model, that model is selected automatically; when
+it returns several, choose a model from the displayed list. If protocol or
+models cannot be discovered, the wizard asks only for the missing value. It
+never sends a completion request during setup.
+
+To set provider details directly, pass them on the command line. The provider
+name is explicit, and the protocol may be inferred or forced:
+
+```sh
+tidemux configure \
+  --provider my-service,https://api.example.com/v1,my-model \
+  --pricing-input-cache-hit 1 \
+  --pricing-input-cache-miss 2 \
+  --pricing-output 4
+```
+
+Use `--provider NAME,PROTOCOL,BASE_URL,MODEL` to force `openai` or `anthropic`.
+The upstream API key remains a hidden prompt so it is not exposed in shell
+history or process listings. For command-line setup, custom models require all
+three price flags shown above. The wizard uses TideMux's built-in price only
+when the endpoint and model match a verified preset; otherwise it leaves
+pricing unknown rather than guessing. A configured budget still requires
+explicit matching prices.
+
 ## DeepSeek Flash: three commands
 
 Run the installed CLI (or replace `tidemux` with `./tidemux` for an extracted binary):
