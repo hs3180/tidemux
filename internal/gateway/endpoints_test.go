@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestDualEndpointsRouteByClientProtocolAndDiscoverModels(t *testing.T) {
+func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T) {
 	openAICalls, anthropicCalls := 0, 0
 	openAIUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -48,13 +48,19 @@ func TestDualEndpointsRouteByClientProtocolAndDiscoverModels(t *testing.T) {
 	c.APIVersion = ""
 	c.APIKey = ""
 	c.UpstreamKeychain = KeychainReference{}
-	c.Endpoints = map[string]ProviderEndpoint{
+	c.Model = ""
+	c.UpstreamID = ""
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
 		"openai": {
 			BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key",
+			Model: "openai-only", UpstreamID: "openai-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 		},
 		"anthropic": {
 			BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key",
+			Model: "anthropic-only", UpstreamID: "anthropic-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 		},
 	}
@@ -117,7 +123,25 @@ func TestDualEndpointsRouteByClientProtocolAndDiscoverModels(t *testing.T) {
 			t.Fatalf("%s request status=%d body=%s", test.protocol, out.Code, out.Body.String())
 		}
 	}
-	if openAICalls != 1 || anthropicCalls != 1 {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol+" provider-specific default model", func(t *testing.T) {
+			body := strings.Replace(requestBody(protocol), `"model":"custom-model",`, "", 1)
+			path := "/v1/chat/completions"
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer local-secret")
+			if protocol == "anthropic" {
+				req = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+				req.Header.Set("x-api-key", "local-secret")
+				req.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			}
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+		})
+	}
+	if openAICalls != 2 || anthropicCalls != 2 {
 		t.Fatalf("requests routed openai=%d anthropic=%d", openAICalls, anthropicCalls)
 	}
 
@@ -126,12 +150,12 @@ func TestDualEndpointsRouteByClientProtocolAndDiscoverModels(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
 	h.ServeHTTP(out, req)
-	if out.Code != http.StatusNotFound || openAICalls != 1 || anthropicCalls != 1 {
+	if out.Code != http.StatusNotFound || openAICalls != 2 || anthropicCalls != 2 {
 		t.Fatalf("unavailable model status=%d calls=%d/%d body=%s", out.Code, openAICalls, anthropicCalls, out.Body.String())
 	}
 }
 
-func TestSingleNamedEndpointFallsBackAcrossClientProtocols(t *testing.T) {
+func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	var providerPath, providerAuth, providerBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -152,9 +176,14 @@ func TestSingleNamedEndpointFallsBackAcrossClientProtocols(t *testing.T) {
 	c.APIVersion = ""
 	c.APIKey = ""
 	c.UpstreamKeychain = KeychainReference{}
-	c.Endpoints = map[string]ProviderEndpoint{
+	c.Model = ""
+	c.UpstreamID = ""
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
 		"openai": {
 			BaseURL: upstream.URL + "/openai/v1", APIKey: "openai-provider-key",
+			Model: "openai-model", UpstreamID: "openai-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 		},
 	}
@@ -178,7 +207,7 @@ func TestSingleNamedEndpointFallsBackAcrossClientProtocols(t *testing.T) {
 	}
 }
 
-func TestDualEndpointNativeStreamingUsesMatchingEndpoint(t *testing.T) {
+func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
 	openAIStream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"openai\"},\"finish_reason\":\"stop\"}]}\n\n" + "data: [DONE]\n\n"
 	anthropicStream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"custom-model\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n" +
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
@@ -217,9 +246,13 @@ func TestDualEndpointNativeStreamingUsesMatchingEndpoint(t *testing.T) {
 	c.APIVersion = ""
 	c.APIKey = ""
 	c.UpstreamKeychain = KeychainReference{}
-	c.Endpoints = map[string]ProviderEndpoint{
-		"openai":    {BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-		"anthropic": {BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+	c.Model = ""
+	c.UpstreamID = ""
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
+		"openai":    {BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic": {BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 	}
 	h, closeGateway, err := NewHandler(c, openAIUpstream.Client())
 	if err != nil {
@@ -256,7 +289,7 @@ func TestDualEndpointNativeStreamingUsesMatchingEndpoint(t *testing.T) {
 	}
 }
 
-func TestDualEndpointFailureDoesNotRetryOtherEndpoint(t *testing.T) {
+func TestIndependentProviderFailureDoesNotRetryOtherProvider(t *testing.T) {
 	for _, failedProtocol := range []string{"openai", "anthropic"} {
 		t.Run(failedProtocol, func(t *testing.T) {
 			calls := map[string]int{"openai": 0, "anthropic": 0}
@@ -295,9 +328,13 @@ func TestDualEndpointFailureDoesNotRetryOtherEndpoint(t *testing.T) {
 			c.APIVersion = ""
 			c.APIKey = ""
 			c.UpstreamKeychain = KeychainReference{}
-			c.Endpoints = map[string]ProviderEndpoint{
-				"openai":    {BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-				"anthropic": {BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+			c.Model = ""
+			c.UpstreamID = ""
+			c.ModelCapabilities = ModelCapabilities{}
+			c.Prices = nil
+			c.Providers = map[string]Provider{
+				"openai":    {BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+				"anthropic": {BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 			}
 			h, closeGateway, err := NewHandler(c, openAIUpstream.Client())
 			if err != nil {

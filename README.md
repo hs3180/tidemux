@@ -47,9 +47,10 @@ tidemux configure --preset deepseek-flash \
   --base-url https://api.deepseek.com/anthropic/v1
 ```
 
-When a provider exposes both APIs, configure both roots to prefer the matching
-native endpoint for each client. Use `--openai-base-url` and
-`--anthropic-base-url`; see the [configuration guide](docs/configure.md#configure-both-upstream-protocols).
+To route the two client protocols to separate upstream providers, configure
+`--openai-base-url` and `--anthropic-base-url`; use `--openai-model` and
+`--anthropic-model` if their model IDs differ. See the
+[configuration guide](docs/configure.md#configure-protocol-routed-providers).
 
 Paste your API key at the hidden prompt; TideMux handles Keychain storage.
 Other OpenAI-compatible or Anthropic-compatible providers work through
@@ -102,9 +103,10 @@ For client invocation options and setup details, see [client setup](docs/clients
 
 The 0.2.0 development line exposes both OpenAI Chat Completions and Anthropic
 Messages client APIs simultaneously. A profile can use one detected upstream
-endpoint or configure both protocol-specific endpoints; clients prefer the
-matching endpoint when present and use translation when only the other endpoint
-is configured. Credentials and ledger accounting remain shared. The three
+provider or configure independent OpenAI and Anthropic providers; client
+protocol determines routing when both are present, with translation retained
+when only one provider is configured. Gateway auth, session limits and ledger
+accounting remain shared. The three
 CLIs have passed DeepSeek file read/edit/test and continued conversation
 workflows. You can configure other compatible providers, though they have not
 been tested.

@@ -44,6 +44,8 @@ func configure(args []string, stdout, stderr *os.File) error {
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	openAIBaseURL := flags.String("openai-base-url", "", "OpenAI-compatible upstream API root")
 	anthropicBaseURL := flags.String("anthropic-base-url", "", "Anthropic-compatible upstream API root")
+	openAIModel := flags.String("openai-model", "", "default model for the OpenAI provider (defaults to --model)")
+	anthropicModel := flags.String("anthropic-model", "", "default model for the Anthropic provider (defaults to --model)")
 	anthropicVersion := flags.String("anthropic-version", "", "Anthropic API version (default: 2023-06-01)")
 	model := flags.String("model", "", "default model ID")
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
@@ -76,22 +78,49 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return errors.New("unexpected configure argument")
 	}
 	if *preset != "" && *preset != "deepseek-flash" {
-		return errors.New("unknown preset; use --base-url or protocol-specific endpoint flags with --model")
+		return errors.New("unknown preset; use --base-url or protocol-specific provider flags")
 	}
-	protocolEndpointConfig := *openAIBaseURL != "" || *anthropicBaseURL != ""
+	protocolProviderConfig := *openAIBaseURL != "" || *anthropicBaseURL != ""
 	if *preset == "deepseek-flash" {
-		if !protocolEndpointConfig && *baseURL == "" {
+		if !protocolProviderConfig && *baseURL == "" {
 			*baseURL = "https://api.deepseek.com"
 		}
 		if *model == "" {
 			*model = "deepseek-flash"
 		}
 	}
-	if protocolEndpointConfig && *baseURL != "" {
-		return errors.New("use --base-url or protocol-specific endpoint flags, not both")
+	if protocolProviderConfig && *baseURL != "" {
+		return errors.New("use --base-url or protocol-specific provider flags, not both")
 	}
-	if *model == "" || (!protocolEndpointConfig && *baseURL == "") {
-		return errors.New("use configure --preset deepseek-flash, or provide --base-url/--model or protocol-specific endpoint flags/--model")
+	if !protocolProviderConfig && (*model == "" || *baseURL == "") {
+		return errors.New("use configure --preset deepseek-flash, or provide --base-url/--model or protocol-specific provider flags")
+	}
+	providerModels := map[string]string{}
+	if protocolProviderConfig {
+		if *openAIModel != "" && *openAIBaseURL == "" {
+			return errors.New("--openai-model requires --openai-base-url")
+		}
+		if *anthropicModel != "" && *anthropicBaseURL == "" {
+			return errors.New("--anthropic-model requires --anthropic-base-url")
+		}
+		for protocol, baseURL := range map[string]string{"openai": *openAIBaseURL, "anthropic": *anthropicBaseURL} {
+			if baseURL == "" {
+				continue
+			}
+			providerModel := *model
+			if protocol == "openai" && *openAIModel != "" {
+				providerModel = *openAIModel
+			}
+			if protocol == "anthropic" && *anthropicModel != "" {
+				providerModel = *anthropicModel
+			}
+			if strings.TrimSpace(providerModel) == "" {
+				return fmt.Errorf("--%s-model or --model is required when configuring the %s provider", protocol, protocol)
+			}
+			providerModels[protocol] = providerModel
+		}
+	} else if *openAIModel != "" || *anthropicModel != "" {
+		return errors.New("--openai-model and --anthropic-model require protocol-specific provider flags")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("configure requires macOS Keychain")
@@ -100,16 +129,12 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err != nil {
 		return errors.New("invalid config path")
 	}
-	pricingBaseURL := *baseURL
-	if protocolEndpointConfig {
-		pricingBaseURL = *openAIBaseURL
-		if pricingBaseURL == "" {
-			pricingBaseURL = *anthropicBaseURL
+	prices := map[string]adapter.Price{}
+	if !protocolProviderConfig {
+		prices, err = configurePrices(flags, *preset, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+		if err != nil {
+			return err
 		}
-	}
-	prices, err := configurePrices(flags, *preset, pricingBaseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
-	if err != nil {
-		return err
 	}
 	budgetPolicy := ledger.BudgetPolicy{}
 	if *budget5h > 0 || *budgetWeekly > 0 {
@@ -123,20 +148,33 @@ func configure(args []string, stdout, stderr *os.File) error {
 		}
 		schedule = gateway.ReportSchedule{Time: normalized, Channel: "macos"}
 	}
-	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}, ListenAddr: *listen, BaseURL: *baseURL, Model: *model, UpstreamID: "provider-primary", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
-	if protocolEndpointConfig {
+	capabilities := gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}
+	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: capabilities, ListenAddr: *listen, BaseURL: *baseURL, Model: *model, UpstreamID: "provider-primary", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
+	if protocolProviderConfig {
 		c.BaseURL = ""
 		c.UpstreamKeychain = gateway.KeychainReference{}
-		c.Endpoints = make(map[string]gateway.ProviderEndpoint, 2)
+		c.Model = ""
+		c.UpstreamID = ""
+		c.Prices = nil
+		c.ModelCapabilities = gateway.ModelCapabilities{}
+		c.Providers = make(map[string]gateway.Provider, 2)
 		pending := gateway.KeychainReference{Service: "pending", Account: "pending"}
 		if *anthropicVersion != "" && *anthropicBaseURL == "" {
 			return errors.New("--anthropic-version requires --anthropic-base-url")
 		}
 		if *openAIBaseURL != "" {
-			c.Endpoints["openai"] = gateway.ProviderEndpoint{BaseURL: *openAIBaseURL, UpstreamKeychain: pending}
+			providerPrices, priceErr := configurePrices(flags, *preset, *openAIBaseURL, providerModels["openai"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+			if priceErr != nil {
+				return fmt.Errorf("openai provider: %w", priceErr)
+			}
+			c.Providers["openai"] = gateway.Provider{BaseURL: *openAIBaseURL, UpstreamKeychain: pending, Model: providerModels["openai"], UpstreamID: "openai", ModelCapabilities: capabilities, Prices: providerPrices}
 		}
 		if *anthropicBaseURL != "" {
-			c.Endpoints["anthropic"] = gateway.ProviderEndpoint{BaseURL: *anthropicBaseURL, UpstreamKeychain: pending, APIVersion: *anthropicVersion}
+			providerPrices, priceErr := configurePrices(flags, *preset, *anthropicBaseURL, providerModels["anthropic"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+			if priceErr != nil {
+				return fmt.Errorf("anthropic provider: %w", priceErr)
+			}
+			c.Providers["anthropic"] = gateway.Provider{BaseURL: *anthropicBaseURL, UpstreamKeychain: pending, APIVersion: *anthropicVersion, Model: providerModels["anthropic"], UpstreamID: "anthropic", ModelCapabilities: capabilities, Prices: providerPrices}
 		}
 	} else if *anthropicVersion != "" {
 		c.APIVersion = *anthropicVersion
@@ -158,17 +196,17 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if err := unlockKeychainIfNeeded(context.Background(), tty); err != nil {
 		return err
 	}
-	if protocolEndpointConfig {
+	if protocolProviderConfig {
 		for _, protocol := range []string{"openai", "anthropic"} {
-			if endpoint, ok := c.Endpoints[protocol]; ok {
+			if provider, ok := c.Providers[protocol]; ok {
 				name := "OpenAI"
 				if protocol == "anthropic" {
 					name = "Anthropic"
 				}
-				fmt.Fprintf(stdout, "%s provider endpoint: %s\n", name, endpoint.BaseURL)
+				fmt.Fprintf(stdout, "%s provider: %s (model %s)\n", name, provider.BaseURL, provider.Model)
 			}
 		}
-		fmt.Fprintf(stdout, "Provider routing: match the client protocol when an endpoint is configured; otherwise translate through the available endpoint\nModel: %s\nConfig: %s\n", c.Model, abs)
+		fmt.Fprintf(stdout, "Provider routing: client protocol selects its matching provider; a single configured provider supports translation for both clients\nConfig: %s\n", abs)
 	} else {
 		fmt.Fprintf(stdout, "Provider API root: %s\nProvider protocol: automatic (checked when the gateway starts)\nModel: %s\nConfig: %s\n", c.BaseURL, c.Model, abs)
 	}
@@ -194,9 +232,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, "Daily report notification: disabled")
 	}
 	providerSecrets := map[string]string{}
-	if protocolEndpointConfig {
+	if protocolProviderConfig {
 		var openAISecret []byte
-		if _, ok := c.Endpoints["openai"]; ok {
+		if _, ok := c.Providers["openai"]; ok {
 			fmt.Fprint(tty, "OpenAI provider API key (hidden; paste then press Enter): ")
 			openAISecret, err = term.ReadPassword(int(tty.Fd()))
 			fmt.Fprintln(tty)
@@ -210,7 +248,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 			}()
 			providerSecrets["openai"] = string(openAISecret)
 		}
-		if _, ok := c.Endpoints["anthropic"]; ok {
+		if _, ok := c.Providers["anthropic"]; ok {
 			prompt := "Anthropic provider API key (hidden; paste then press Enter): "
 			if len(openAISecret) != 0 {
 				prompt = "Anthropic provider API key (hidden; press Enter to reuse the OpenAI key): "
@@ -323,17 +361,17 @@ type keychainEntry struct {
 }
 
 func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSecrets map[string]string, gatewaySecret []byte, replace bool, store secretWriter) error {
-	if len(c.Endpoints) == 0 {
+	if len(c.Providers) == 0 {
 		if len(providerSecrets) != 1 || providerSecrets["legacy"] == "" {
 			return errors.New("API key is empty or contains invalid characters")
 		}
-	} else if len(providerSecrets) != len(c.Endpoints) {
-		return errors.New("an API key is required for each configured provider endpoint")
+	} else if len(providerSecrets) != len(c.Providers) {
+		return errors.New("an API key is required for each configured provider")
 	}
-	if len(c.Endpoints) > 0 {
-		for protocol := range c.Endpoints {
+	if len(c.Providers) > 0 {
+		for protocol := range c.Providers {
 			if _, ok := providerSecrets[protocol]; !ok {
-				return fmt.Errorf("API key required for %s endpoint", protocol)
+				return fmt.Errorf("API key required for %s provider", protocol)
 			}
 		}
 	}
@@ -341,12 +379,12 @@ func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSe
 		if strings.TrimSpace(secret) == "" || strings.ContainsAny(secret, "\r\n\x00") {
 			return fmt.Errorf("%s API key is empty or contains invalid characters", name)
 		}
-		if len(c.Endpoints) == 0 && name != "legacy" {
-			return errors.New("API key supplied for an unconfigured endpoint")
+		if len(c.Providers) == 0 && name != "legacy" {
+			return errors.New("API key supplied for an unconfigured provider")
 		}
-		if len(c.Endpoints) > 0 {
-			if _, ok := c.Endpoints[name]; !ok {
-				return errors.New("API key supplied for an unconfigured endpoint")
+		if len(c.Providers) > 0 {
+			if _, ok := c.Providers[name]; !ok {
+				return errors.New("API key supplied for an unconfigured provider")
 			}
 		}
 	}
@@ -386,7 +424,7 @@ func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSe
 	}
 	providerEntries := make([]keychainEntry, 0, len(providerSecrets))
 	sharedReferences := make(map[string]gateway.KeychainReference, len(providerSecrets))
-	if len(c.Endpoints) == 0 {
+	if len(c.Providers) == 0 {
 		ref, err := newReference("com.tidemux.provider")
 		if err != nil {
 			return err
@@ -395,7 +433,7 @@ func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSe
 		providerEntries = append(providerEntries, keychainEntry{reference: ref, secret: providerSecrets["legacy"]})
 	} else {
 		for _, protocol := range []string{"openai", "anthropic"} {
-			endpoint, ok := c.Endpoints[protocol]
+			provider, ok := c.Providers[protocol]
 			if !ok {
 				continue
 			}
@@ -409,8 +447,8 @@ func saveConfigurationWithProviderKeys(path string, c gateway.Config, providerSe
 				sharedReferences[secret] = ref
 				providerEntries = append(providerEntries, keychainEntry{reference: ref, secret: secret})
 			}
-			endpoint.UpstreamKeychain = ref
-			c.Endpoints[protocol] = endpoint
+			provider.UpstreamKeychain = ref
+			c.Providers[protocol] = provider
 		}
 	}
 	gatewayCredential := gatewayKey

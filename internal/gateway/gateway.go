@@ -27,25 +27,26 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	if c.AccessToken == "" {
 		return nil, nil, errors.New("distinct resolved credentials are required")
 	}
-	if len(c.Endpoints) == 0 {
+	if len(c.Providers) == 0 {
 		if c.APIKey == "" || c.APIKey == c.AccessToken {
 			return nil, nil, errors.New("distinct resolved credentials are required")
 		}
 	} else {
-		for _, endpoint := range c.Endpoints {
-			if endpoint.APIKey == "" || endpoint.APIKey == c.AccessToken {
+		for _, provider := range c.Providers {
+			if provider.APIKey == "" || provider.APIKey == c.AccessToken {
 				return nil, nil, errors.New("distinct resolved credentials are required")
 			}
 		}
 	}
-	endpoints, err := resolveProviderEndpoints(c, httpClient)
+	legacySingleProvider := len(c.Providers) == 0
+	providers, err := resolveProviders(c, httpClient)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(c.Endpoints) == 0 {
-		for protocol, endpoint := range endpoints {
+	if legacySingleProvider {
+		for protocol, provider := range providers {
 			c.Protocol = protocol
-			c.APIVersion = endpoint.APIVersion
+			c.APIVersion = provider.APIVersion
 		}
 	}
 	if err := c.Validate(); err != nil {
@@ -65,19 +66,19 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		return nil, nil, err
 	}
 	cache := adapter.NewPromptCache()
-	clients := make(map[string]*adapter.Client, len(endpoints))
-	models := make(map[string][]string, len(endpoints))
-	modelsKnown := make(map[string]bool, len(endpoints))
-	for protocol, endpoint := range endpoints {
-		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: endpoint.BaseURL, APIKey: endpoint.APIKey, APIVersion: endpoint.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: c.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
-		if len(c.Endpoints) != 0 {
-			models[protocol], modelsKnown[protocol] = discoverProviderModels(endpoint, protocol, httpClient)
+	clients := make(map[string]*adapter.Client, len(providers))
+	models := make(map[string][]string, len(providers))
+	modelsKnown := make(map[string]bool, len(providers))
+	for protocol, provider := range providers {
+		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		if !legacySingleProvider {
+			models[protocol], modelsKnown[protocol] = discoverProviderModels(provider, protocol, httpClient)
 		}
-		if len(c.Endpoints) == 0 && !modelsKnown[protocol] {
-			models[protocol] = []string{c.Model}
+		if legacySingleProvider && !modelsKnown[protocol] {
+			models[protocol] = []string{provider.Model}
 		}
 	}
-	return &handler{config: c, ledger: l, sessions: sessions, clients: clients, models: models, modelsKnown: modelsKnown}, func() error {
+	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, clients: clients, models: models, modelsKnown: modelsKnown}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()
@@ -101,27 +102,38 @@ type handler struct {
 	config      Config
 	ledger      *ledger.Ledger
 	sessions    *limiter.SessionLimiter
+	providers   map[string]Provider
 	clients     map[string]*adapter.Client
 	models      map[string][]string
 	modelsKnown map[string]bool
 }
 
 func (h *handler) clientForRequestProtocol(protocol string) *adapter.Client {
-	if client := h.clients[protocol]; client != nil {
-		return client
+	return h.clients[h.providerProtocolForRequest(protocol)]
+}
+
+func (h *handler) providerProtocolForRequest(protocol string) string {
+	if h.providers[protocol].BaseURL != "" {
+		return protocol
 	}
-	if protocol == "anthropic" {
-		return h.clients["openai"]
+	if len(h.providers) == 1 {
+		for configured := range h.providers {
+			return configured
+		}
 	}
-	return h.clients["anthropic"]
+	return ""
+}
+
+func (h *handler) providerForRequestProtocol(protocol string) Provider {
+	return h.providers[h.providerProtocolForRequest(protocol)]
 }
 
 func (h *handler) modelsForRequestProtocol(protocol string) ([]string, bool) {
-	client := h.clientForRequestProtocol(protocol)
-	if client == nil {
+	providerProtocol := h.providerProtocolForRequest(protocol)
+	if providerProtocol == "" {
 		return nil, false
 	}
-	return h.models[client.Protocol], h.modelsKnown[client.Protocol]
+	return h.models[providerProtocol], h.modelsKnown[providerProtocol]
 }
 
 func containsModel(models []string, model string) bool {
@@ -194,6 +206,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelList := r.URL.Path == "/v1/models" || r.URL.Path == "/models"
 	modelDetail := strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/")
 	if r.Method == "GET" && (modelList || modelDetail) {
+		provider := h.providerForRequestProtocol(protocol)
+		if provider.BaseURL == "" {
+			h.reject(w, r, protocol, 500, "protocol_client_unavailable")
+			return
+		}
 		models, _ := h.modelsForRequestProtocol(protocol)
 		if modelDetail {
 			modelID := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
@@ -207,14 +224,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if modelDetail {
 				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
 				model := map[string]any{"id": id, "type": "model", "display_name": id}
-				h.config.ModelCapabilities.addToModel(model)
+				provider.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
 			data := make([]map[string]any, 0, len(models))
 			for _, id := range models {
 				model := map[string]any{"id": id, "type": "model", "display_name": id}
-				h.config.ModelCapabilities.addToModel(model)
+				provider.ModelCapabilities.addToModel(model)
 				data = append(data, model)
 			}
 			result := map[string]any{"data": data, "has_more": false}
@@ -225,15 +242,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			if modelDetail {
 				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
-				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
-				h.config.ModelCapabilities.addToModel(model)
+				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": provider.UpstreamID}
+				provider.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
 			data := make([]map[string]any, 0, len(models))
 			for _, id := range models {
-				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
-				h.config.ModelCapabilities.addToModel(model)
+				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": provider.UpstreamID}
+				provider.ModelCapabilities.addToModel(model)
 				data = append(data, model)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
@@ -248,6 +265,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 404, "unsupported_endpoint")
 		return
 	}
+	providerClient := h.clientForRequestProtocol(protocol)
+	provider := h.providerForRequestProtocol(protocol)
+	if providerClient == nil || provider.BaseURL == "" {
+		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
+		return
+	}
 	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
 	if err := options.Validate(protocol); err != nil {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
@@ -259,7 +282,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 413, "request_too_large")
 		return
 	}
-	body, model, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, h.config.Model)
+	body, model, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, provider.Model)
 	if len(ignoredFields) > 0 {
 		log.Printf("tidemux: ignored unsupported request fields protocol=%s fields=%q", protocol, ignoredFields)
 	}
@@ -267,12 +290,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
-	providerClient := h.clientForRequestProtocol(protocol)
-	if providerClient == nil {
-		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
-		return
-	}
-	if h.modelsKnown[providerClient.Protocol] && !containsModel(h.models[providerClient.Protocol], model) {
+	providerProtocol := h.providerProtocolForRequest(protocol)
+	if h.modelsKnown[providerProtocol] && !containsModel(h.models[providerProtocol], model) {
 		h.reject(w, r, protocol, 404, "model_not_found")
 		return
 	}
@@ -308,7 +327,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	retainSession := false
 	defer func() { lease.Release(retainSession) }()
 	if h.config.Budget != (ledger.BudgetPolicy{}) {
-		if _, ok := h.config.Prices[model]; !ok {
+		if _, ok := provider.Prices[model]; !ok {
 			h.reject(w, r, protocol, 503, "budget_pricing_unconfigured")
 			return
 		}

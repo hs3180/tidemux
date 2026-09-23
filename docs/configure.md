@@ -224,40 +224,39 @@ To replace an existing local setup,
 stop the gateway first and add `--replace`. Inspect other options with
 `tidemux configure --help`.
 
-### Configure both upstream protocols
+### Configure protocol-routed providers
 
-When a provider exposes native OpenAI-compatible and Anthropic-compatible APIs,
-configure either or both roots in one profile. Omit a flag for an endpoint you
-do not use; the other client protocol will translate through the configured
-endpoint. This example configures both:
+OpenAI and Anthropic upstream APIs are configured as separate providers. Each
+has its own API root, hidden API-key prompt, default model, billing identity,
+model limits and price table. `--model` is a shorthand default for both; use
+the protocol-specific model flags when they differ:
 
 ```sh
 tidemux configure \
   --openai-base-url https://provider.example/openai/v1 \
   --anthropic-base-url https://provider.example/anthropic/v1 \
-  --model your-model-id \
+  --openai-model openai-model-id \
+  --anthropic-model anthropic-model-id \
   --pricing-input-cache-hit 1 \
   --pricing-input-cache-miss 2 \
   --pricing-output 4
 ```
 
-OpenAI clients use the OpenAI endpoint and Anthropic clients use the Anthropic
-endpoint. If only one endpoint is configured, both client APIs remain available
-through protocol translation to that endpoint. API keys are entered at hidden
-prompts; when configuring both, press Enter at the Anthropic key prompt to reuse
-the OpenAI key, or enter a separate key. The credentials are stored in Keychain,
-and the JSON config contains references only. Set `--anthropic-version
-YYYY-MM-DD` to override the default Anthropic API version. `--replace` updates
-the full profile while preserving a backup and old Keychain items.
-The resulting non-secret endpoint configuration is also shown in
-[`examples/dual-endpoints.json`](../examples/dual-endpoints.json).
+OpenAI clients route to the OpenAI provider and Anthropic clients to the
+Anthropic provider. With only one provider configured, both client APIs remain
+available through protocol translation to that provider. API keys are entered
+at hidden prompts; when configuring both, press Enter at the Anthropic key
+prompt to reuse the OpenAI key, or enter a separate key. Credentials are stored
+in Keychain; the JSON config contains references only. The pricing flags seed
+each configured provider's own price table. `--anthropic-version YYYY-MM-DD`
+overrides the Anthropic provider's API version. `--replace` updates the full
+configuration while preserving a backup and old Keychain items.
 
-When an endpoint provides a complete, recognized `GET /models` response, TideMux
-uses that endpoint's list only on its matching client route and rejects models
-not listed there before forwarding. If a provider does not expose a complete
-recognizable list, TideMux returns an empty model catalogue rather than claiming
-the profile's default model is available; requests for that model are still
-forwarded to the selected endpoint.
+Each provider's `GET /models` response is used only on its matching client route
+when it is a complete, recognized model list. A provider without a complete
+recognizable list returns an empty model catalogue rather than claiming its
+default model is available; direct requests are still sent to that provider.
+See the non-secret [provider configuration example](../examples/dual-providers.json).
 
 ## Update the current local configuration
 
@@ -266,9 +265,9 @@ replace it, stop the server and repeat the configure command with `--replace`.
 New Keychain accounts are generated; old credentials and ledger data are retained
 in place. Inspect the JSON configuration before replacing it: it contains the
 provider roots and Keychain references, never the API key values. When retaining
-a dual-endpoint profile, pass both endpoint flags again; omitting one removes it
-from the replacement profile. The command replaces the configuration as a
-whole, including the provider pricing selected alongside the new API key.
+both protocol providers, pass both provider flags again; omitting one removes it
+from the replacement configuration. The command replaces the configuration as
+a whole, including provider pricing selected alongside the new API keys.
 Before restarting, review the new pricing and limits against the saved backup,
 and keep the existing `ledger_path` so billing continues to read your history.
 Remove unused old entries later in Keychain Access if desired. A failed setup

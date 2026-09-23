@@ -3,11 +3,13 @@
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. A legacy profile
 can keep one `base_url`, whose provider protocol TideMux detects at startup.
-New profiles may instead configure protocol-keyed `endpoints.openai` and
-`endpoints.anthropic` roots. When both are present, each client protocol prefers
-its matching native upstream; when only one is present, the other client route
-uses the existing translator. Credentials, gateway authentication, model
-identity and the local ledger remain shared.
+New profiles may instead configure independent protocol-keyed
+`providers.openai` and `providers.anthropic` records. Each provider owns its API
+root, Keychain reference, default model, billing identity, model limits and
+prices. When both are present, each client protocol routes strictly to its
+matching provider; when only one is present, the other client route uses the
+existing translator. Gateway authentication, active-session limits and the
+local ledger remain shared.
 
 Detection is local for recognized roots such as OpenAI, Anthropic and the
 DeepSeek preset. For another root, TideMux sends an authenticated `GET` to
@@ -30,16 +32,17 @@ is available, `serve` stops with an actionable configuration error.
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
 The client endpoints are independent of upstream selection. A profile with one
-configured endpoint continues to support both clients through pass-through or
-translation. A profile with both endpoints routes each client to its matching
-endpoint. Each endpoint's `GET /models` response is used for that client route
-only when it is a complete, recognized OpenAI or Anthropic model list. Requests
-for a model absent from a recognized endpoint list receive `model_not_found`
-before an upstream completion is sent. If an endpoint does not expose a
-complete recognizable list, its route returns an empty model catalogue and
-does not claim the configured default model is available; direct requests are
-still passed to that endpoint. Existing profiles that explicitly contain
-`"protocol": "openai"` or `"protocol": "anthropic"` remain compatible.
+configured provider continues to support both clients through pass-through or
+translation. A profile with both providers routes each client to its matching
+provider, with no cross-provider retry. Each provider's `GET /models` response
+is used only on its client route when it is a complete, recognized model list.
+Requests for a model absent from a recognized provider list receive
+`model_not_found` before an upstream completion is sent. If a provider does not
+expose a complete recognizable list, its route returns an empty model catalogue
+and does not claim its configured default model is available; direct requests
+are still sent to that provider. Existing single-provider profiles that
+explicitly contain `"protocol": "openai"` or `"protocol": "anthropic"` remain
+compatible.
 
 The translation boundary covers text, system/developer instructions, tools,
 tool calls/results, stop sequences, output schemas and streaming terminal

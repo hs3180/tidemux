@@ -46,22 +46,25 @@ func resolveProviderProtocol(c Config, httpClient *http.Client) (string, string,
 	return detected, apiVersion, nil
 }
 
-// resolveProviderEndpoints returns the protocol-indexed endpoints used by the
+// resolveProviders returns the independent provider profiles used by the
 // gateway. Legacy profiles still resolve their single API root exactly as
-// before; named endpoints have a protocol supplied by their map key.
-func resolveProviderEndpoints(c Config, httpClient *http.Client) (map[string]ProviderEndpoint, error) {
-	if len(c.Endpoints) != 0 {
-		resolved := make(map[string]ProviderEndpoint, len(c.Endpoints))
-		for protocol, endpoint := range c.Endpoints {
+// before; named providers have a protocol supplied by their map key.
+func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, error) {
+	if len(c.Providers) != 0 {
+		resolved := make(map[string]Provider, len(c.Providers))
+		for protocol, provider := range c.Providers {
 			if protocol == "anthropic" {
-				if endpoint.APIVersion == "" {
-					endpoint.APIVersion = defaultAnthropicAPIVersion
+				if provider.APIVersion == "" {
+					provider.APIVersion = defaultAnthropicAPIVersion
 				}
-				if _, err := time.Parse("2006-01-02", endpoint.APIVersion); err != nil {
-					return nil, errors.New("endpoints.anthropic.anthropic_version must be YYYY-MM-DD")
+				if _, err := time.Parse("2006-01-02", provider.APIVersion); err != nil {
+					return nil, errors.New("providers.anthropic.anthropic_version must be YYYY-MM-DD")
 				}
 			}
-			resolved[protocol] = endpoint
+			if provider.UpstreamID == "" {
+				provider.UpstreamID = protocol
+			}
+			resolved[protocol] = provider
 		}
 		return resolved, nil
 	}
@@ -70,11 +73,15 @@ func resolveProviderEndpoints(c Config, httpClient *http.Client) (map[string]Pro
 	if err != nil {
 		return nil, err
 	}
-	return map[string]ProviderEndpoint{
+	return map[string]Provider{
 		protocol: {
-			BaseURL:    c.BaseURL,
-			APIVersion: apiVersion,
-			APIKey:     c.APIKey,
+			BaseURL:           c.BaseURL,
+			APIVersion:        apiVersion,
+			APIKey:            c.APIKey,
+			Model:             c.Model,
+			UpstreamID:        c.UpstreamID,
+			ModelCapabilities: c.ModelCapabilities,
+			Prices:            c.Prices,
 		},
 	}, nil
 }
@@ -82,7 +89,7 @@ func resolveProviderEndpoints(c Config, httpClient *http.Client) (map[string]Pro
 // discoverProviderModels makes a bounded, redirect-free GET /models request.
 // A false second result means the endpoint does not expose a complete,
 // recognizable model list, so callers must not claim model availability.
-func discoverProviderModels(endpoint ProviderEndpoint, protocol string, httpClient *http.Client) ([]string, bool) {
+func discoverProviderModels(endpoint Provider, protocol string, httpClient *http.Client) ([]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint.BaseURL, "/")+"/models", nil)

@@ -40,6 +40,7 @@ configuration examples:
   tidemux configure --preset deepseek-flash [options]
   tidemux configure --base-url URL --model ID [pricing options]
   tidemux configure --openai-base-url URL --anthropic-base-url URL --model ID
+  tidemux configure --openai-base-url URL --openai-model ID --anthropic-base-url URL --anthropic-model ID
 
 common examples:
   tidemux configure --preset deepseek-flash

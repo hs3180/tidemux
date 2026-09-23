@@ -1,8 +1,10 @@
 {
   "listen_addr": "127.0.0.1:4000",
-  "endpoints": {
+  "providers": {
     "openai": {
       "base_url": "https://provider.example/openai/v1",
+      "model": "openai-model-id",
+      "upstream_id": "openai-provider",
       "upstream_keychain": {
         "service": "com.tidemux.provider",
         "account": "openai-key"
@@ -11,14 +13,14 @@
     "anthropic": {
       "base_url": "https://provider.example/anthropic/v1",
       "anthropic_version": "2023-06-01",
+      "model": "anthropic-model-id",
+      "upstream_id": "anthropic-provider",
       "upstream_keychain": {
         "service": "com.tidemux.provider",
         "account": "anthropic-key"
       }
     }
   },
-  "model": "replace-with-your-model-id",
-  "upstream_id": "provider-primary",
   "access_token_keychain": {
     "service": "com.tidemux.gateway",
     "account": "default"

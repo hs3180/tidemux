@@ -73,7 +73,7 @@ func TestConfigureSavesReferencesAndRollsBack(t *testing.T) {
 	}
 }
 
-func TestSaveDualEndpointConfigurationSharesOrSeparatesKeychainItems(t *testing.T) {
+func TestSaveIndependentProviderConfigurationSharesOrSeparatesKeychainItems(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		openAIKey    string
@@ -88,11 +88,11 @@ func TestSaveDualEndpointConfigurationSharesOrSeparatesKeychainItems(t *testing.
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.json")
 			c := gateway.Config{
-				ListenAddr: "127.0.0.1:8787", Model: "model", UpstreamID: "provider-primary", MaxInFlight: 1,
+				ListenAddr: "127.0.0.1:8787", MaxInFlight: 1,
 				LedgerPath: filepath.Join(dir, "ledger.db"),
-				Endpoints: map[string]gateway.ProviderEndpoint{
-					"openai":    {BaseURL: "https://provider.example/openai/v1"},
-					"anthropic": {BaseURL: "https://provider.example/anthropic/v1"},
+				Providers: map[string]gateway.Provider{
+					"openai":    {BaseURL: "https://provider.example/openai/v1", Model: "openai-model", UpstreamID: "openai"},
+					"anthropic": {BaseURL: "https://provider.example/anthropic/v1", Model: "anthropic-model", UpstreamID: "anthropic"},
 				},
 			}
 			secrets := &memorySecrets{values: map[string]string{}}
@@ -107,14 +107,14 @@ func TestSaveDualEndpointConfigurationSharesOrSeparatesKeychainItems(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			openAIRef := loaded.Endpoints["openai"].UpstreamKeychain
-			anthropicRef := loaded.Endpoints["anthropic"].UpstreamKeychain
+			openAIRef := loaded.Providers["openai"].UpstreamKeychain
+			anthropicRef := loaded.Providers["anthropic"].UpstreamKeychain
 			if (openAIRef == anthropicRef) != test.shared {
 				t.Fatalf("shared refs=%v openai=%+v anthropic=%+v", openAIRef == anthropicRef, openAIRef, anthropicRef)
 			}
 			resolved, err := loaded.ResolveCredentials(context.Background(), secrets)
-			if err != nil || resolved.Endpoints["openai"].APIKey != test.openAIKey || resolved.Endpoints["anthropic"].APIKey != test.anthropicKey {
-				t.Fatalf("resolved endpoint keys mismatch: err=%v", err)
+			if err != nil || resolved.Providers["openai"].APIKey != test.openAIKey || resolved.Providers["anthropic"].APIKey != test.anthropicKey {
+				t.Fatalf("resolved provider keys mismatch: err=%v", err)
 			}
 			data, err := os.ReadFile(path)
 			if err != nil || strings.Contains(string(data), "provider-key") {
