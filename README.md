@@ -31,38 +31,27 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
 
-### 1. Configure DeepSeek
+### 1. Add providers
 
-In the current build, configure the single-provider compatibility mode for
-Kilo CLI or Hermes Agent:
-
-```sh
-tidemux configure --base-url https://api.deepseek.com --model deepseek-flash
-```
-
-TideMux detects the upstream protocol from the API root and exposes both client
-APIs, translating between them when needed. To use DeepSeek's
-Anthropic-compatible API as that endpoint, set its root and model explicitly:
+The target 0.2.0 CLI uses one provider per upstream API protocol. To use both
+client protocols with DeepSeek, add one endpoint for each; TideMux infers each
+provider's protocol and makes the first provider for that protocol its default:
 
 ```sh
-tidemux configure --base-url https://api.deepseek.com/anthropic/v1 \
-  --model deepseek-flash
+tidemux provider add https://api.deepseek.com --model deepseek-flash
+tidemux provider add https://api.deepseek.com/anthropic/v1 --model deepseek-flash
 ```
 
-For another provider, run `tidemux configure` without flags for guided setup.
-Enter the provider API Base URL and API key; TideMux derives a name from the
-URL, detects the upstream protocol and discovers models when possible. It allows
-all model IDs by default: press Enter at the optional model-scope prompt, or
-enter a subset to restrict which IDs TideMux forwards. The upstream still
-determines which models are actually available. For command-line setup in the
-current build, use
-`--provider NAME,BASE_URL,MODEL` (add a protocol to force it) and, only when
-needed, `--provider-models NAME,MODEL[,MODEL...]` (include the fallback model).
-The key is still entered at a hidden prompt. In the current build, named
-providers are protocol-specific; configure one for each client protocol and
-select the desired defaults. This setup syntax is being replaced by the
-resource-oriented provider commands described below. See
-[configuration](docs/configure.md) for options available in the current build.
+Each command prompts for its API key without echo. Provider references and
+readable labels are generated from the endpoint; no provider name is required.
+All models are allowed by default. `--model` selects the fallback for clients
+that omit a model; it does not restrict the allowed model list. Use
+`tidemux provider models REF --only MODEL[,MODEL...]` only when you want to
+restrict that list. To configure just one protocol, add only its endpoint.
+
+These examples describe the target 0.2.0 interface. The executable still uses
+the old `configure` entry point until the provider subcommands are implemented;
+that command is not the target interface.
 
 ### 2. Start the gateway
 
@@ -76,9 +65,9 @@ Next time, just run `tidemux serve` to reuse your configuration.
 
 ### 3. Launch your client
 
-In another terminal, from your project directory, run the client you want. In
-the single-provider compatibility mode, both client APIs are exposed and
-TideMux detects the upstream protocol automatically:
+In another terminal, from your project directory, run the client you want. With
+both protocol routes configured, TideMux sends each client to the corresponding
+default provider:
 
 ```sh
 # Anthropic API client
@@ -110,15 +99,14 @@ For client invocation options and setup details, see [client setup](docs/clients
 ## Compatibility
 
 The 0.2.0 development line exposes OpenAI Chat Completions and Anthropic
-Messages client APIs simultaneously. In single-provider compatibility mode
-(selected with `--base-url`/`--model`), either client protocol can use the
-upstream through translation. Guided setup creates a named provider
-with one upstream protocol; it serves the matching client protocol only. To
-route both client protocols to separate endpoints, configure one named provider
-for each protocol and choose their defaults. Gateway auth, session limits and
-ledger accounting remain shared. The three CLIs have passed DeepSeek file
-read/edit/test and continued-conversation workflows. Other compatible providers
-can be configured, though they have not all been tested.
+Messages client APIs simultaneously. Each provider has one upstream protocol;
+requests route to that protocol's default provider. To serve both client APIs,
+configure one provider for each protocol—even when both endpoints belong to the
+same service. The gateway performs supported field conversions at the protocol
+boundary. Gateway auth, session limits and ledger accounting remain shared. The
+three CLIs have passed DeepSeek file read/edit/test and continued-conversation
+workflows. Other compatible providers can be configured, though they have not
+all been tested.
 
 Responses API, images/audio and IDE extensions are outside this release's
 scope. Supported bidirectional Chat Completions/Messages conversion is covered
