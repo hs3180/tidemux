@@ -9,12 +9,10 @@ import (
 	"github.com/hs3180/tidemux/internal/adapter"
 )
 
-func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, source, version string, inputCacheHit, inputCacheMiss, output float64) (map[string]adapter.Price, error) {
+func configurePrices(flags *flag.FlagSet, baseURL, model, currency, source, version string, inputCacheHit, inputCacheMiss, output float64) (map[string]adapter.Price, error) {
 	prices := map[string]adapter.Price{}
-	if preset == "deepseek-flash" {
-		if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
-			prices[model] = price
-		}
+	if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
+		prices[model] = price
 	}
 	pricingFlags := []string{"pricing-currency", "pricing-source", "pricing-version", "pricing-input-cache-hit", "pricing-input-cache-miss", "pricing-output"}
 	if !flagWasSet(flags, pricingFlags...) {
@@ -44,7 +42,7 @@ func configurePrices(flags *flag.FlagSet, preset, baseURL, model, currency, sour
 func configureWizardPrices(flags *flag.FlagSet, baseURL, model, currency, source, version string, inputCacheHit, inputCacheMiss, output float64) (map[string]adapter.Price, error) {
 	pricingFlags := []string{"pricing-currency", "pricing-source", "pricing-version", "pricing-input-cache-hit", "pricing-input-cache-miss", "pricing-output"}
 	if flagWasSet(flags, pricingFlags...) {
-		return configurePrices(flags, "", baseURL, model, currency, source, version, inputCacheHit, inputCacheMiss, output)
+		return configurePrices(flags, baseURL, model, currency, source, version, inputCacheHit, inputCacheMiss, output)
 	}
 	if price, ok := adapter.BuiltInPrice(baseURL, model, time.Now()); ok {
 		return map[string]adapter.Price{model: price}, nil

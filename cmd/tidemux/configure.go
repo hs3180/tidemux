@@ -35,11 +35,9 @@ func configure(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stderr, "  Named:   --provider NAME,BASE_URL,MODEL (repeatable)")
 		fmt.Fprintln(stderr, "           or NAME,PROTOCOL,BASE_URL,MODEL to force the protocol")
 		fmt.Fprintln(stderr, "  Legacy:  --base-url URL --model ID")
-		fmt.Fprintln(stderr, "  Preset:  --preset deepseek-flash")
 		fmt.Fprintln(stderr, "Named providers support all models by default; use --provider-models to restrict the list.")
 		flags.PrintDefaults()
 	}
-	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
 	var providerFlags, providerModelFlags, defaultProviderFlags repeatedFlag
 	flags.Var(&providerFlags, "provider", "named provider NAME,BASE_URL,MODEL (auto) or NAME,PROTOCOL,BASE_URL,MODEL (forced; repeatable)")
@@ -79,22 +77,8 @@ func configure(args []string, stdout, stderr *os.File) error {
 	if len(providerModelFlags) > 0 && len(providerFlags) == 0 {
 		return errors.New("--provider-models requires command-line --provider entries")
 	}
-	if *preset != "" && *preset != "deepseek-flash" {
-		return errors.New("unknown preset; use --base-url")
-	}
-	interactiveMode := len(providerFlags) == 0 && *preset == "" && !flagWasSet(flags, "base-url", "model")
+	interactiveMode := len(providerFlags) == 0 && !flagWasSet(flags, "base-url", "model")
 	namedProviderConfig := len(providerFlags) != 0 || interactiveMode
-	if *preset == "deepseek-flash" {
-		if namedProviderConfig {
-			return errors.New("--preset cannot be combined with named --provider entries")
-		}
-		if *baseURL == "" {
-			*baseURL = "https://api.deepseek.com"
-		}
-		if *model == "" {
-			*model = "deepseek-flash"
-		}
-	}
 	if interactiveMode && len(defaultProviderFlags) != 0 {
 		return errors.New("--default-provider requires command-line --provider entries")
 	}
@@ -103,7 +87,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 			return errors.New("use either named --provider entries or the legacy --base-url/--model options")
 		}
 	} else if !interactiveMode && (*model == "" || *baseURL == "") {
-		return errors.New("use configure --preset deepseek-flash, provide --base-url/--model, or define named --provider entries")
+		return errors.New("provide both --base-url and --model, or define named --provider entries")
 	}
 	if !namedProviderConfig && len(defaultProviderFlags) != 0 {
 		return errors.New("--default-provider requires named --provider entries")
@@ -142,7 +126,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	}
 	prices := map[string]adapter.Price{}
 	if !namedProviderConfig {
-		prices, err = configurePrices(flags, *preset, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+		prices, err = configurePrices(flags, *baseURL, *model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
 		if err != nil {
 			return err
 		}
@@ -220,7 +204,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 			if wizardProvider != nil && name == wizardProvider.Name {
 				providerPrices, priceErr = configureWizardPrices(flags, provider.BaseURL, provider.Model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
 			} else {
-				providerPrices, priceErr = configurePrices(flags, "", provider.BaseURL, provider.Model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+				providerPrices, priceErr = configurePrices(flags, provider.BaseURL, provider.Model, *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
 			}
 			if priceErr != nil {
 				return fmt.Errorf("provider %s: %w", name, priceErr)

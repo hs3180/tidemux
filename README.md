@@ -33,20 +33,19 @@ Install your preferred client CLI. The example below uses **DeepSeek
 
 ### 1. Configure DeepSeek
 
-For Kilo CLI or Hermes Agent:
+For Kilo CLI or Hermes Agent, use the single-provider compatibility mode:
 
 ```sh
-tidemux configure --preset deepseek-flash
+tidemux configure --base-url https://api.deepseek.com --model deepseek-flash
 ```
 
-This preset uses the single-provider compatibility mode: TideMux detects the
-upstream protocol from the API root and exposes both client APIs, translating
-between them when needed. To use DeepSeek's Anthropic-compatible API as that
-endpoint, override the root:
+TideMux detects the upstream protocol from the API root and exposes both client
+APIs, translating between them when needed. To use DeepSeek's
+Anthropic-compatible API as that endpoint, set its root and model explicitly:
 
 ```sh
-tidemux configure --preset deepseek-flash \
-  --base-url https://api.deepseek.com/anthropic/v1
+tidemux configure --base-url https://api.deepseek.com/anthropic/v1 \
+  --model deepseek-flash
 ```
 
 For another provider, run `tidemux configure` without flags for guided setup.
@@ -75,8 +74,8 @@ Next time, just run `tidemux serve` to reuse your configuration.
 ### 3. Launch your client
 
 In another terminal, from your project directory, run the client you want. In
-the single-provider compatibility mode used by this preset, both client APIs
-are exposed and TideMux detects the upstream protocol automatically:
+the single-provider compatibility mode, both client APIs are exposed and
+TideMux detects the upstream protocol automatically:
 
 ```sh
 # Anthropic API client
@@ -109,8 +108,8 @@ For client invocation options and setup details, see [client setup](docs/clients
 
 The 0.2.0 development line exposes OpenAI Chat Completions and Anthropic
 Messages client APIs simultaneously. In single-provider compatibility mode
-(used by the preset and `--base-url`/`--model` setup), either client protocol
-can use the upstream through translation. Guided setup creates a named provider
+(selected with `--base-url`/`--model`), either client protocol can use the
+upstream through translation. Guided setup creates a named provider
 with one upstream protocol; it serves the matching client protocol only. To
 route both client protocols to separate endpoints, configure one named provider
 for each protocol and choose their defaults. Gateway auth, session limits and

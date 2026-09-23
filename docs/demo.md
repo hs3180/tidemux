@@ -20,7 +20,7 @@ verified. See [installation](install.md) for release downloads and Homebrew.
 ## Recommended: configure with the CLI
 
 ```sh
-./tidemux configure --preset deepseek-flash
+./tidemux configure --base-url https://api.deepseek.com --model deepseek-flash
 ./tidemux doctor
 ./tidemux serve
 ```
@@ -127,9 +127,10 @@ before retrying. TideMux does not automatically retry any call.
 
 ## Pricing
 
-Pricing is selected together with the provider API key by `configure`. The
-DeepSeek preset stores the fixed peak rates automatically. For another provider,
-set rates on the same command; rates are **per million tokens**:
+Pricing is selected together with the provider API key by `configure`. TideMux
+uses its verified DeepSeek rates when the endpoint and model match a built-in
+entry. For another provider, set rates on the same command; rates are **per
+million tokens**:
 
 ```sh
 tidemux configure \

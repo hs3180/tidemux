@@ -5,10 +5,10 @@ API key(s) and optional gateway API key without echo. Leave the gateway prompt
 empty to generate a random credential, or enter a custom value. Neither secret
 is accepted as a command-line argument or written into JSON.
 
-## Two provider setup modes
+## Guided and command-line setup
 
-Run `tidemux configure` without `--provider`, `--base-url`, `--model` or
-`--preset` for the guided terminal setup. It starts by asking for the provider
+Run `tidemux configure` without `--provider`, `--base-url` or `--model` for the
+guided terminal setup. It starts by asking for the provider
 API Base URL, derives a provider name from the host, then asks for the upstream
 API key using hidden input. TideMux infers the
 protocol from the endpoint or its authenticated `GET /models` response. If the
@@ -50,18 +50,22 @@ optional; omitted or empty means all models. To restrict a provider in JSON:
 ```
 
 The upstream API key remains a hidden prompt so it is not exposed in shell
-history or process listings. For command-line setup, custom models require all
-three price flags shown above. The wizard uses TideMux's built-in price only
-when the endpoint and model match a verified preset; otherwise it leaves
-pricing unknown rather than guessing. A configured budget still requires
-explicit matching prices.
+history or process listings. For command-line setup, TideMux applies a built-in
+price only when both endpoint and model match a verified entry; otherwise,
+provide all three price flags shown above. Guided setup leaves unknown pricing
+unset rather than guessing. A configured budget still requires matching prices.
+
+For a single-provider compatibility profile that exposes both client protocols
+and translates to the configured upstream protocol, use `--base-url URL
+--model ID`. Use `--provider` when you want a named provider that serves only
+clients using its detected or explicitly selected protocol.
 
 ## DeepSeek Flash: three commands
 
 Run the installed CLI (or replace `tidemux` with `./tidemux` for an extracted binary):
 
 ```sh
-tidemux configure --preset deepseek-flash
+tidemux configure --base-url https://api.deepseek.com --model deepseek-flash
 tidemux doctor
 tidemux serve
 ```
@@ -99,10 +103,9 @@ profiles. If an existing profile contains conflicting legacy budget fields,
 replace it with the new schema using `tidemux budget` or recreate it with
 `tidemux configure --replace`.
 
-1. `configure` selects the shared provider API root and model. The DeepSeek preset
-   uses `https://api.deepseek.com` and `deepseek-flash`; TideMux automatically
-   detects the provider protocol from that root. To use DeepSeek's Anthropic
-   compatible API, override the root with
+1. `configure` selects the shared provider API root and model from the supplied
+   `--base-url` and `--model` options. TideMux automatically detects the provider
+   protocol from the endpoint. To use DeepSeek's Anthropic-compatible API, set
    `--base-url https://api.deepseek.com/anthropic/v1`. Before the **API key (hidden)** prompt, TideMux asks for a
    daily report notification time in local time (`HH:MM`). Enter a time to enable
    scheduled notifications, or press Enter to leave them disabled. At the API-key
@@ -135,7 +138,8 @@ output, or `--download billing.csv` to save the selected period's billing detail
 The notification choice can also be supplied on the initial configure command:
 
 ```sh
-tidemux configure --preset deepseek-flash --notification-time 09:00
+tidemux configure --base-url https://api.deepseek.com --model deepseek-flash \
+  --notification-time 09:00
 ```
 
 The time uses the Mac's local timezone, and scheduled notifications use macOS
@@ -148,7 +152,7 @@ the local network reach the gateway, select the external mode by setting the
 listen address to `0.0.0.0`:
 
 ```sh
-tidemux configure --preset deepseek-flash \
+tidemux configure --base-url https://api.deepseek.com --model deepseek-flash \
   --listen 0.0.0.0:4000
 ```
 
@@ -189,7 +193,7 @@ Use `--max-active-sessions` during `configure` to cap distinct logical sessions
 for the local gateway:
 
 ```sh
-tidemux configure --preset deepseek-flash \
+tidemux configure --base-url https://api.deepseek.com --model deepseek-flash \
   --max-active-sessions 20 \
   --active-session-idle-timeout-seconds 300
 ```
@@ -240,8 +244,8 @@ To switch the current local gateway to Anthropic format, stop it with Control-C
 and replace the local configuration:
 
 ```sh
-tidemux configure --preset deepseek-flash \
-  --base-url https://api.deepseek.com/anthropic/v1 --replace
+tidemux configure --base-url https://api.deepseek.com/anthropic/v1 \
+  --model deepseek-flash --replace
 tidemux doctor
 tidemux serve
 ```
@@ -267,8 +271,8 @@ tidemux configure \
 
 Include the endpoint's version/path prefix. TideMux detects whether the endpoint
 uses OpenAI or Anthropic format from its API root/model discovery; no protocol
-flag is needed. Model IDs are not limited to a preset. Prices are per million
-tokens. The three rates are input cache hit, input cache miss and output;
+flag is needed. Model IDs are not limited to built-in price entries. Prices are
+per million tokens. The three rates are input cache hit, input cache miss and output;
 `--pricing-currency` defaults to `USD`, while source and version default to
 `manual-cli` and `manual`. `--max-in-flight 2` changes the explicit concurrency cap.
 To replace an existing local setup,
@@ -365,10 +369,10 @@ python3 scripts/verify_live.py \
   --disable-thinking --output /tmp/tidemux-live-openai.json
 ```
 
-The configured provider profile always carries its pricing. `configure --preset
-deepseek-flash` uses TideMux's fixed peak DeepSeek preset. For another provider,
-pass `--pricing-input-cache-hit`, `--pricing-input-cache-miss`, and
-`--pricing-output` when setting the API key; use `--pricing-source` and
+The configured provider profile always carries its pricing when known. The
+verified DeepSeek rates are selected automatically when the endpoint and model
+match a built-in entry. For another provider, pass `--pricing-input-cache-hit`,
+`--pricing-input-cache-miss`, and `--pricing-output` when setting the API key; use `--pricing-source` and
 `--pricing-version` for the verified reference. See [pricing and live
 verification](demo.md). Never repeat a live
 request solely to fix a documentation step without considering its API cost.

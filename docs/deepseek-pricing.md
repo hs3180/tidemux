@@ -1,11 +1,11 @@
 # DeepSeek pricing (USD)
 
-TideMux's DeepSeek preset uses the [English official pricing page](https://api-docs.deepseek.com/quick_start/pricing/), checked on **2026-09-12**.
-The preset intentionally uses the peak rates for **deepseek-flash** (DeepSeek-V4.1-Flash)
-and is denominated in USD per one million tokens. It does not switch rates by clock
+TideMux's built-in DeepSeek rates use the [English official pricing page](https://api-docs.deepseek.com/quick_start/pricing/), checked on **2026-09-12**.
+They intentionally use the peak rates for **deepseek-flash** (DeepSeek-V4.1-Flash),
+denominated in USD per one million tokens. TideMux does not switch rates by clock
 or replace the provider's statement.
 
-| Usage | Peak preset |
+| Usage | Peak rate |
 | --- | ---: |
 | Input, cache miss | $0.30 |
 | Input, cache hit | $0.006 |
@@ -16,9 +16,9 @@ the price snapshot used when they were written.
 
 ## Configure with the API key
 
-`configure --preset deepseek-flash` stores the peak preset in the provider profile at
-the same time it stores the API key reference. The `budget` command never edits
-or asks for pricing.
+When `configure` receives a matching DeepSeek endpoint and model, it stores these
+rates in the provider profile alongside the API key reference. The `budget`
+command never edits or asks for pricing.
 
 For a custom provider or a deliberate override, set rates on `configure`:
 

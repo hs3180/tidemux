@@ -260,9 +260,9 @@ func TestLoopbackListenAddress(t *testing.T) {
 	}
 }
 
-func TestConfigurePricesUsesPeakDeepSeekPreset(t *testing.T) {
+func TestConfigurePricesUsesBuiltInPriceForKnownEndpointAndModel(t *testing.T) {
 	flags, currency, source, version, cacheHit, cacheMiss, output := pricingTestFlags(t)
-	prices, err := configurePrices(flags, "deepseek-flash", "https://api.deepseek.com", "deepseek-flash", *currency, *source, *version, *cacheHit, *cacheMiss, *output)
+	prices, err := configurePrices(flags, "https://api.deepseek.com", "deepseek-flash", *currency, *source, *version, *cacheHit, *cacheMiss, *output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestConfigurePricesUsesPeakDeepSeekPreset(t *testing.T) {
 
 func TestConfigurePricesAcceptsCustomCommandLineRates(t *testing.T) {
 	flags, currency, source, version, cacheHit, cacheMiss, output := pricingTestFlags(t, "--pricing-currency", "CNY", "--pricing-source", "provider-docs", "--pricing-version", "2026-09-20", "--pricing-input-cache-hit", "0.5", "--pricing-input-cache-miss", "2.5", "--pricing-output", "7.5")
-	prices, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output)
+	prices, err := configurePrices(flags, "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,13 +284,13 @@ func TestConfigurePricesAcceptsCustomCommandLineRates(t *testing.T) {
 	}
 }
 
-func TestConfigurePricesRequiresCustomRatesForNonPreset(t *testing.T) {
+func TestConfigurePricesRequiresCustomRatesForUnknownProvider(t *testing.T) {
 	flags, currency, source, version, cacheHit, cacheMiss, output := pricingTestFlags(t)
-	if _, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output); err == nil || !strings.Contains(err.Error(), "pricing is required") {
+	if _, err := configurePrices(flags, "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output); err == nil || !strings.Contains(err.Error(), "pricing is required") {
 		t.Fatalf("error=%v", err)
 	}
 	flags, currency, source, version, cacheHit, cacheMiss, output = pricingTestFlags(t, "--pricing-input-cache-miss", "1")
-	if _, err := configurePrices(flags, "", "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output); err == nil || !strings.Contains(err.Error(), "requires --pricing-input-cache-hit, --pricing-input-cache-miss and --pricing-output") {
+	if _, err := configurePrices(flags, "https://provider.example/v1", "custom-model", *currency, *source, *version, *cacheHit, *cacheMiss, *output); err == nil || !strings.Contains(err.Error(), "requires --pricing-input-cache-hit, --pricing-input-cache-miss and --pricing-output") {
 		t.Fatalf("partial error=%v", err)
 	}
 }
@@ -472,8 +472,8 @@ func promptTestFiles(t *testing.T, input string) (*os.File, *os.File) {
 	return in, out
 }
 
-func TestConfigureRejectsOldDeepSeekPresetName(t *testing.T) {
-	if err := configure([]string{"--preset", "deepseek"}, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "unknown preset") {
+func TestConfigureRejectsRemovedPresetFlag(t *testing.T) {
+	if err := configure([]string{"--preset", "deepseek-flash"}, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("error=%v", err)
 	}
 }

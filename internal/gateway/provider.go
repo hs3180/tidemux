@@ -326,8 +326,8 @@ func providerProtocolHint(baseURL string) string {
 	if strings.Contains(haystack, "openai") {
 		return "openai"
 	}
-	// The built-in DeepSeek preset is OpenAI-compatible unless its explicit
-	// /anthropic/ path matched above. This keeps the preset usable even when a
+	// DeepSeek's base endpoint is OpenAI-compatible unless its explicit
+	// /anthropic/ path matched above. This keeps the endpoint usable even when a
 	// provider deployment does not expose model discovery.
 	if strings.Contains(haystack, "deepseek") {
 		return "openai"

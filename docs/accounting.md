@@ -60,9 +60,9 @@ cost = (input_cache_miss × input_cache_miss_rate
 Cache creation/write tokens are included in `input_cache_miss`; there is no
 separate cache-write price.
 
-Rates are stored per model with currency, source and version. The DeepSeek
-preset supplies one fixed peak price for supported models; custom `prices`
-entries are selected by `configure` and override the preset. There is no
+Rates are stored per model with currency, source and version. TideMux supplies a
+fixed peak price for recognized DeepSeek endpoints and models; custom `prices`
+entries selected by `configure` override those built-in rates. There is no
 generic price discovery, default currency, or provider discount calculation.
 The gateway's configuration supplies the upstream context. Successful requests
 retain a copy of the selected price with their record, so later configuration
@@ -237,7 +237,7 @@ measurements have been recorded.
 An optional `budget` config section applies to one ledger and one currency. It
 does not convert currencies. A matching configured `prices` entry for the
 configured model is required whenever `budget` is enabled. DeepSeek's peak
-preset and custom rates are written by `configure` alongside the provider API
+built-in and custom rates are written by `configure` alongside the provider API
 key; `budget` only changes limits. If pricing is absent or uses another
 currency, TideMux refuses to start and never sends an upstream request. Budget
 windows are rolling five-hour and seven-day periods.
