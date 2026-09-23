@@ -11,39 +11,43 @@ import (
 
 func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T) {
 	openAICalls, anthropicCalls := 0, 0
-	openAIUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			if r.URL.Path != "/openai/v1/models" || r.Header.Get("Authorization") != "Bearer openai-provider-key" {
-				t.Errorf("OpenAI model discovery request = %s %s auth=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+			if r.URL.Path != "/shared/v1/models" {
+				t.Errorf("model discovery path=%s", r.URL.Path)
 			}
-			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"openai-only","object":"model"}]}`)
+			if r.Header.Get("Authorization") == "Bearer openai-provider-key" {
+				_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"openai-only","object":"model"}]}`)
+				return
+			}
+			if r.Header.Get("x-api-key") == "anthropic-provider-key" && r.Header.Get("anthropic-version") == defaultAnthropicAPIVersion {
+				_, _ = io.WriteString(w, `{"data":[{"id":"anthropic-only","type":"model"}],"has_more":false}`)
+				return
+			}
+			t.Errorf("unexpected discovery credentials auth=%q x-api-key=%q version=%q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
 			return
 		}
-		openAICalls++
-		if r.URL.Path != "/openai/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer openai-provider-key" || r.Header.Get("x-api-key") != "" {
-			t.Errorf("OpenAI request = %s %s auth=%q x-api-key=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
-		}
-		_, _ = io.WriteString(w, responseBody("openai"))
-	}))
-	defer openAIUpstream.Close()
-	anthropicUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			if r.URL.Path != "/anthropic/v1/models" || r.Header.Get("x-api-key") != "anthropic-provider-key" || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion {
-				t.Errorf("Anthropic model discovery request = %s %s x-api-key=%q version=%q", r.Method, r.URL.Path, r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
+		switch r.URL.Path {
+		case "/shared/v1/chat/completions":
+			openAICalls++
+			if r.Header.Get("Authorization") != "Bearer openai-provider-key" || r.Header.Get("x-api-key") != "" {
+				t.Errorf("OpenAI request auth=%q x-api-key=%q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
 			}
-			_, _ = io.WriteString(w, `{"data":[{"id":"anthropic-only","type":"model"}],"has_more":false}`)
-			return
+			_, _ = io.WriteString(w, responseBody("openai"))
+		case "/shared/v1/messages":
+			anthropicCalls++
+			if r.Header.Get("x-api-key") != "anthropic-provider-key" || r.Header.Get("Authorization") != "" {
+				t.Errorf("Anthropic request x-api-key=%q auth=%q", r.Header.Get("x-api-key"), r.Header.Get("Authorization"))
+			}
+			_, _ = io.WriteString(w, responseBody("anthropic"))
+		default:
+			t.Errorf("unexpected upstream path=%s", r.URL.Path)
 		}
-		anthropicCalls++
-		if r.URL.Path != "/anthropic/v1/messages" || r.Header.Get("x-api-key") != "anthropic-provider-key" || r.Header.Get("Authorization") != "" {
-			t.Errorf("Anthropic request = %s %s x-api-key=%q auth=%q", r.Method, r.URL.Path, r.Header.Get("x-api-key"), r.Header.Get("Authorization"))
-		}
-		_, _ = io.WriteString(w, responseBody("anthropic"))
 	}))
-	defer anthropicUpstream.Close()
+	defer upstream.Close()
 
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-	c.BaseURL = ""
+	c.BaseURL = upstream.URL + "/shared/v1"
 	c.Protocol = ""
 	c.APIVersion = ""
 	c.APIKey = ""
@@ -54,17 +58,17 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 	c.Prices = nil
 	c.Providers = map[string]Provider{
 		"openai": {
-			BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key",
-			Model: "openai-only", UpstreamID: "openai-provider",
+			APIKey: "openai-provider-key",
+			Model:  "openai-only", UpstreamID: "openai-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 		},
 		"anthropic": {
-			BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key",
-			Model: "anthropic-only", UpstreamID: "anthropic-provider",
+			APIKey: "anthropic-provider-key",
+			Model:  "anthropic-only", UpstreamID: "anthropic-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 		},
 	}
-	h, closeGateway, err := NewHandler(c, openAIUpstream.Client())
+	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +175,7 @@ func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	defer upstream.Close()
 
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-	c.BaseURL = ""
+	c.BaseURL = upstream.URL + "/shared/v1"
 	c.Protocol = ""
 	c.APIVersion = ""
 	c.APIKey = ""
@@ -182,8 +186,8 @@ func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	c.Prices = nil
 	c.Providers = map[string]Provider{
 		"openai": {
-			BaseURL: upstream.URL + "/openai/v1", APIKey: "openai-provider-key",
-			Model: "openai-model", UpstreamID: "openai-provider",
+			APIKey: "openai-provider-key",
+			Model:  "openai-model", UpstreamID: "openai-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 		},
 	}
@@ -202,7 +206,7 @@ func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), `"type":"message"`) {
 		t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
 	}
-	if providerPath != "/openai/v1/chat/completions" || providerAuth != "Bearer openai-provider-key" || !strings.Contains(providerBody, `"messages"`) {
+	if providerPath != "/shared/v1/chat/completions" || providerAuth != "Bearer openai-provider-key" || !strings.Contains(providerBody, `"messages"`) {
 		t.Fatalf("fallback path=%q auth=%q body=%s", providerPath, providerAuth, providerBody)
 	}
 }
@@ -213,35 +217,35 @@ func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	openAICalls, anthropicCalls := 0, 0
-	openAIUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+			if r.Header.Get("Authorization") == "Bearer openai-provider-key" {
+				_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+			} else {
+				_, _ = io.WriteString(w, `{"data":[{"id":"custom-model","type":"model"}],"has_more":false}`)
+			}
 			return
 		}
-		openAICalls++
-		if r.URL.Path != "/openai/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer openai-provider-key" {
-			t.Errorf("OpenAI stream request = %s %s auth=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, openAIStream)
-	}))
-	defer openAIUpstream.Close()
-	anthropicUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, `{"data":[{"id":"custom-model","type":"model"}],"has_more":false}`)
+		if r.URL.Path == "/shared/v1/chat/completions" {
+			openAICalls++
+			if r.Header.Get("Authorization") != "Bearer openai-provider-key" {
+				t.Errorf("OpenAI stream auth=%q", r.Header.Get("Authorization"))
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, openAIStream)
 			return
 		}
 		anthropicCalls++
-		if r.URL.Path != "/anthropic/v1/messages" || r.Header.Get("x-api-key") != "anthropic-provider-key" || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion {
+		if r.URL.Path != "/shared/v1/messages" || r.Header.Get("x-api-key") != "anthropic-provider-key" || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion {
 			t.Errorf("Anthropic stream request = %s %s x-api-key=%q version=%q", r.Method, r.URL.Path, r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, anthropicStream)
 	}))
-	defer anthropicUpstream.Close()
+	defer upstream.Close()
 
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-	c.BaseURL = ""
+	c.BaseURL = upstream.URL + "/shared/v1"
 	c.Protocol = ""
 	c.APIVersion = ""
 	c.APIKey = ""
@@ -251,10 +255,10 @@ func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
 	c.Providers = map[string]Provider{
-		"openai":    {BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-		"anthropic": {BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+		"openai":    {APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic": {APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 	}
-	h, closeGateway, err := NewHandler(c, openAIUpstream.Client())
+	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,37 +297,34 @@ func TestIndependentProviderFailureDoesNotRetryOtherProvider(t *testing.T) {
 	for _, failedProtocol := range []string{"openai", "anthropic"} {
 		t.Run(failedProtocol, func(t *testing.T) {
 			calls := map[string]int{"openai": 0, "anthropic": 0}
-			openAIUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet {
-					_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+					if r.Header.Get("Authorization") == "Bearer openai-provider-key" {
+						_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+					} else {
+						_, _ = io.WriteString(w, `{"data":[{"id":"custom-model","type":"model"}],"has_more":false}`)
+					}
 					return
 				}
-				calls["openai"]++
-				if failedProtocol == "openai" {
+				protocol := "openai"
+				if r.URL.Path == "/shared/v1/messages" {
+					protocol = "anthropic"
+				} else if r.URL.Path != "/shared/v1/chat/completions" {
+					t.Errorf("unexpected upstream path=%s", r.URL.Path)
+					return
+				}
+				calls[protocol]++
+				if protocol == failedProtocol {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					_, _ = io.WriteString(w, `{"error":{"message":"temporarily unavailable"}}`)
 					return
 				}
-				_, _ = io.WriteString(w, responseBody("openai"))
+				_, _ = io.WriteString(w, responseBody(protocol))
 			}))
-			defer openAIUpstream.Close()
-			anthropicUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodGet {
-					_, _ = io.WriteString(w, `{"data":[{"id":"custom-model","type":"model"}],"has_more":false}`)
-					return
-				}
-				calls["anthropic"]++
-				if failedProtocol == "anthropic" {
-					w.WriteHeader(http.StatusServiceUnavailable)
-					_, _ = io.WriteString(w, `{"error":{"message":"temporarily unavailable"}}`)
-					return
-				}
-				_, _ = io.WriteString(w, responseBody("anthropic"))
-			}))
-			defer anthropicUpstream.Close()
+			defer upstream.Close()
 
 			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
-			c.BaseURL = ""
+			c.BaseURL = upstream.URL + "/shared/v1"
 			c.Protocol = ""
 			c.APIVersion = ""
 			c.APIKey = ""
@@ -333,10 +334,10 @@ func TestIndependentProviderFailureDoesNotRetryOtherProvider(t *testing.T) {
 			c.ModelCapabilities = ModelCapabilities{}
 			c.Prices = nil
 			c.Providers = map[string]Provider{
-				"openai":    {BaseURL: openAIUpstream.URL + "/openai/v1", APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-				"anthropic": {BaseURL: anthropicUpstream.URL + "/anthropic/v1", APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+				"openai":    {APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+				"anthropic": {APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 			}
-			h, closeGateway, err := NewHandler(c, openAIUpstream.Client())
+			h, closeGateway, err := NewHandler(c, upstream.Client())
 			if err != nil {
 				t.Fatal(err)
 			}

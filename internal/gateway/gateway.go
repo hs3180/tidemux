@@ -70,9 +70,9 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
 	for protocol, provider := range providers {
-		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		clients[protocol] = &adapter.Client{Protocol: protocol, BaseURL: c.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		if !legacySingleProvider {
-			models[protocol], modelsKnown[protocol] = discoverProviderModels(provider, protocol, httpClient)
+			models[protocol], modelsKnown[protocol] = discoverProviderModels(c.BaseURL, provider, protocol, httpClient)
 		}
 		if legacySingleProvider && !modelsKnown[protocol] {
 			models[protocol] = []string{provider.Model}
@@ -113,7 +113,7 @@ func (h *handler) clientForRequestProtocol(protocol string) *adapter.Client {
 }
 
 func (h *handler) providerProtocolForRequest(protocol string) string {
-	if h.providers[protocol].BaseURL != "" {
+	if _, ok := h.providers[protocol]; ok {
 		return protocol
 	}
 	if len(h.providers) == 1 {
@@ -207,7 +207,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelDetail := strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/")
 	if r.Method == "GET" && (modelList || modelDetail) {
 		provider := h.providerForRequestProtocol(protocol)
-		if provider.BaseURL == "" {
+		if h.providerProtocolForRequest(protocol) == "" {
 			h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 			return
 		}
@@ -267,7 +267,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	providerClient := h.clientForRequestProtocol(protocol)
 	provider := h.providerForRequestProtocol(protocol)
-	if providerClient == nil || provider.BaseURL == "" {
+	if providerClient == nil || h.providerProtocolForRequest(protocol) == "" {
 		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 		return
 	}

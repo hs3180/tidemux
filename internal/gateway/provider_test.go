@@ -126,8 +126,8 @@ func TestDiscoverProviderModelsUsesEndpointProtocolAndAuth(t *testing.T) {
 				_, _ = w.Write([]byte(test.body))
 			}))
 			defer server.Close()
-			endpoint := Provider{BaseURL: server.URL + "/v1", APIKey: "endpoint-secret", APIVersion: "2024-01-01"}
-			models, known := discoverProviderModels(endpoint, test.protocol, server.Client())
+			endpoint := Provider{APIKey: "endpoint-secret", APIVersion: "2024-01-01"}
+			models, known := discoverProviderModels(server.URL+"/v1", endpoint, test.protocol, server.Client())
 			if !known || strings.Join(models, ",") != test.want {
 				t.Fatalf("models=%v known=%v", models, known)
 			}
@@ -141,7 +141,7 @@ func TestDiscoverProviderModelsDoesNotTrustPartialPage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	models, known := discoverProviderModels(Provider{BaseURL: server.URL + "/v1", APIKey: "endpoint-secret"}, "openai", server.Client())
+	models, known := discoverProviderModels(server.URL+"/v1", Provider{APIKey: "endpoint-secret"}, "openai", server.Client())
 	if known || len(models) != 0 {
 		t.Fatalf("partial model page was treated as authoritative: models=%v known=%v", models, known)
 	}

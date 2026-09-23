@@ -42,8 +42,7 @@ func configure(args []string, stdout, stderr *os.File) error {
 	flags.SetOutput(stderr)
 	preset := flags.String("preset", "", "optional preset: deepseek-flash")
 	baseURL := flags.String("base-url", "", "API root including version prefix")
-	openAIBaseURL := flags.String("openai-base-url", "", "OpenAI-compatible upstream API root")
-	anthropicBaseURL := flags.String("anthropic-base-url", "", "Anthropic-compatible upstream API root")
+	dualProvider := flags.Bool("dual-provider", false, "configure OpenAI and Anthropic provider profiles at the shared --base-url")
 	openAIModel := flags.String("openai-model", "", "default model for the OpenAI provider (defaults to --model)")
 	anthropicModel := flags.String("anthropic-model", "", "default model for the Anthropic provider (defaults to --model)")
 	anthropicVersion := flags.String("anthropic-version", "", "Anthropic API version (default: 2023-06-01)")
@@ -78,35 +77,26 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return errors.New("unexpected configure argument")
 	}
 	if *preset != "" && *preset != "deepseek-flash" {
-		return errors.New("unknown preset; use --base-url or protocol-specific provider flags")
+		return errors.New("unknown preset; use --base-url")
 	}
-	protocolProviderConfig := *openAIBaseURL != "" || *anthropicBaseURL != ""
+	protocolProviderConfig := *dualProvider
 	if *preset == "deepseek-flash" {
-		if !protocolProviderConfig && *baseURL == "" {
+		if *baseURL == "" {
 			*baseURL = "https://api.deepseek.com"
 		}
 		if *model == "" {
 			*model = "deepseek-flash"
 		}
 	}
-	if protocolProviderConfig && *baseURL != "" {
-		return errors.New("use --base-url or protocol-specific provider flags, not both")
-	}
 	if !protocolProviderConfig && (*model == "" || *baseURL == "") {
-		return errors.New("use configure --preset deepseek-flash, or provide --base-url/--model or protocol-specific provider flags")
+		return errors.New("use configure --preset deepseek-flash, or provide --base-url/--model; add --dual-provider to configure both protocol-specific providers")
+	}
+	if protocolProviderConfig && *baseURL == "" {
+		return errors.New("--dual-provider requires a shared --base-url")
 	}
 	providerModels := map[string]string{}
 	if protocolProviderConfig {
-		if *openAIModel != "" && *openAIBaseURL == "" {
-			return errors.New("--openai-model requires --openai-base-url")
-		}
-		if *anthropicModel != "" && *anthropicBaseURL == "" {
-			return errors.New("--anthropic-model requires --anthropic-base-url")
-		}
-		for protocol, baseURL := range map[string]string{"openai": *openAIBaseURL, "anthropic": *anthropicBaseURL} {
-			if baseURL == "" {
-				continue
-			}
+		for _, protocol := range []string{"openai", "anthropic"} {
 			providerModel := *model
 			if protocol == "openai" && *openAIModel != "" {
 				providerModel = *openAIModel
@@ -115,12 +105,12 @@ func configure(args []string, stdout, stderr *os.File) error {
 				providerModel = *anthropicModel
 			}
 			if strings.TrimSpace(providerModel) == "" {
-				return fmt.Errorf("--%s-model or --model is required when configuring the %s provider", protocol, protocol)
+				return fmt.Errorf("--%s-model or --model is required for the %s provider", protocol, protocol)
 			}
 			providerModels[protocol] = providerModel
 		}
 	} else if *openAIModel != "" || *anthropicModel != "" {
-		return errors.New("--openai-model and --anthropic-model require protocol-specific provider flags")
+		return errors.New("--openai-model and --anthropic-model require --dual-provider")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("configure requires macOS Keychain")
@@ -151,7 +141,6 @@ func configure(args []string, stdout, stderr *os.File) error {
 	capabilities := gateway.ModelCapabilities{ContextTokens: *contextTokens, MaxOutputTokens: *outputTokens}
 	c := gateway.Config{Budget: budgetPolicy, ReportSchedule: schedule, Prices: prices, ModelCapabilities: capabilities, ListenAddr: *listen, BaseURL: *baseURL, Model: *model, UpstreamID: "provider-primary", MaxInFlight: *max, MaxActiveSessions: *maxSessions, ActiveSessionIdleTimeoutSeconds: *sessionIdleTimeout, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db"), UpstreamKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}, AccessTokenKeychain: gateway.KeychainReference{Service: "pending", Account: "pending"}}
 	if protocolProviderConfig {
-		c.BaseURL = ""
 		c.UpstreamKeychain = gateway.KeychainReference{}
 		c.Model = ""
 		c.UpstreamID = ""
@@ -159,23 +148,16 @@ func configure(args []string, stdout, stderr *os.File) error {
 		c.ModelCapabilities = gateway.ModelCapabilities{}
 		c.Providers = make(map[string]gateway.Provider, 2)
 		pending := gateway.KeychainReference{Service: "pending", Account: "pending"}
-		if *anthropicVersion != "" && *anthropicBaseURL == "" {
-			return errors.New("--anthropic-version requires --anthropic-base-url")
+		providerPrices, priceErr := configurePrices(flags, *preset, *baseURL, providerModels["openai"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+		if priceErr != nil {
+			return fmt.Errorf("openai provider: %w", priceErr)
 		}
-		if *openAIBaseURL != "" {
-			providerPrices, priceErr := configurePrices(flags, *preset, *openAIBaseURL, providerModels["openai"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
-			if priceErr != nil {
-				return fmt.Errorf("openai provider: %w", priceErr)
-			}
-			c.Providers["openai"] = gateway.Provider{BaseURL: *openAIBaseURL, UpstreamKeychain: pending, Model: providerModels["openai"], UpstreamID: "openai", ModelCapabilities: capabilities, Prices: providerPrices}
+		c.Providers["openai"] = gateway.Provider{UpstreamKeychain: pending, Model: providerModels["openai"], UpstreamID: "openai", ModelCapabilities: capabilities, Prices: providerPrices}
+		providerPrices, priceErr = configurePrices(flags, *preset, *baseURL, providerModels["anthropic"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
+		if priceErr != nil {
+			return fmt.Errorf("anthropic provider: %w", priceErr)
 		}
-		if *anthropicBaseURL != "" {
-			providerPrices, priceErr := configurePrices(flags, *preset, *anthropicBaseURL, providerModels["anthropic"], *pricingCurrency, *pricingSource, *pricingVersion, *pricingInputCacheHit, *pricingInputCacheMiss, *pricingOutput)
-			if priceErr != nil {
-				return fmt.Errorf("anthropic provider: %w", priceErr)
-			}
-			c.Providers["anthropic"] = gateway.Provider{BaseURL: *anthropicBaseURL, UpstreamKeychain: pending, APIVersion: *anthropicVersion, Model: providerModels["anthropic"], UpstreamID: "anthropic", ModelCapabilities: capabilities, Prices: providerPrices}
-		}
+		c.Providers["anthropic"] = gateway.Provider{UpstreamKeychain: pending, APIVersion: *anthropicVersion, Model: providerModels["anthropic"], UpstreamID: "anthropic", ModelCapabilities: capabilities, Prices: providerPrices}
 	} else if *anthropicVersion != "" {
 		c.APIVersion = *anthropicVersion
 	}
@@ -197,16 +179,17 @@ func configure(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	if protocolProviderConfig {
+		fmt.Fprintf(stdout, "Shared provider API root: %s\n", c.BaseURL)
 		for _, protocol := range []string{"openai", "anthropic"} {
 			if provider, ok := c.Providers[protocol]; ok {
 				name := "OpenAI"
 				if protocol == "anthropic" {
 					name = "Anthropic"
 				}
-				fmt.Fprintf(stdout, "%s provider: %s (model %s)\n", name, provider.BaseURL, provider.Model)
+				fmt.Fprintf(stdout, "%s provider model: %s\n", name, provider.Model)
 			}
 		}
-		fmt.Fprintf(stdout, "Provider routing: client protocol selects its matching provider; a single configured provider supports translation for both clients\nConfig: %s\n", abs)
+		fmt.Fprintf(stdout, "Provider routing: client protocol selects its matching provider\nConfig: %s\n", abs)
 	} else {
 		fmt.Fprintf(stdout, "Provider API root: %s\nProvider protocol: automatic (checked when the gateway starts)\nModel: %s\nConfig: %s\n", c.BaseURL, c.Model, abs)
 	}

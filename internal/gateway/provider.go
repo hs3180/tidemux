@@ -46,9 +46,9 @@ func resolveProviderProtocol(c Config, httpClient *http.Client) (string, string,
 	return detected, apiVersion, nil
 }
 
-// resolveProviders returns the independent provider profiles used by the
-// gateway. Legacy profiles still resolve their single API root exactly as
-// before; named providers have a protocol supplied by their map key.
+// resolveProviders returns protocol-keyed profiles. All profiles use the one
+// shared API root in Config.BaseURL; legacy profiles still detect one upstream
+// protocol and expose the other client protocol through translation.
 func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, error) {
 	if len(c.Providers) != 0 {
 		resolved := make(map[string]Provider, len(c.Providers))
@@ -75,7 +75,6 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, e
 	}
 	return map[string]Provider{
 		protocol: {
-			BaseURL:           c.BaseURL,
 			APIVersion:        apiVersion,
 			APIKey:            c.APIKey,
 			Model:             c.Model,
@@ -89,18 +88,18 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, e
 // discoverProviderModels makes a bounded, redirect-free GET /models request.
 // A false second result means the endpoint does not expose a complete,
 // recognizable model list, so callers must not claim model availability.
-func discoverProviderModels(endpoint Provider, protocol string, httpClient *http.Client) ([]string, bool) {
+func discoverProviderModels(baseURL string, provider Provider, protocol string, httpClient *http.Client) ([]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint.BaseURL, "/")+"/models", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
 	if err != nil {
 		return nil, false
 	}
 	if protocol == "anthropic" {
-		request.Header.Set("x-api-key", endpoint.APIKey)
-		request.Header.Set("anthropic-version", endpoint.APIVersion)
+		request.Header.Set("x-api-key", provider.APIKey)
+		request.Header.Set("anthropic-version", provider.APIVersion)
 	} else {
-		request.Header.Set("Authorization", "Bearer "+endpoint.APIKey)
+		request.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	}
 	client := http.Client{Timeout: 5 * time.Second}
 	if httpClient != nil {

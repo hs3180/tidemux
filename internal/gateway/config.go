@@ -22,7 +22,6 @@ type KeychainReference struct {
 // Provider is an independently configured upstream API. APIKey is populated
 // only after resolving its Keychain reference and is never serialized.
 type Provider struct {
-	BaseURL           string                   `json:"base_url"`
 	UpstreamKeychain  KeychainReference        `json:"upstream_keychain"`
 	APIVersion        string                   `json:"anthropic_version,omitempty"`
 	Model             string                   `json:"model"`
@@ -109,6 +108,9 @@ func (c Config) Validate() error {
 	if !ip.IsLoopback() && host != "0.0.0.0" {
 		return errors.New("listen_addr must use a loopback IP or 0.0.0.0")
 	}
+	if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
+		return err
+	}
 	if err := c.ModelCapabilities.Validate(); err != nil {
 		return err
 	}
@@ -117,9 +119,6 @@ func (c Config) Validate() error {
 		case "", "auto", "openai", "anthropic":
 		default:
 			return errors.New("protocol must be auto, openai or anthropic")
-		}
-		if err := validateBaseURL(c.BaseURL, "base_url"); err != nil {
-			return err
 		}
 		if err := c.UpstreamKeychain.Validate("upstream_keychain"); err != nil {
 			return err
@@ -133,7 +132,7 @@ func (c Config) Validate() error {
 			return errors.New("model and upstream_id are required")
 		}
 	} else {
-		if c.BaseURL != "" || c.Protocol != "" || c.APIVersion != "" || c.UpstreamKeychain != (KeychainReference{}) || c.Model != "" || c.UpstreamID != "" || c.ModelCapabilities != (ModelCapabilities{}) || len(c.Prices) != 0 || c.APIKey != "" {
+		if c.Protocol != "" || c.APIVersion != "" || c.UpstreamKeychain != (KeychainReference{}) || c.Model != "" || c.UpstreamID != "" || c.ModelCapabilities != (ModelCapabilities{}) || len(c.Prices) != 0 || c.APIKey != "" {
 			return errors.New("use either legacy single-provider fields or providers, not both")
 		}
 		if len(c.Providers) > 2 {
@@ -144,9 +143,6 @@ func (c Config) Validate() error {
 				return errors.New("provider names must be openai or anthropic")
 			}
 			name := "providers." + protocol
-			if err := validateBaseURL(provider.BaseURL, name+".base_url"); err != nil {
-				return err
-			}
 			if err := provider.UpstreamKeychain.Validate(name + ".upstream_keychain"); err != nil {
 				return err
 			}

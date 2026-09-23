@@ -87,7 +87,6 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 
 func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	c := testConfig("l.db", "https://example.com/v1")
-	c.BaseURL = ""
 	c.Protocol = ""
 	c.APIVersion = ""
 	c.UpstreamKeychain = KeychainReference{}
@@ -97,8 +96,8 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
 	c.Providers = map[string]Provider{
-		"openai":    {BaseURL: "https://example.com/openai/v1", Model: "openai-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-		"anthropic": {BaseURL: "https://example.com/anthropic/v1", Model: "anthropic-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+		"openai":    {Model: "openai-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic": {Model: "anthropic-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
@@ -127,7 +126,6 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	shared.Providers = map[string]Provider{
 		"openai": c.Providers["openai"],
 		"anthropic": {
-			BaseURL:          "https://example.com/anthropic/v1",
 			Model:            "anthropic-model",
 			UpstreamKeychain: c.Providers["openai"].UpstreamKeychain,
 		},
@@ -165,7 +163,6 @@ func TestBudgetRequiresConfiguredModelPricing(t *testing.T) {
 
 func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 	c := testConfig("l.db", "https://legacy.example/v1")
-	c.BaseURL = ""
 	c.Protocol = ""
 	c.APIVersion = ""
 	c.UpstreamKeychain = KeychainReference{}
@@ -177,12 +174,12 @@ func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
 	c.Providers = map[string]Provider{
 		"openai": {
-			BaseURL: "https://openai.example/v1", Model: "openai-model",
+			Model:            "openai-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 			Prices:           map[string]adapter.Price{"openai-model": testPrice()},
 		},
 		"anthropic": {
-			BaseURL: "https://anthropic.example/v1", Model: "anthropic-model",
+			Model:            "anthropic-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 			Prices:           map[string]adapter.Price{"anthropic-model": testPrice()},
 		},

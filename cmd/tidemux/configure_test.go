@@ -88,11 +88,11 @@ func TestSaveIndependentProviderConfigurationSharesOrSeparatesKeychainItems(t *t
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.json")
 			c := gateway.Config{
-				ListenAddr: "127.0.0.1:8787", MaxInFlight: 1,
+				ListenAddr: "127.0.0.1:8787", BaseURL: "https://provider.example/v1", MaxInFlight: 1,
 				LedgerPath: filepath.Join(dir, "ledger.db"),
 				Providers: map[string]gateway.Provider{
-					"openai":    {BaseURL: "https://provider.example/openai/v1", Model: "openai-model", UpstreamID: "openai"},
-					"anthropic": {BaseURL: "https://provider.example/anthropic/v1", Model: "anthropic-model", UpstreamID: "anthropic"},
+					"openai":    {Model: "openai-model", UpstreamID: "openai"},
+					"anthropic": {Model: "anthropic-model", UpstreamID: "anthropic"},
 				},
 			}
 			secrets := &memorySecrets{values: map[string]string{}}

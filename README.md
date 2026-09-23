@@ -48,7 +48,7 @@ tidemux configure --preset deepseek-flash \
 ```
 
 To route the two client protocols to separate upstream providers, configure
-`--openai-base-url` and `--anthropic-base-url`; use `--openai-model` and
+one shared `--base-url` with `--dual-provider`; use `--openai-model` and
 `--anthropic-model` if their model IDs differ. See the
 [configuration guide](docs/configure.md#configure-protocol-routed-providers).
 

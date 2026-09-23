@@ -48,7 +48,7 @@ profiles. If an existing profile contains conflicting legacy budget fields,
 replace it with the new schema using `tidemux budget` or recreate it with
 `tidemux configure --replace`.
 
-1. `configure` selects the provider API root(s) and model. The DeepSeek preset
+1. `configure` selects the shared provider API root and model. The DeepSeek preset
    uses `https://api.deepseek.com` and `deepseek-flash`; TideMux automatically
    detects the provider protocol from that root. To use DeepSeek's Anthropic
    compatible API, override the root with
@@ -226,15 +226,15 @@ stop the gateway first and add `--replace`. Inspect other options with
 
 ### Configure protocol-routed providers
 
-OpenAI and Anthropic upstream APIs are configured as separate providers. Each
-has its own API root, hidden API-key prompt, default model, billing identity,
-model limits and price table. `--model` is a shorthand default for both; use
-the protocol-specific model flags when they differ:
+Use one shared API root and configure OpenAI and Anthropic as separate
+providers beneath it. Each provider has its own hidden API-key prompt, default
+model, billing identity, model limits and price table. `--model` is a shorthand
+default for both; use the protocol-specific model flags when they differ:
 
 ```sh
 tidemux configure \
-  --openai-base-url https://provider.example/openai/v1 \
-  --anthropic-base-url https://provider.example/anthropic/v1 \
+  --base-url https://provider.example/v1 \
+  --dual-provider \
   --openai-model openai-model-id \
   --anthropic-model anthropic-model-id \
   --pricing-input-cache-hit 1 \
@@ -243,9 +243,11 @@ tidemux configure \
 ```
 
 OpenAI clients route to the OpenAI provider and Anthropic clients to the
-Anthropic provider. With only one provider configured, both client APIs remain
-available through protocol translation to that provider. API keys are entered
-at hidden prompts; when configuring both, press Enter at the Anthropic key
+Anthropic provider, using the same API root and their respective protocol
+paths (`/chat/completions` and `/messages`). Both upstream APIs must be
+available beneath that shared root. A legacy single-provider configuration
+still supports both client APIs through protocol translation. API keys are
+entered at hidden prompts; when configuring both, press Enter at the Anthropic key
 prompt to reuse the OpenAI key, or enter a separate key. Credentials are stored
 in Keychain; the JSON config contains references only. The pricing flags seed
 each configured provider's own price table. `--anthropic-version YYYY-MM-DD`
@@ -264,10 +266,11 @@ By default the command refuses to overwrite an existing file. To intentionally
 replace it, stop the server and repeat the configure command with `--replace`.
 New Keychain accounts are generated; old credentials and ledger data are retained
 in place. Inspect the JSON configuration before replacing it: it contains the
-provider roots and Keychain references, never the API key values. When retaining
-both protocol providers, pass both provider flags again; omitting one removes it
-from the replacement configuration. The command replaces the configuration as
-a whole, including provider pricing selected alongside the new API keys.
+shared provider root and Keychain references, never the API key values. When retaining
+both protocol providers, pass `--dual-provider` again; omitting it replaces the
+configuration with the legacy single-provider profile. The command replaces
+the configuration as a whole, including provider pricing selected alongside
+the new API keys.
 Before restarting, review the new pricing and limits against the saved backup,
 and keep the existing `ledger_path` so billing continues to read your history.
 Remove unused old entries later in Keychain Access if desired. A failed setup

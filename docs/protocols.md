@@ -4,12 +4,12 @@ TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. A legacy profile
 can keep one `base_url`, whose provider protocol TideMux detects at startup.
 New profiles may instead configure independent protocol-keyed
-`providers.openai` and `providers.anthropic` records. Each provider owns its API
-root, Keychain reference, default model, billing identity, model limits and
-prices. When both are present, each client protocol routes strictly to its
-matching provider; when only one is present, the other client route uses the
-existing translator. Gateway authentication, active-session limits and the
-local ledger remain shared.
+`providers.openai` and `providers.anthropic` records below one shared
+`base_url`. Each provider owns its Keychain reference, default model, billing
+identity, model limits and prices. When both are present, each client protocol
+routes strictly to its matching provider at that common API root; when only one
+is present, the other client route uses the existing translator. Gateway
+authentication, active-session limits and the local ledger remain shared.
 
 Detection is local for recognized roots such as OpenAI, Anthropic and the
 DeepSeek preset. For another root, TideMux sends an authenticated `GET` to

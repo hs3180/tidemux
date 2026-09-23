@@ -39,16 +39,17 @@ commands:
 configuration examples:
   tidemux configure --preset deepseek-flash [options]
   tidemux configure --base-url URL --model ID [pricing options]
-  tidemux configure --openai-base-url URL --anthropic-base-url URL --model ID
-  tidemux configure --openai-base-url URL --openai-model ID --anthropic-base-url URL --anthropic-model ID
+  tidemux configure --base-url URL --dual-provider --model ID [pricing options]
+  tidemux configure --base-url URL --dual-provider --openai-model ID --anthropic-model ID
 
 common examples:
   tidemux configure --preset deepseek-flash
   tidemux configure --help
   tidemux serve --config /path/to/config.json
 
-The provider protocol is detected automatically from the configured API root.
-Both OpenAI Chat Completions and Anthropic Messages client routes are available.
+For a legacy single-provider profile, the upstream protocol is detected
+automatically. With --dual-provider, each client protocol selects its matching
+provider profile at the shared API root.
 `
 )
 
