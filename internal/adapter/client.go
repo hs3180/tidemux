@@ -10,7 +10,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/hs3180/tidemux/internal/ledger"
@@ -28,9 +30,12 @@ type Client struct {
 	Gate                                            *limiter.ConcurrencyGate
 }
 type CallError struct {
-	Status int
-	Code   string
-	Param  string
+	Status         int
+	Code           string
+	Param          string
+	UpstreamStatus int
+	Retryable      bool
+	Cooldown       time.Duration
 }
 
 func (e *CallError) Error() string { return e.Code }
@@ -65,8 +70,22 @@ func (c *Client) CallFrom(clientProtocol string, ctx context.Context, body []byt
 	return c.call(clientProtocol, ctx, body, model, sink, options)
 }
 func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) (response []byte, id string, err error) {
+	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, []string{c.APIKey}, nil)
+}
+
+// CallFromKeyCandidates runs bounded same-provider credential attempts under
+// one request ID and writes one terminal audit record. A retryable failure can
+// advance only while no stream frame has reached the caller.
+func (c *Client) CallFromKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, onFailure func(int, *CallError)) ([]byte, string, error) {
+	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, keys, onFailure)
+}
+
+func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, onFailure func(int, *CallError)) (response []byte, id string, err error) {
 	if err := options.Validate(clientProtocol); err != nil {
 		return nil, "", &CallError{Status: 400, Code: err.Error(), Param: ValidationParameter(err)}
+	}
+	if len(keys) == 0 {
+		keys = []string{c.APIKey}
 	}
 	started := time.Now()
 	nonce := make([]byte, 16)
@@ -142,110 +161,35 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 			err = &CallError{Status: 504, Code: "upstream_timeout"}
 		}
 	}()
-	path := "/chat/completions"
-	if c.Protocol == "anthropic" {
-		path = "/messages"
-	}
-	req, e := http.NewRequestWithContext(requestCtx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(providerBody))
-	if e != nil {
-		return nil, id, &CallError{Status: 502, Code: "upstream_request_failed"}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.Protocol == "openai" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	} else {
-		req.Header.Set("x-api-key", c.APIKey)
-		req.Header.Set("anthropic-version", c.APIVersion)
-		if options.AnthropicBeta != "" {
-			req.Header.Set("anthropic-beta", options.AnthropicBeta)
-		}
-	}
-	if options.SessionID != "" {
-		req.Header.Set(SessionIDHeader, options.SessionID)
-	}
-	client := http.Client{}
-	if c.HTTP != nil {
-		client = *c.HTTP
-	}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	attempted = true
-	resp, e := client.Do(req)
-	if e != nil {
-		return nil, id, &CallError{Status: 502, Code: "upstream_transport_error"}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		ce := upstreamError(resp)
-		if resp.StatusCode == 429 {
-			a.Events = append(a.Events, "rate_limit_429")
-		}
-		return nil, id, ce
-	}
 	var data []byte
 	var usage TokenUsage
-	recordedBody := observedReader{Reader: resp.Body, observed: &observed}
-	if sink != nil {
-		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_content_type"}
+	delivered := false
+	for candidateIndex, key := range keys {
+		attempted = true
+		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered)
+		if err == nil {
+			break
 		}
-		translator := newStreamTranslator(c.Protocol, clientProtocol, model)
-		usage, data, e = readStreamWithLimits(c.Protocol, recordedBody, limits, func(frame []byte) error {
-			if translator != nil {
-				frame, e = translator.frame(frame)
-				if e != nil {
-					var conversion *TranslationError
-					if errors.As(e, &conversion) {
-						return &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
-					}
-					return &CallError{Status: 502, Code: "invalid_upstream_stream"}
-				}
-			}
-			if len(frame) == 0 {
-				return nil
-			}
-			if err := sink(id, frame); err != nil {
-				return &CallError{Status: 502, Code: "downstream_write_error"}
-			}
-			return nil
-		})
-		if e == nil && translator != nil {
-			data, e = translator.terminal(data)
+		var callErr *CallError
+		if errors.As(err, &callErr) && callErr.UpstreamStatus == http.StatusTooManyRequests {
+			a.Events = append(a.Events, "rate_limit_429")
 		}
-		if translator != nil {
-			logConversionWarnings(clientProtocol, c.Protocol, translator.warnings())
+		if !errors.As(err, &callErr) || !callErr.Retryable {
+			break
 		}
-		if e != nil {
+		if onFailure != nil {
+			onFailure(candidateIndex, callErr)
+		}
+		if !canFailover(callErr, candidateIndex+1 < len(keys), delivered, requestCtx) {
+			break
+		}
+		a.Events = append(a.Events, "key_failover")
+	}
+	if err != nil {
+		if observed.Len() > 0 {
 			localEstimate(observed.Bytes())
-			var conversion *TranslationError
-			if errors.As(e, &conversion) {
-				return nil, id, &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
-			}
-			return nil, id, e
 		}
-	} else {
-		data, e = io.ReadAll(io.LimitReader(recordedBody, limits.ResponseBytes+1))
-		if e != nil {
-			return nil, id, &CallError{Status: 502, Code: "upstream_read_error"}
-		}
-		if int64(len(data)) > limits.ResponseBytes {
-			return nil, id, &CallError{Status: 502, Code: "upstream_response_too_large"}
-		}
-		usage, e = ValidateResponse(c.Protocol, data)
-		if e != nil {
-			localEstimate(data)
-			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_response"}
-		}
-		var responseWarnings []string
-		data, responseWarnings, e = TranslateResponseWithWarnings(c.Protocol, clientProtocol, data, model)
-		logConversionWarnings(clientProtocol, c.Protocol, responseWarnings)
-		if e != nil {
-			localEstimate(data)
-			var conversion *TranslationError
-			if errors.As(e, &conversion) {
-				return nil, id, &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
-			}
-			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_response"}
-		}
+		return nil, id, err
 	}
 	a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens = usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite
 	if priced {
@@ -272,4 +216,119 @@ func logConversionWarnings(clientProtocol, providerProtocol string, fields []str
 		return
 	}
 	log.Printf("tidemux: cross-protocol conversion omitted fields client_protocol=%s provider_protocol=%s fields=%q", clientProtocol, providerProtocol, sortedUniqueStrings(append([]string(nil), fields...)))
+}
+
+func canFailover(callErr *CallError, hasNext, delivered bool, ctx context.Context) bool {
+	return callErr != nil && callErr.Retryable && hasNext && !delivered && ctx.Err() == nil
+}
+
+func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool) ([]byte, TokenUsage, error) {
+	path := "/chat/completions"
+	if c.Protocol == "anthropic" {
+		path = "/messages"
+	}
+	var headersWritten atomic.Bool
+	trace := &httptrace.ClientTrace{WroteHeaders: func() { headersWritten.Store(true) }}
+	requestCtx := httptrace.WithClientTrace(ctx, trace)
+	req, err := http.NewRequestWithContext(requestCtx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(providerBody))
+	if err != nil {
+		return nil, TokenUsage{}, &CallError{Status: 502, Code: "upstream_request_failed"}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.Protocol == "openai" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	} else {
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", c.APIVersion)
+		if options.AnthropicBeta != "" {
+			req.Header.Set("anthropic-beta", options.AnthropicBeta)
+		}
+	}
+	if options.SessionID != "" {
+		req.Header.Set(SessionIDHeader, options.SessionID)
+	}
+	client := http.Client{}
+	if c.HTTP != nil {
+		client = *c.HTTP
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		callErr := &CallError{Status: 502, Code: "upstream_transport_error"}
+		if !headersWritten.Load() && ctx.Err() == nil {
+			callErr.Retryable = true
+			callErr.Cooldown = 5 * time.Second
+		}
+		return nil, TokenUsage{}, callErr
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, TokenUsage{}, upstreamError(resp)
+	}
+	recordedBody := observedReader{Reader: resp.Body, observed: observed}
+	if sink != nil {
+		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_content_type"}
+		}
+		translator := newStreamTranslator(c.Protocol, clientProtocol, model)
+		usage, data, err := readStreamWithLimits(c.Protocol, recordedBody, limits, func(frame []byte) error {
+			if translator != nil {
+				var translateErr error
+				frame, translateErr = translator.frame(frame)
+				if translateErr != nil {
+					var conversion *TranslationError
+					if errors.As(translateErr, &conversion) {
+						return &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
+					}
+					return &CallError{Status: 502, Code: "invalid_upstream_stream"}
+				}
+			}
+			if len(frame) == 0 {
+				return nil
+			}
+			// Treat even a failing sink as potentially having written bytes. Once
+			// the downstream response may have started, switching keys is unsafe.
+			*delivered = true
+			if err := sink(id, frame); err != nil {
+				return &CallError{Status: 502, Code: "downstream_write_error"}
+			}
+			return nil
+		})
+		if err == nil && translator != nil {
+			data, err = translator.terminal(data)
+		}
+		if translator != nil {
+			logConversionWarnings(clientProtocol, c.Protocol, translator.warnings())
+		}
+		if err != nil {
+			var conversion *TranslationError
+			if errors.As(err, &conversion) {
+				return nil, TokenUsage{}, &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
+			}
+			return nil, TokenUsage{}, err
+		}
+		return data, usage, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(recordedBody, limits.ResponseBytes+1))
+	if err != nil {
+		return nil, TokenUsage{}, &CallError{Status: 502, Code: "upstream_read_error"}
+	}
+	if int64(len(data)) > limits.ResponseBytes {
+		return nil, TokenUsage{}, &CallError{Status: 502, Code: "upstream_response_too_large"}
+	}
+	usage, err := ValidateResponse(c.Protocol, data)
+	if err != nil {
+		return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_response"}
+	}
+	var responseWarnings []string
+	data, responseWarnings, err = TranslateResponseWithWarnings(c.Protocol, clientProtocol, data, model)
+	logConversionWarnings(clientProtocol, c.Protocol, responseWarnings)
+	if err != nil {
+		var conversion *TranslationError
+		if errors.As(err, &conversion) {
+			return nil, TokenUsage{}, &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
+		}
+		return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_response"}
+	}
+	return data, usage, nil
 }

@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -284,15 +285,37 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	retainSession := false
 	defer func() { lease.Release(retainSession) }()
-	client := providerClient
-	if pool := h.keyPools[providerName]; pool != nil {
-		selected := *providerClient
-		selected.APIKey = pool.Next()
-		client = &selected
-	}
-	if client == nil {
+	if providerClient == nil {
 		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 		return
+	}
+	pool := h.keyPools[providerName]
+	var candidates []providerKeyCandidate
+	if pool != nil {
+		var retryDelay time.Duration
+		candidates, retryDelay = pool.Candidates()
+		if len(candidates) == 0 {
+			if retryDelay > 0 {
+				seconds := int((retryDelay + time.Second - 1) / time.Second)
+				w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			}
+			h.reject(w, r, protocol, 503, "provider_keys_cooling_down")
+			return
+		}
+	}
+	callProvider := func(sink adapter.StreamSink) ([]byte, string, error) {
+		if pool == nil {
+			return providerClient.CallFrom(protocol, r.Context(), body, model, sink, options)
+		}
+		keys := make([]string, len(candidates))
+		for i, candidate := range candidates {
+			keys[i] = candidate.key
+		}
+		return providerClient.CallFromKeyCandidates(protocol, r.Context(), body, model, sink, options, keys, func(candidateIndex int, callErr *adapter.CallError) {
+			if candidateIndex >= 0 && candidateIndex < len(candidates) && callErr != nil {
+				pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown)
+			}
+		})
 	}
 	reservationID := ""
 	var budget ledger.BudgetPolicy
@@ -350,7 +373,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lease.TouchOutput()
 			return nil
 		}
-		terminal, id, err := client.CallFrom(protocol, r.Context(), body, model, send, options)
+		terminal, id, err := callProvider(send)
 		settle(id)
 		if err == nil {
 			send(id, terminal)
@@ -359,6 +382,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var ce *adapter.CallError
 		if !errors.As(err, &ce) {
 			ce = &adapter.CallError{Status: 500, Code: "internal_error"}
+		}
+		if ce.Cooldown > 0 {
+			seconds := int((ce.Cooldown + time.Second - 1) / time.Second)
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
 		}
 		if !sent {
 			if id != "" {
@@ -379,7 +406,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
 		return
 	}
-	response, id, err := client.CallFrom(protocol, r.Context(), body, model, nil, options)
+	response, id, err := callProvider(nil)
 	settle(id)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)
@@ -387,6 +414,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ce *adapter.CallError
 		if errors.As(err, &ce) {
+			if ce.Cooldown > 0 {
+				seconds := int((ce.Cooldown + time.Second - 1) / time.Second)
+				w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			}
 			h.fail(w, ce.Status, ce.Code, protocol, ce.Param)
 		} else {
 			h.fail(w, 500, "internal_error", protocol)
