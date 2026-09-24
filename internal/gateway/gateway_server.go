@@ -45,7 +45,6 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		}
 	} else {
 		c.Providers = providers
-		c.DefaultProviders = providerRoutes
 	}
 	if err := c.Validate(); err != nil {
 		return nil, nil, err

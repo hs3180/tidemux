@@ -135,6 +135,15 @@ func resolveDefaultProviderRoutes(providers map[string]Provider, configured map[
 		}
 		routes[protocol] = names[0]
 	}
+
+	// A client without a same-protocol route uses the configured default of the
+	// other protocol. This is a single route choice, not request-time failover.
+	if routes["openai"] == "" {
+		routes["openai"] = routes["anthropic"]
+	}
+	if routes["anthropic"] == "" {
+		routes["anthropic"] = routes["openai"]
+	}
 	return routes, nil
 }
 

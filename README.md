@@ -41,9 +41,10 @@ Install your preferred client CLI. The example below uses **DeepSeek
 
 ### 1. Add providers
 
-The target 0.2.0 CLI uses one provider per upstream API protocol. To use both
-client protocols with DeepSeek, add one endpoint for each; TideMux infers each
-provider's protocol and makes the first provider for that protocol its default:
+Each provider uses one upstream API protocol; TideMux supports both. It infers
+each provider's protocol and makes the first provider for that protocol its
+default. Add both endpoint forms for native routing; a single provider can also
+serve clients using the other protocol through conversion:
 
 ```sh
 tidemux provider add https://api.deepseek.com --model deepseek-flash
@@ -55,7 +56,8 @@ readable labels are generated from the endpoint; no provider name is required.
 All models are allowed by default. `--model` selects the fallback for clients
 that omit a model; it does not restrict the allowed model list. Use
 `tidemux provider models REF --only MODEL[,MODEL...]` only when you want to
-restrict that list. To configure just one protocol, add only its endpoint.
+restrict that list. One endpoint is enough to serve both client protocols;
+adding both forms keeps each client on its native upstream protocol.
 
 ### 2. Start the gateway
 
@@ -69,9 +71,9 @@ Next time, just run `tidemux serve` to reuse your configuration.
 
 ### 3. Launch your client
 
-In another terminal, from your project directory, run the client you want. With
-both protocol routes configured, TideMux sends each client to the corresponding
-default provider:
+In another terminal, from your project directory, run the client you want. When
+both protocol defaults are configured, TideMux sends each client to the
+matching provider without cross-protocol conversion:
 
 ```sh
 # Anthropic API client
@@ -105,12 +107,13 @@ documented separately in [client compatibility](docs/client-compatibility.md).
 ## Compatibility
 
 The 0.2.0 development line exposes OpenAI Chat Completions and Anthropic
-Messages client APIs simultaneously. Each provider has one upstream protocol;
-requests route only to that protocol's default provider. To serve both client
-APIs, configure one provider for each protocol—even when both endpoints belong
-to the same service. Requests are validated and normalized within their selected
-protocol; an OpenAI client request is not translated to an Anthropic provider,
-or vice versa. Gateway auth, session limits and ledger accounting remain shared.
+Messages client APIs simultaneously. Each provider has one upstream protocol.
+TideMux prefers the configured default matching the client's protocol. Only
+when that route is absent does it use the other protocol's configured default
+and convert the request and response. One provider can therefore serve both
+client APIs; configuring both protocols keeps each on its native path. Model,
+authentication and upstream errors do not trigger retries or route changes.
+Gateway auth, session limits and ledger accounting remain shared.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
 not certify the 0.2.0 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.

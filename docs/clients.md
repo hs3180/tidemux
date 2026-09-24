@@ -8,9 +8,10 @@ is historical and does not describe the current provider model.
 
 ## Add the provider routes
 
-Each provider has one API protocol, and each client is routed to the default
-provider for its protocol. To use Claude Code and OpenAI-compatible clients
-with DeepSeek, add both endpoint forms:
+Each provider has one API protocol. TideMux prefers a provider matching the
+client protocol; if that route is not configured, it converts through the
+other protocol's default. To keep Claude Code and OpenAI-compatible clients on
+native routes with DeepSeek, add both endpoint forms:
 
 ```sh
 tidemux provider add https://api.deepseek.com --model deepseek-flash
@@ -21,8 +22,9 @@ tidemux provider list
 Each command securely prompts for the upstream API key. TideMux infers the
 provider protocol from its endpoint; all models are allowed by default, while
 `--model` selects the fallback when a client omits a model. The first provider
-for each protocol becomes its default. To use only one client protocol, add
-only its provider. To change a route later, use
+for each protocol becomes its default. One provider is sufficient to serve
+both client protocols, with conversion on the unmatched route. To change a
+route later, use
 `tidemux provider default PROTOCOL REF` with a reference from `provider list`.
 
 Configure the shared gateway credential and listener, then start the gateway:
@@ -52,10 +54,11 @@ tidemux kilo -- run 'Explain this project'
 tidemux hermes -- -q 'Explain this project'
 ```
 
-Claude Code uses the Anthropic provider default. Kilo and Hermes use the
-OpenAI provider default. TideMux does not translate between provider protocols
-in the current routing model; add a provider for each protocol you need. Install
-each client first. If its executable is not on `PATH`, pass
+Claude Code prefers the Anthropic provider default. Kilo and Hermes prefer the
+OpenAI provider default. If that matching route is absent, the other protocol's
+default is used with conversion; a provider/model error does not trigger a
+retry on another provider. Install each client first. If its executable is not
+on `PATH`, pass
 `--executable /absolute/path/to/client` before `--`. Arguments after `--` go
 to the client.
 

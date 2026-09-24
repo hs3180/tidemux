@@ -145,7 +145,7 @@ func TestResolveNamedProviderAutomaticallyDetectsProtocolAndDefaultRoute(t *test
 	if providers["auto-provider"].Protocol != "anthropic" || providers["auto-provider"].APIVersion != defaultAnthropicAPIVersion {
 		t.Fatalf("resolved provider = %+v", providers["auto-provider"])
 	}
-	if routes["anthropic"] != "auto-provider" || len(routes) != 1 {
+	if routes["anthropic"] != "auto-provider" || routes["openai"] != "auto-provider" || len(routes) != 2 {
 		t.Fatalf("inferred routes = %#v", routes)
 	}
 	if calls != 2 {

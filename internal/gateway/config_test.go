@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -299,6 +300,69 @@ func TestNamedProvidersAllowSameProtocolAndValidateDefaults(t *testing.T) {
 	bad.DefaultProviders = nil
 	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "default_providers") {
 		t.Fatalf("missing default error=%v", err)
+	}
+}
+
+func TestDefaultProviderRoutesPreferNativeAndFallbackOnlyWhenMissing(t *testing.T) {
+	tests := []struct {
+		name      string
+		providers map[string]Provider
+		defaults  map[string]string
+		want      map[string]string
+		wantError bool
+	}{
+		{
+			name:      "openai provider serves both client protocols",
+			providers: map[string]Provider{"openai": {Protocol: "openai"}},
+			defaults:  map[string]string{"openai": "openai"},
+			want:      map[string]string{"openai": "openai", "anthropic": "openai"},
+		},
+		{
+			name:      "anthropic provider serves both client protocols",
+			providers: map[string]Provider{"anthropic": {Protocol: "anthropic"}},
+			defaults:  map[string]string{"anthropic": "anthropic"},
+			want:      map[string]string{"openai": "anthropic", "anthropic": "anthropic"},
+		},
+		{
+			name: "both protocols keep native defaults",
+			providers: map[string]Provider{
+				"openai": {Protocol: "openai"}, "anthropic": {Protocol: "anthropic"},
+			},
+			defaults: map[string]string{"openai": "openai", "anthropic": "anthropic"},
+			want:     map[string]string{"openai": "openai", "anthropic": "anthropic"},
+		},
+		{
+			name: "fallback uses configured same-protocol default",
+			providers: map[string]Provider{
+				"primary": {Protocol: "openai"}, "secondary": {Protocol: "openai"},
+			},
+			defaults: map[string]string{"openai": "secondary"},
+			want:     map[string]string{"openai": "secondary", "anthropic": "secondary"},
+		},
+		{
+			name: "ambiguous default is rejected",
+			providers: map[string]Provider{
+				"primary": {Protocol: "openai"}, "secondary": {Protocol: "openai"},
+			},
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveDefaultProviderRoutes(test.providers, test.defaults)
+			if test.wantError {
+				if err == nil {
+					t.Fatalf("ambiguous routes accepted: %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("routes=%v want=%v", got, test.want)
+			}
+		})
 	}
 }
 

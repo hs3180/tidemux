@@ -101,6 +101,10 @@ func TestStreamingGatewayAudit(t *testing.T) {
 
 func TestAnthropicClientStreamingWithOpenAIProvider(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+			return
+		}
 		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer provider-secret" {
 			t.Fatalf("unexpected upstream request: %s %s", r.URL.Path, r.Header.Get("Authorization"))
 		}
@@ -113,6 +117,7 @@ func TestAnthropicClientStreamingWithOpenAIProvider(t *testing.T) {
 	defer up.Close()
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
 	c.Protocol = "openai"
+	c = namedProviderConfig(c, "openai-main")
 	h, closeDB, err := NewHandler(c, up.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +139,46 @@ func TestAnthropicClientStreamingWithOpenAIProvider(t *testing.T) {
 	rows, err := db.Recent(context.Background(), 10)
 	if err != nil || len(rows) != 1 || rows[0].InputTokens == nil || *rows[0].InputTokens != 3 || rows[0].OutputTokens == nil || *rows[0].OutputTokens != 2 {
 		t.Fatalf("audit=%+v err=%v", rows, err)
+	}
+}
+
+func TestOpenAIClientStreamingFallsBackToNamedAnthropicProvider(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			if r.Header.Get("x-api-key") != "provider-secret" {
+				t.Errorf("Anthropic discovery key=%q", r.Header.Get("x-api-key"))
+			}
+			io.WriteString(w, `{"data":[{"id":"custom-model","type":"model"}],"has_more":false}`)
+			return
+		}
+		if r.URL.Path != "/messages" || r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion {
+			t.Fatalf("unexpected Anthropic request: %s %s key=%q version=%q", r.Method, r.URL.Path, r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"custom-model\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n")
+		io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")
+		io.WriteString(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+		io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+	c.Protocol = "anthropic"
+	c.APIVersion = defaultAnthropicAPIVersion
+	c = namedProviderConfig(c, "anthropic-main")
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := strings.TrimSuffix(requestBody("openai"), "}") + `,"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != http.StatusOK || out.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(out.Body.String(), `"chat.completion.chunk"`) || !strings.Contains(out.Body.String(), `"content":"hi"`) || !strings.Contains(out.Body.String(), "data: [DONE]") || strings.Contains(out.Body.String(), "event:") {
+		t.Fatalf("status=%d headers=%v body=%s", out.Code, out.Header(), out.Body.String())
 	}
 }
 

@@ -66,8 +66,10 @@ to force a wire format. Changing an endpoint clears any model allowlist,
 restoring the default all-models scope.
 
 The first provider added for a protocol becomes its default. Later additions
-do not silently change the route. `provider default` explicitly chooses the
-provider used by OpenAI or Anthropic clients. Removal asks for confirmation. If
+do not silently change the route. A client first uses the default matching its
+protocol; if none is configured, it uses the other protocol's default through
+conversion. This is not error-based failover. `provider default` explicitly
+chooses a same-protocol default. Removal asks for confirmation. If
 the removed provider is a protocol default and alternatives remain, choose a
 replacement or pass `--default REF`; non-interactive removal requires `--yes`.
 Removing the last provider clears that protocol route. The gateway cannot serve

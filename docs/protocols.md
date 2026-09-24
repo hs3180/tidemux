@@ -6,18 +6,25 @@ are keyed by provider name and each has one inferred or explicitly selected
 `protocol`, its own `base_url`,
 Keychain reference, default model, billing identity, model limits and prices.
 `default_providers` maps each client protocol to the named provider that serves
-it. Multiple named providers may use the same protocol; only the selected
-default receives requests. In the target `provider add` flow, the first
-provider added for a protocol is recorded as its default, and adding another
-provider does not replace it. A hand-written configuration with multiple
-providers for one protocol and no default must specify one explicitly. Gateway
-authentication, active-session limits and the local ledger remain shared.
+it. An explicit default must use that same protocol. Multiple named providers
+may use the same protocol; only the selected default receives requests. In the
+target `provider add` flow, the first provider added for a protocol is recorded
+as its default, and adding another provider does not replace it. A hand-written
+configuration with multiple providers for one protocol and no default must
+specify one explicitly. Gateway authentication, active-session limits and the
+local ledger remain shared.
 
-The 0.1.x single-provider configuration and its cross-protocol translation are
-historical compatibility behavior, not part of the 0.2.0 provider model. A 0.2.0
-provider serves only clients using its protocol; add one provider per protocol
-when both client APIs are needed. Do not rely on migration of a legacy
-single-provider configuration as a 0.2.0 compatibility guarantee.
+For each client protocol, TideMux first uses that protocol's configured default.
+If it is absent, TideMux uses the other protocol's configured default and
+converts the request and response. If neither route exists, the endpoint returns
+`provider_not_configured`. This is route selection, not failover: TideMux does
+not switch providers based on model support, authentication, billing, rate
+limits, upstream errors or timeouts. A model rejected by the selected provider
+does not cause a retry against another provider. Configured defaults remain
+same-protocol; the cross-protocol route is computed at runtime.
+
+The 0.1.x single-provider configuration remains a migration/compatibility path;
+do not rely on it as a 0.2.0 configuration guarantee.
 
 For named providers, an explicitly configured `protocol` of `openai` or
 `anthropic` forces that upstream format and skips detection. Otherwise TideMux
@@ -38,39 +45,31 @@ detection behavior belongs to the 0.1.x compatibility path only.
 | Upstream credential | Bearer key | `x-api-key` |
 | Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
 | Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
-| Matching client protocol | OpenAI client passes through after validation | Anthropic client passes through after validation |
-| Non-matching client protocol | Not routed to this provider | Not routed to this provider |
+| Matching client protocol | Native route is preferred | Native route is preferred |
+| Non-matching client protocol | Used only if the client's native route is absent; conversion applies | Used only if the client's native route is absent; conversion applies |
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-The client endpoints are independent of provider registration, but routing is
-protocol-specific: each client goes only to the configured default with the
-same protocol, with no cross-provider retry or cross-protocol translation. Each
-named provider's `GET /models`
-response is used only on its client route when it is a complete, recognized model list.
+The client endpoints are independent of provider registration. Each named
+provider's `GET /models` response is used for whichever client route resolves to
+that provider when it is a complete, recognized model list; the gateway returns
+the catalogue in the requesting client's protocol shape.
 By default that catalogue is informational: any model ID is forwarded to the
 selected provider. Setting the provider's optional `supported_models` list
 restricts completion requests and the gateway's model listing to that subset.
 If a provider does not expose a complete recognizable list, its route returns
 an empty model catalogue unless an explicit allowlist is configured; direct
-requests are still sent to that provider. The current development build may
-accept existing 0.1.x single-provider configurations during transition; this is
-a compatibility bridge, not a 0.2.0 guarantee.
+requests are still sent to that provider.
 
-The following translation details describe the historical 0.1.x
-single-provider mode only; they do not apply to 0.2.0 named-provider routing.
-That legacy mode translated text, system/developer instructions, tools, tool
-calls/results, stop sequences, output schemas and streaming terminal events in
-both directions. Provider-specific features without an equivalent on the other
-wire format remained unsupported rather than silently forwarded.
+Cross-protocol fallback uses the same adapter path as other cross-protocol
+requests. It translates supported common fields such as text, system/developer
+instructions, tools and tool results, stop sequences, output schemas and
+streaming events. Provider-specific features without an equivalent on the
+other wire format may be dropped with a warning or rejected; see issue #29 for
+the separate minimum-loss conversion work.
 
-Explicit parameters are retained; provider acceptance is not inferred from the
-model name. The 0.1.x compatibility adapter handled Anthropic system-role
-messages and cache markers when its upstream was Anthropic; for an OpenAI
-upstream it translated only the supported top-level system/text subset and
-rejected unsupported provider-only blocks. This historical behavior is not a
-cross-protocol routing promise for 0.2.0. Providers can reject beta features;
-TideMux does not change system instructions into user text.
+Provider acceptance is not inferred from the model name. TideMux does not
+change system instructions into user text.
 
 The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
 configured provider unchanged. If active-session limiting is enabled and the

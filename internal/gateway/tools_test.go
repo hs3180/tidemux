@@ -20,6 +20,14 @@ func TestToolConversationThroughGateway(t *testing.T) {
 		t.Run(protocol, func(t *testing.T) {
 			calls := 0
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					if protocol == "openai" {
+						io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+					} else {
+						io.WriteString(w, `{"data":[{"id":"custom-model","type":"model"}],"has_more":false}`)
+					}
+					return
+				}
 				calls++
 				data, _ := io.ReadAll(r.Body)
 				if calls == 2 && (!strings.Contains(string(data), "call1") || !strings.Contains(string(data), "fixture-result")) {
@@ -41,6 +49,7 @@ func TestToolConversationThroughGateway(t *testing.T) {
 			defer up.Close()
 			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
 			c.Protocol = protocol
+			c = namedProviderConfig(c, protocol+"-main")
 			h, closeDB, err := NewHandler(c, up.Client())
 			if err != nil {
 				t.Fatal(err)

@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T) {
@@ -232,8 +235,8 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 			c.ModelCapabilities = ModelCapabilities{}
 			c.Prices = nil
 			c.Providers = map[string]Provider{
-				"primary":   {Protocol: "openai", BaseURL: primary.URL + "/v1", APIKey: "primary-key", Model: "primary-model", UpstreamID: "primary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "primary"}},
-				"secondary": {Protocol: "openai", BaseURL: secondary.URL + "/v1", APIKey: "secondary-key", Model: "secondary-model", UpstreamID: "secondary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "secondary"}},
+				"primary":   {Protocol: "openai", BaseURL: primary.URL + "/v1", APIKey: "primary-key", Model: "primary-model", SupportedModels: []string{"primary-model"}, UpstreamID: "primary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "primary"}},
+				"secondary": {Protocol: "openai", BaseURL: secondary.URL + "/v1", APIKey: "secondary-key", Model: "secondary-model", SupportedModels: []string{"secondary-model"}, UpstreamID: "secondary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "secondary"}},
 			}
 			c.DefaultProviders = map[string]string{"openai": selected}
 			h, closeGateway, err := NewHandler(c, nil)
@@ -259,17 +262,38 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 				t.Fatalf("completion status=%d body=%s", out.Code, out.Body.String())
 			}
 
-			unavailable := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody("anthropic")))
-			unavailable.Header.Set("x-api-key", "local-secret")
-			unavailable.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
-			unavailableOut := httptest.NewRecorder()
-			h.ServeHTTP(unavailableOut, unavailable)
-			if unavailableOut.Code != http.StatusServiceUnavailable || !strings.Contains(unavailableOut.Body.String(), "provider_not_configured") {
-				t.Fatalf("unconfigured protocol status=%d body=%s", unavailableOut.Code, unavailableOut.Body.String())
+			anthropicModels := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			anthropicModels.Header.Set("x-api-key", "local-secret")
+			anthropicModels.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			anthropicModelsOut := httptest.NewRecorder()
+			h.ServeHTTP(anthropicModelsOut, anthropicModels)
+			if anthropicModelsOut.Code != http.StatusOK || !strings.Contains(anthropicModelsOut.Body.String(), `"type":"model"`) || !strings.Contains(anthropicModelsOut.Body.String(), selected+"-model") || strings.Contains(anthropicModelsOut.Body.String(), otherProviderName(selected)+"-model") {
+				t.Fatalf("fallback model list status=%d body=%s", anthropicModelsOut.Code, anthropicModelsOut.Body.String())
+			}
+
+			anthropicBody := strings.Replace(requestBody("anthropic"), "custom-model", selected+"-model", 1)
+			fallback := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(anthropicBody))
+			fallback.Header.Set("x-api-key", "local-secret")
+			fallback.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			fallbackOut := httptest.NewRecorder()
+			h.ServeHTTP(fallbackOut, fallback)
+			if fallbackOut.Code != http.StatusOK || !strings.Contains(fallbackOut.Body.String(), `"type":"message"`) {
+				t.Fatalf("cross-protocol fallback status=%d body=%s", fallbackOut.Code, fallbackOut.Body.String())
+			}
+
+			wrongModel := strings.Replace(requestBody("anthropic"), "custom-model", otherProviderName(selected)+"-model", 1)
+			denied := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(wrongModel))
+			denied.Header.Set("x-api-key", "local-secret")
+			denied.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			deniedOut := httptest.NewRecorder()
+			callsBeforeDenied := providerCalls[selected]
+			h.ServeHTTP(deniedOut, denied)
+			if deniedOut.Code != http.StatusNotFound || providerCalls[selected] != callsBeforeDenied {
+				t.Fatalf("cross-route allowlist status=%d calls=%d/%d body=%s", deniedOut.Code, providerCalls[selected], callsBeforeDenied, deniedOut.Body.String())
 			}
 		})
 	}
-	if providerCalls["primary"] != 1 || providerCalls["secondary"] != 1 || providerDiscoveries["primary"] != 1 || providerDiscoveries["secondary"] != 1 {
+	if providerCalls["primary"] != 2 || providerCalls["secondary"] != 2 || providerDiscoveries["primary"] != 1 || providerDiscoveries["secondary"] != 1 {
 		t.Fatalf("selected provider calls=%v discoveries=%v", providerCalls, providerDiscoveries)
 	}
 }
@@ -318,6 +342,116 @@ func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	}
 	if providerPath != "/shared/v1/chat/completions" || providerAuth != "Bearer openai-provider-key" || !strings.Contains(providerBody, `"messages"`) {
 		t.Fatalf("fallback path=%q auth=%q body=%s", providerPath, providerAuth, providerBody)
+	}
+}
+
+func TestNamedProviderCrossProtocolFallbackUsesClientProtocolAndProviderIdentity(t *testing.T) {
+	for _, test := range []struct {
+		providerProtocol string
+		clientProtocol   string
+		providerPath     string
+		providerID       string
+	}{
+		{providerProtocol: "openai", clientProtocol: "anthropic", providerPath: "/shared/v1/chat/completions", providerID: "named-openai"},
+		{providerProtocol: "anthropic", clientProtocol: "openai", providerPath: "/shared/v1/messages", providerID: "named-anthropic"},
+	} {
+		t.Run(test.providerProtocol+"-provider/"+test.clientProtocol+"-client", func(t *testing.T) {
+			const model = "provider-model"
+			const providerKey = "provider-key"
+			const sessionID = "client-session"
+			calls := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					if test.providerProtocol == "openai" {
+						if r.Header.Get("Authorization") != "Bearer "+providerKey {
+							t.Errorf("OpenAI discovery auth=%q", r.Header.Get("Authorization"))
+						}
+						_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"provider-model","object":"model"}]}`)
+					} else {
+						if r.Header.Get("x-api-key") != providerKey {
+							t.Errorf("Anthropic discovery key=%q", r.Header.Get("x-api-key"))
+						}
+						_, _ = io.WriteString(w, `{"data":[{"id":"provider-model","type":"model"}],"has_more":false}`)
+					}
+					return
+				}
+				calls++
+				if r.URL.Path != test.providerPath || r.Header.Get("X-TideMux-Session-ID") != sessionID {
+					t.Errorf("upstream request path=%q session=%q", r.URL.Path, r.Header.Get("X-TideMux-Session-ID"))
+				}
+				if test.providerProtocol == "openai" && r.Header.Get("Authorization") != "Bearer "+providerKey {
+					t.Errorf("OpenAI completion auth=%q", r.Header.Get("Authorization"))
+				}
+				if test.providerProtocol == "anthropic" && (r.Header.Get("x-api-key") != providerKey || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion) {
+					t.Errorf("Anthropic completion auth key=%q version=%q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
+				}
+				_, _ = io.Copy(io.Discard, r.Body)
+				_, _ = io.WriteString(w, responseBody(test.providerProtocol))
+			}))
+			defer upstream.Close()
+
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/shared/v1")
+			c.Protocol = test.providerProtocol
+			c.APIKey = providerKey
+			c.Model = model
+			c.UpstreamID = test.providerID
+			c = namedProviderConfig(c, "chosen")
+			provider := c.Providers["chosen"]
+			provider.SupportedModels = []string{model}
+			c.Providers["chosen"] = provider
+			h, closeGateway, err := NewHandler(c, upstream.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeGateway()
+
+			models := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			if test.clientProtocol == "openai" {
+				models.Header.Set("Authorization", "Bearer local-secret")
+			} else {
+				models.Header.Set("x-api-key", "local-secret")
+				models.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			}
+			modelsOut := httptest.NewRecorder()
+			h.ServeHTTP(modelsOut, models)
+			if modelsOut.Code != http.StatusOK || !strings.Contains(modelsOut.Body.String(), model) {
+				t.Fatalf("client model list status=%d body=%s", modelsOut.Code, modelsOut.Body.String())
+			}
+			if test.clientProtocol == "openai" && !strings.Contains(modelsOut.Body.String(), `"object":"list"`) || test.clientProtocol == "anthropic" && !strings.Contains(modelsOut.Body.String(), `"has_more":false`) {
+				t.Fatalf("model list did not use client shape: %s", modelsOut.Body.String())
+			}
+
+			body := strings.Replace(requestBody(test.clientProtocol), "custom-model", model, 1)
+			path := "/v1/chat/completions"
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			if test.clientProtocol == "openai" {
+				req.Header.Set("Authorization", "Bearer local-secret")
+			} else {
+				path = "/v1/messages"
+				req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+				req.Header.Set("x-api-key", "local-secret")
+				req.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			}
+			req.Header.Set("X-TideMux-Session-ID", sessionID)
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != http.StatusOK || calls != 1 {
+				t.Fatalf("completion status=%d calls=%d body=%s", out.Code, calls, out.Body.String())
+			}
+			if test.clientProtocol == "openai" && !strings.Contains(out.Body.String(), `"object":"chat.completion"`) || test.clientProtocol == "anthropic" && !strings.Contains(out.Body.String(), `"type":"message"`) {
+				t.Fatalf("completion did not use client response shape: %s", out.Body.String())
+			}
+
+			db, err := ledger.Open(c.LedgerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			rows, err := db.Recent(context.Background(), 10)
+			if err != nil || len(rows) != 1 || rows[0].Upstream != test.providerID || rows[0].Protocol != test.providerProtocol || rows[0].Status != "ok" {
+				t.Fatalf("fallback audit=%+v err=%v", rows, err)
+			}
+		})
 	}
 }
 
