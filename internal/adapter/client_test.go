@@ -54,8 +54,11 @@ func TestKeyCandidatesFailOverWithOneAuditRecord(t *testing.T) {
 	var failedIndex int = -1
 	var failure *CallError
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
-	response, id, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, func(index int, callErr *CallError) {
-		failedIndex, failure = index, callErr
+	response, id, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{
+		Failed: func(index int, callErr *CallError) (bool, time.Duration) {
+			failedIndex, failure = index, callErr
+			return true, 0
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +101,7 @@ func TestAnthropicKeyCandidatesFailOverWithXAPIKey(t *testing.T) {
 	client.APIVersion = "2023-06-01"
 	client.BaseURL = upstream.URL + "/v1"
 	body := []byte(`{"model":"m","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
-	_, _, err := client.CallFromKeyCandidates("anthropic", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, nil)
+	_, _, err := client.CallFromKeyCandidates("anthropic", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
 	if err != nil || len(calls) != 2 || calls[0] != "key-a" || calls[1] != "key-b" {
 		t.Fatalf("err=%v key attempts=%v", err, calls)
 	}
@@ -132,7 +135,7 @@ func TestStreamingCandidateFailoverBeforeFirstFrameKeepsOneLogicalID(t *testing.
 		frameIDs = append(frameIDs, frameID)
 		frames = append(frames, append([]byte(nil), frame...))
 		return nil
-	}, CallOptions{SessionID: "session-123"}, []string{"key-a", "key-b"}, nil)
+	}, CallOptions{SessionID: "session-123"}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
 	if err != nil || len(calls) != 2 || calls[0] != "Bearer key-a" || calls[1] != "Bearer key-b" {
 		t.Fatalf("err=%v calls=%v", err, calls)
 	}
@@ -158,7 +161,12 @@ func TestPreWriteTransportFailureCanFailOver(t *testing.T) {
 	defer l.Close()
 	var failure *CallError
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
-	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, func(_ int, callErr *CallError) { failure = callErr })
+	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{
+		Failed: func(_ int, callErr *CallError) (bool, time.Duration) {
+			failure = callErr
+			return true, 0
+		},
+	})
 	if err != nil || attempts != 2 || failure == nil || !failure.Retryable || failure.Cooldown != 5*time.Second {
 		t.Fatalf("err=%v attempts=%d failure=%+v", err, attempts, failure)
 	}
@@ -176,7 +184,7 @@ func TestTransportFailureAfterHeadersDoesNotFailOver(t *testing.T) {
 	client, l := newCandidateTestClient(t, &http.Client{Transport: transport})
 	defer l.Close()
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
-	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, nil)
+	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
 	var callErr *CallError
 	if !errors.As(err, &callErr) || callErr.Retryable || attempts != 1 {
 		t.Fatalf("err=%v attempts=%d", err, attempts)
@@ -214,7 +222,7 @@ func TestIncompleteStreamAfterOutputDoesNotTryAnotherKey(t *testing.T) {
 	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", func(string, []byte) error {
 		frames++
 		return nil
-	}, CallOptions{}, []string{"key-a", "key-b"}, nil)
+	}, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
 	var callErr *CallError
 	if !errors.As(err, &callErr) || callErr.Code != "incomplete_upstream_stream" || frames != 1 || calls != 1 {
 		t.Fatalf("err=%v frames=%d upstream calls=%d", err, frames, calls)

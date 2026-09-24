@@ -311,11 +311,39 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for i, candidate := range candidates {
 			keys[i] = candidate.key
 		}
-		return providerClient.CallFromKeyCandidates(protocol, r.Context(), body, model, sink, options, keys, func(candidateIndex int, callErr *adapter.CallError) {
-			if candidateIndex >= 0 && candidateIndex < len(candidates) && callErr != nil {
+		callbacks := adapter.KeyCandidateCallbacks{
+			Ready: func(candidateIndex int) (bool, time.Duration) {
+				if candidateIndex < 0 || candidateIndex >= len(candidates) {
+					return false, 0
+				}
+				return pool.CandidateReadyAt(candidates[candidateIndex].index, time.Now())
+			},
+			Failed: func(candidateIndex int, callErr *adapter.CallError) (bool, time.Duration) {
+				if candidateIndex < 0 || candidateIndex >= len(candidates) || callErr == nil {
+					return false, 0
+				}
 				pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown)
-			}
-		})
+				if candidateIndex+1 >= len(candidates) {
+					return false, 0
+				}
+				now := time.Now()
+				hasReadyCandidate := false
+				var earliestCooldown time.Duration
+				for index := candidateIndex + 1; index < len(candidates); index++ {
+					ready, wait := pool.CandidateReadyAt(candidates[index].index, now)
+					if ready {
+						hasReadyCandidate = true
+						continue
+					}
+					keys[index] = ""
+					if wait > 0 && (earliestCooldown == 0 || wait < earliestCooldown) {
+						earliestCooldown = wait
+					}
+				}
+				return hasReadyCandidate, earliestCooldown
+			},
+		}
+		return providerClient.CallFromKeyCandidates(protocol, r.Context(), body, model, sink, options, keys, callbacks)
 	}
 	reservationID := ""
 	var budget ledger.BudgetPolicy

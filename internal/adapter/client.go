@@ -40,6 +40,13 @@ type CallError struct {
 
 func (e *CallError) Error() string { return e.Code }
 
+// KeyCandidateCallbacks rechecks cooldown state before an attempt and records
+// retryable failures while preserving one audit record for the logical call.
+type KeyCandidateCallbacks struct {
+	Ready  func(index int) (bool, time.Duration)
+	Failed func(index int, callErr *CallError) (hasNext bool, earliestCooldown time.Duration)
+}
+
 type observedReader struct {
 	io.Reader
 	observed *bytes.Buffer
@@ -70,17 +77,17 @@ func (c *Client) CallFrom(clientProtocol string, ctx context.Context, body []byt
 	return c.call(clientProtocol, ctx, body, model, sink, options)
 }
 func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions) (response []byte, id string, err error) {
-	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, []string{c.APIKey}, nil)
+	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, []string{c.APIKey}, KeyCandidateCallbacks{})
 }
 
 // CallFromKeyCandidates runs bounded same-provider credential attempts under
 // one request ID and writes one terminal audit record. A retryable failure can
 // advance only while no stream frame has reached the caller.
-func (c *Client) CallFromKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, onFailure func(int, *CallError)) ([]byte, string, error) {
-	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, keys, onFailure)
+func (c *Client) CallFromKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, callbacks KeyCandidateCallbacks) ([]byte, string, error) {
+	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, keys, callbacks)
 }
 
-func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, onFailure func(int, *CallError)) (response []byte, id string, err error) {
+func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, callbacks KeyCandidateCallbacks) (response []byte, id string, err error) {
 	if err := options.Validate(clientProtocol); err != nil {
 		return nil, "", &CallError{Status: 400, Code: err.Error(), Param: ValidationParameter(err)}
 	}
@@ -165,6 +172,39 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	var usage TokenUsage
 	delivered := false
 	for candidateIndex, key := range keys {
+		// Empty entries are used to mark cooled candidates only when the pool
+		// readiness callback is active. Keep the single-client path's historical
+		// behavior, where an empty API key is still sent upstream.
+		if key == "" && callbacks.Ready != nil {
+			continue
+		}
+		if callbacks.Ready != nil {
+			ready, cooldown := callbacks.Ready(candidateIndex)
+			if !ready {
+				keys[candidateIndex] = ""
+				earliestCooldown := cooldown
+				hasReadyCandidate := false
+				for nextIndex := candidateIndex + 1; nextIndex < len(keys); nextIndex++ {
+					if keys[nextIndex] == "" {
+						continue
+					}
+					nextReady, nextCooldown := callbacks.Ready(nextIndex)
+					if nextReady {
+						hasReadyCandidate = true
+						break
+					}
+					keys[nextIndex] = ""
+					if nextCooldown > 0 && (earliestCooldown == 0 || nextCooldown < earliestCooldown) {
+						earliestCooldown = nextCooldown
+					}
+				}
+				if !hasReadyCandidate {
+					err = &CallError{Status: 503, Code: "provider_keys_cooling_down", Cooldown: earliestCooldown}
+					break
+				}
+				continue
+			}
+		}
 		attempted = true
 		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered)
 		if err == nil {
@@ -177,10 +217,16 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		if !errors.As(err, &callErr) || !callErr.Retryable {
 			break
 		}
-		if onFailure != nil {
-			onFailure(candidateIndex, callErr)
+		hasNext := candidateIndex+1 < len(keys)
+		var coolingDelay time.Duration
+		if callbacks.Failed != nil {
+			hasNext, coolingDelay = callbacks.Failed(candidateIndex, callErr)
 		}
-		if !canFailover(callErr, candidateIndex+1 < len(keys), delivered, requestCtx) {
+		if !hasNext && coolingDelay > 0 {
+			err = &CallError{Status: 503, Code: "provider_keys_cooling_down", Cooldown: coolingDelay}
+			break
+		}
+		if !canFailover(callErr, hasNext, delivered, requestCtx) {
 			break
 		}
 		a.Events = append(a.Events, "key_failover")

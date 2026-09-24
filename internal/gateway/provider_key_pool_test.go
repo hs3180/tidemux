@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hs3180/tidemux/internal/adapter"
 )
 
 func TestProviderGroupResolvesMultipleKeychainReferences(t *testing.T) {
@@ -247,6 +249,111 @@ func TestGatewayFailsOverWithinProviderKeyGroup(t *testing.T) {
 	rows, err := h.(*handler).ledger.Recent(context.Background(), 10)
 	if err != nil || len(rows) != 1 || rows[0].Status != "ok" || !hasGatewayEvent(rows[0].Events, "key_failover") {
 		t.Fatalf("audits=%+v err=%v", rows, err)
+	}
+}
+
+func TestConcurrentFailoverSkipsKeyCooledAfterCandidateSnapshot(t *testing.T) {
+	startedA := make(chan struct{}, 1)
+	startedB := make(chan struct{}, 1)
+	releaseA := make(chan struct{})
+	releaseB := make(chan struct{})
+	var releaseAOnce, releaseBOnce sync.Once
+	attempts := make(chan string, 8)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		session := r.Header.Get(adapter.SessionIDHeader)
+		key := r.Header.Get("Authorization")
+		attempts <- session + ":" + key
+		switch {
+		case session == "session-a" && key == "Bearer key-a":
+			startedA <- struct{}{}
+			<-releaseA
+			w.WriteHeader(http.StatusUnauthorized)
+		case session == "session-b" && key == "Bearer key-b":
+			startedB <- struct{}{}
+			<-releaseB
+			w.WriteHeader(http.StatusUnauthorized)
+		case (session == "session-a" && key == "Bearer key-b") || (session == "session-b" && key == "Bearer key-a"):
+			_, _ = io.WriteString(w, responseBody("openai"))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer upstream.Close()
+
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "main")
+	c.MaxInFlight = 2
+	provider := c.Providers["main"]
+	provider.APIKeys = []string{"key-a", "key-b"}
+	provider.APIKey = "key-a"
+	c.Providers["main"] = provider
+	h, closeGateway, err := NewHandler(c, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGateway()
+	defer releaseAOnce.Do(func() { close(releaseA) })
+	defer releaseBOnce.Do(func() { close(releaseB) })
+
+	type result struct {
+		status int
+		body   string
+	}
+	request := func(session string) result {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBody("openai")))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		req.Header.Set(adapter.SessionIDHeader, session)
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		return result{status: out.Code, body: out.Body.String()}
+	}
+	firstDone := make(chan result, 1)
+	secondDone := make(chan result, 1)
+	go func() { firstDone <- request("session-a") }()
+	select {
+	case <-startedA:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first request did not reach its selected key")
+	}
+	go func() { secondDone <- request("session-b") }()
+	select {
+	case <-startedB:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second request did not reach its selected key")
+	}
+
+	// Let the second request cool key-b while the first request still holds
+	// its earlier candidate snapshot. Its fallback to key-a should succeed.
+	releaseBOnce.Do(func() { close(releaseB) })
+	select {
+	case second := <-secondDone:
+		if second.status != http.StatusOK {
+			t.Fatalf("second request status=%d body=%s", second.status, second.body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second request did not finish after the healthy fallback")
+	}
+	// The first request's original candidate list still contains key-b, but it
+	// must recheck pool state and avoid retrying the now-cooled credential.
+	releaseAOnce.Do(func() { close(releaseA) })
+	select {
+	case first := <-firstDone:
+		if first.status != http.StatusServiceUnavailable || !strings.Contains(first.body, "provider_keys_cooling_down") {
+			t.Fatalf("first request should skip the cooling key and report an exhausted pool: status=%d body=%s", first.status, first.body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first request did not finish after pool exhaustion")
+	}
+	close(attempts)
+	var got []string
+	for attempt := range attempts {
+		got = append(got, attempt)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected two initial attempts and one healthy fallback, got %v", got)
 	}
 }
 
