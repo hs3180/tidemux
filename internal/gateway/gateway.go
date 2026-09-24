@@ -26,6 +26,7 @@ type handler struct {
 	providers      map[string]Provider
 	providerRoutes map[string]string
 	clients        map[string]*adapter.Client
+	keyPools       map[string]*providerKeyPool
 	models         map[string][]string
 	modelsKnown    map[string]bool
 }
@@ -248,6 +249,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	retainSession := false
 	defer func() { lease.Release(retainSession) }()
 	client := providerClient
+	if pool := h.keyPools[providerName]; pool != nil {
+		selected := *providerClient
+		selected.APIKey = pool.Next()
+		client = &selected
+	}
 	if client == nil {
 		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 		return

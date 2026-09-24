@@ -116,6 +116,9 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	if resolved.Providers["openai-main"].APIKey != "openai-private" || resolved.Providers["anthropic-main"].APIKey != "anthropic-private" {
 		t.Fatalf("provider credentials were not resolved: %#v", resolved.Providers)
 	}
+	if keys := resolved.Providers["openai-main"].ResolvedAPIKeys(); len(keys) != 1 || keys[0] != "openai-private" {
+		t.Fatalf("legacy single-key provider did not resolve as a one-key group: %#v", keys)
+	}
 	data, err := json.Marshal(resolved)
 	if err != nil {
 		t.Fatal(err)

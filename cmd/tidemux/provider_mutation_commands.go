@@ -60,6 +60,9 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	if !ok {
 		return fmt.Errorf("provider %q not found", ref)
 	}
+	if *rotateKey && len(p.UpstreamKeychains) > 1 {
+		return errors.New("provider update --rotate-key supports one-key profiles; use provider key management for a key group")
+	}
 	oldProtocol := p.Protocol
 	if *endpoint != "" {
 		if err := gateway.ValidateProviderBaseURL(*endpoint); err != nil {
@@ -81,7 +84,11 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	}
 	key := ""
 	if *endpoint != "" || *protocol != "" {
-		key, err = (gateway.MacOSKeychain{}).Lookup(context.Background(), p.UpstreamKeychain)
+		references, referenceErr := p.KeychainReferences()
+		if referenceErr != nil {
+			return errors.New("provider Keychain references are invalid")
+		}
+		key, err = (gateway.MacOSKeychain{}).Lookup(context.Background(), references[0])
 		if err != nil {
 			return errors.New("provider Keychain item unavailable")
 		}
@@ -187,7 +194,12 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		if err != nil {
 			return err
 		}
-		p.UpstreamKeychain = newRef
+		if len(p.UpstreamKeychains) > 0 {
+			p.UpstreamKeychains = []gateway.KeychainReference{newRef}
+			p.UpstreamKeychain = gateway.KeychainReference{}
+		} else {
+			p.UpstreamKeychain = newRef
+		}
 		c.Providers[ref] = p
 		store := gateway.MacOSKeychain{}
 		if err := store.StoreNew(context.Background(), newRef, string(newKey)); err != nil {
@@ -292,15 +304,28 @@ func providerRemove(args []string, stdout, stderr *os.File) error {
 	if err := writeCommandConfig(abs, c, before); err != nil {
 		return err
 	}
-	shared := false
-	for _, candidate := range c.Providers {
-		if candidate.UpstreamKeychain == p.UpstreamKeychain {
-			shared = true
-			break
+	if references, refsErr := p.KeychainReferences(); refsErr == nil {
+		for _, reference := range references {
+			shared := false
+			for _, candidate := range c.Providers {
+				candidateRefs, candidateErr := candidate.KeychainReferences()
+				if candidateErr != nil {
+					continue
+				}
+				for _, candidateRef := range candidateRefs {
+					if candidateRef == reference {
+						shared = true
+						break
+					}
+				}
+				if shared {
+					break
+				}
+			}
+			if !shared {
+				_ = (gateway.MacOSKeychain{}).Delete(context.Background(), reference)
+			}
 		}
-	}
-	if !shared {
-		_ = (gateway.MacOSKeychain{}).Delete(context.Background(), p.UpstreamKeychain)
 	}
 	fmt.Fprintf(stdout, "Removed provider %s.\n", ref)
 	return nil

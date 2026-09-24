@@ -138,12 +138,18 @@ func gatewayConfigure(args []string, stdout, stderr *os.File) error {
 			return errors.New("gateway API key is empty or invalid")
 		}
 		for _, provider := range c.Providers {
-			providerKey, lookupErr := (gateway.MacOSKeychain{}).Lookup(context.Background(), provider.UpstreamKeychain)
-			if lookupErr != nil {
+			refs, refsErr := provider.KeychainReferences()
+			if refsErr != nil {
 				return errors.New("cannot verify distinct gateway and provider credentials")
 			}
-			if string(key) == providerKey {
-				return errors.New("gateway API key must differ from every provider API key")
+			for _, ref := range refs {
+				providerKey, lookupErr := (gateway.MacOSKeychain{}).Lookup(context.Background(), ref)
+				if lookupErr != nil {
+					return errors.New("cannot verify distinct gateway and provider credentials")
+				}
+				if string(key) == providerKey {
+					return errors.New("gateway API key must differ from every provider API key")
+				}
 			}
 		}
 		ref, err := newKeychainReference("com.tidemux.gateway")

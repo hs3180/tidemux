@@ -28,8 +28,19 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		}
 	} else {
 		for _, provider := range c.Providers {
-			if provider.APIKey == "" || provider.APIKey == c.AccessToken {
+			keys := provider.ResolvedAPIKeys()
+			if len(keys) == 0 {
 				return nil, nil, errors.New("distinct resolved credentials are required")
+			}
+			seen := make(map[string]struct{}, len(keys))
+			for _, key := range keys {
+				if key == "" || key == c.AccessToken {
+					return nil, nil, errors.New("distinct resolved credentials are required")
+				}
+				if _, exists := seen[key]; exists {
+					return nil, nil, errors.New("provider API keys must be unique within a key group")
+				}
+				seen[key] = struct{}{}
 			}
 		}
 	}
@@ -65,6 +76,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	}
 	cache := adapter.NewPromptCache()
 	clients := make(map[string]*adapter.Client, len(providers))
+	keyPools := make(map[string]*providerKeyPool, len(providers))
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
 	activeProviders := make(map[string]bool, len(providerRoutes))
@@ -73,6 +85,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	}
 	for name, provider := range providers {
 		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
 		if !legacySingleProvider && activeProviders[name] {
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
@@ -80,7 +93,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 			models[name] = []string{provider.Model}
 		}
 	}
-	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, providerRoutes: providerRoutes, clients: clients, models: models, modelsKnown: modelsKnown}, func() error {
+	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, providerRoutes: providerRoutes, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()
