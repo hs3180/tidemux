@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hs3180/tidemux/internal/ledger"
 )
 
 func TestReportWebhookPayloadsArePlainText(t *testing.T) {
@@ -50,5 +54,34 @@ func TestReportWebhookRejectsUnsafeOrOversizedEndpoint(t *testing.T) {
 	}
 	if err := postReportWebhook("http://127.0.0.1:8787/hook", "generic", strings.Repeat("x", maxReportWebhookBytes+1)); err == nil {
 		t.Fatal("accepted oversized webhook message")
+	}
+}
+
+func TestDeliverReportWebhookSendsSummaryWithoutHTMLExport(t *testing.T) {
+	htmlPath := filepath.Join(t.TempDir(), "private-report.html")
+	const privateHTML = "<html><body>full report must stay local</body></html>"
+	if err := os.WriteFile(htmlPath, []byte(privateHTML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode webhook body: %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	report := ledger.DailyReport{Day: "2026-09-24", RequestCount: 3, InputTokens: 12, OutputTokens: 7}
+	if err := deliverReport("webhook", report, htmlPath, server.URL, "generic"); err != nil {
+		t.Fatal(err)
+	}
+	message := payload["text"]
+	if !strings.Contains(message, "TideMux 2026-09-24 usage report") || !strings.Contains(message, "Requests: 3") {
+		t.Fatalf("webhook did not contain the readable report summary: %q", message)
+	}
+	if strings.Contains(message, privateHTML) || strings.Contains(message, htmlPath) || strings.Contains(strings.ToLower(message), "<html") {
+		t.Fatalf("webhook included local HTML report data: %q", message)
 	}
 }
