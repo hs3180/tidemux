@@ -16,8 +16,13 @@ import (
 	"golang.org/x/term"
 )
 
-func providerKeychainReferencesInUse(c gateway.Config) (map[gateway.KeychainReference]struct{}, error) {
+func configurationKeychainReferencesInUse(c gateway.Config) (map[gateway.KeychainReference]struct{}, error) {
 	inUse := make(map[gateway.KeychainReference]struct{})
+	for _, reference := range []gateway.KeychainReference{c.AccessTokenKeychain, c.UpstreamKeychain} {
+		if reference != (gateway.KeychainReference{}) {
+			inUse[reference] = struct{}{}
+		}
+	}
 	for _, provider := range c.Providers {
 		references, err := provider.KeychainReferences()
 		if err != nil {
@@ -39,9 +44,9 @@ func deleteUnreferencedProviderKeys(c gateway.Config, references []gateway.Keych
 			return errors.New("configuration was updated, but API key cleanup was skipped because a Keychain reference is invalid")
 		}
 	}
-	inUse, err := providerKeychainReferencesInUse(c)
+	inUse, err := configurationKeychainReferencesInUse(c)
 	if err != nil {
-		return errors.New("configuration was updated, but API key cleanup was skipped because provider Keychain references are invalid")
+		return errors.New("configuration was updated, but API key cleanup was skipped because Keychain references are invalid")
 	}
 	seen := make(map[gateway.KeychainReference]struct{}, len(references))
 	deleteFailed := false

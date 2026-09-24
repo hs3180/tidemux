@@ -79,6 +79,30 @@ func TestDeleteUnreferencedProviderKeys(t *testing.T) {
 		}
 	})
 
+	for _, test := range []struct {
+		name   string
+		config gateway.Config
+	}{
+		{
+			name:   "gateway access credential",
+			config: gateway.Config{AccessTokenKeychain: target},
+		},
+		{
+			name:   "legacy top-level provider credential",
+			config: gateway.Config{UpstreamKeychain: target},
+		},
+	} {
+		t.Run("preserves "+test.name, func(t *testing.T) {
+			store := &memorySecrets{values: map[string]string{"provider/old": secret}}
+			if err := deleteUnreferencedProviderKeys(test.config, []gateway.KeychainReference{target}, store); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Lookup(context.Background(), target); err != nil {
+				t.Fatalf("still-configured %s was deleted", test.name)
+			}
+		})
+	}
+
 	t.Run("reports deletion failures without exposing the key", func(t *testing.T) {
 		store := &memorySecrets{values: map[string]string{"provider/old": secret}, failDelete: true}
 		err := deleteUnreferencedProviderKeys(gateway.Config{}, []gateway.KeychainReference{target}, store)
