@@ -229,6 +229,78 @@ func TestIncompleteStreamAfterOutputDoesNotTryAnotherKey(t *testing.T) {
 	}
 }
 
+func TestStreamCancellationAfterFirstFrameDoesNotTryAnotherKey(t *testing.T) {
+	attempts := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts <- r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.BaseURL = upstream.URL + "/v1"
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	frames := make(chan []byte, 1)
+	type result struct {
+		id  string
+		err error
+	}
+	completed := make(chan result, 1)
+	go func() {
+		_, id, err := client.CallFromKeyCandidates("openai", ctx, body, "m", func(_ string, frame []byte) error {
+			frames <- append([]byte(nil), frame...)
+			return nil
+		}, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
+		completed <- result{id: id, err: err}
+	}()
+
+	select {
+	case frame := <-frames:
+		if !strings.Contains(string(frame), "partial") {
+			t.Fatalf("first stream frame = %q", frame)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the first stream frame")
+	}
+	select {
+	case authorization := <-attempts:
+		if authorization != "Bearer key-a" {
+			t.Fatalf("first attempt used unexpected credential: %q", authorization)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstream was not called")
+	}
+	cancel()
+
+	var resultValue result
+	select {
+	case resultValue = <-completed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for canceled stream to finish")
+	}
+	var callErr *CallError
+	if !errors.As(resultValue.err, &callErr) || callErr.Code != "request_canceled" || resultValue.id == "" {
+		t.Fatalf("request ID=%q error=%v", resultValue.id, resultValue.err)
+	}
+	select {
+	case authorization := <-attempts:
+		t.Fatalf("canceled stream unexpectedly tried another key: %q", authorization)
+	default:
+	}
+	rows, err := l.Recent(context.Background(), 10)
+	if err != nil || len(rows) != 1 || rows[0].ID != resultValue.id || rows[0].Status != "canceled" || rows[0].ErrorCode != "request_canceled" {
+		t.Fatalf("audits=%+v err=%v", rows, err)
+	}
+}
+
 func containsEvent(events []string, target string) bool {
 	for _, event := range events {
 		if event == target {
