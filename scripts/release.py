@@ -32,9 +32,9 @@ def build_artifacts(dest,commit,version,build_id):
         stage=pathlib.Path(tmp)/f'tidemux-{version}';stage.mkdir()
         binary=stage/'tidemux'
         subprocess.run(['go','build','-trimpath','-buildvcs=true','-o',str(binary),'./cmd/tidemux'],cwd=ROOT,env=env,check=True)
-        for name in ['LICENSE','NOTICE','README.md','PRIVACY.md','SECURITY.md','THIRD_PARTY_NOTICES.md','CHANGELOG.md','SBOM.md','tidemux.example.json']:
+        for name in ['LICENSE','NOTICE','README.md','PRIVACY.md','SECURITY.md','THIRD_PARTY_NOTICES.md','CHANGELOG.md','SBOM.md']:
             shutil.copyfile(ROOT/name,stage/name)
-        for name in ['docs','examples','licenses']:shutil.copytree(ROOT/name,stage/name)
+        for name in ['docs','licenses']:shutil.copytree(ROOT/name,stage/name)
         (stage/'scripts').mkdir();shutil.copyfile(ROOT/'scripts/verify_live.py',stage/'scripts/verify_live.py')
         info=run('go','version','-m',str(binary));(stage/'BUILD.txt').write_text(f'commit: {commit}\nbuild_id: {build_id or version}\n'+info+'\n')
         timestamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -65,7 +65,7 @@ def build_artifacts(dest,commit,version,build_id):
 
   def install
     bin.install "tidemux"
-    pkgshare.install "tidemux.example.json", "examples", "docs", "licenses", "scripts", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
+    pkgshare.install "docs", "licenses", "scripts", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
   end
 
   test do

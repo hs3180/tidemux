@@ -14,8 +14,8 @@ version's assets.
    Commit all reviewed files; do not include local credentials, config or
    databases.
 4. Run `python3 scripts/release.py` from a clean Git tree. It builds arm64 with
-   CGO disabled, includes build metadata, docs, example config, license texts and
-   SPDX JSON, then emits a tarball, SHA256SUMS and matching `tidemux.rb` formula.
+   CGO disabled, includes build metadata, docs, license texts and SPDX JSON, then
+   emits a tarball, SHA256SUMS and matching `tidemux.rb` formula.
 5. Verify `shasum -a 256 -c SHA256SUMS` in the output directory, extract into a
    fresh directory, and run the packaged binary's version / doctor / serve /
    ledger checks. Preserve source commit and test results in private evidence.

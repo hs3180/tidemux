@@ -226,13 +226,42 @@ func TestNamedProviderProtocolMayBeAutomaticallyDetected(t *testing.T) {
 	}
 }
 
-func TestIndependentProviderExampleValidates(t *testing.T) {
-	config, err := LoadConfig(filepath.Join("..", "..", "examples", "named-providers.json"))
+func TestNamedProviderConfigRoundTrips(t *testing.T) {
+	config := Config{
+		ListenAddr: "127.0.0.1:4000",
+		Providers: map[string]Provider{
+			"openai": {
+				Protocol:         "openai",
+				BaseURL:          "https://openai.example/v1",
+				Model:            "openai-model",
+				UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
+			},
+			"anthropic": {
+				Protocol:         "anthropic",
+				BaseURL:          "https://anthropic.example/v1",
+				Model:            "anthropic-model",
+				UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
+			},
+		},
+		DefaultProviders:    map[string]string{"openai": "openai", "anthropic": "anthropic"},
+		AccessTokenKeychain: KeychainReference{Service: "test.gateway", Account: "default"},
+		MaxInFlight:         1,
+		LedgerPath:          filepath.Join(t.TempDir(), "ledger.db"),
+	}
+	data, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Providers["deepseek-openai"].Model == config.Providers["deepseek-anthropic"].Model {
-		t.Fatal("example should show independent provider model IDs")
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Providers["openai"].Model != "openai-model" || loaded.Providers["anthropic"].Model != "anthropic-model" {
+		t.Fatalf("provider models did not round-trip independently: %#v", loaded.Providers)
 	}
 }
 

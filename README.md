@@ -207,7 +207,6 @@ tidemux gateway configure --listen loopback
 
 [Provider and gateway CLI](docs/provider-cli.md) ·
 [Client setup](docs/clients.md) ·
-[Configuration examples](examples/README.md) ·
 [Accounting](docs/accounting.md) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
 [Privacy](PRIVACY.md) · [Security](SECURITY.md)
