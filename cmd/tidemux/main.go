@@ -29,7 +29,6 @@ commands:
   provider    add and manage upstream providers
   gateway     configure gateway-wide settings
   billing     inspect local usage and cost records (--details for requests)
-  budget      set the rolling budget limits
   report      generate, view or deliver usage reports
               use --diagnostics [--json] for recent local rejections
   claude      launch Claude Code through the gateway
@@ -71,9 +70,6 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "billing" {
 		return billing(args[1:], stdout, stderr)
-	}
-	if command == "budget" {
-		return budgetCommand(args[1:], os.Stdin, stdout, stderr)
 	}
 	if command == "report" {
 		return report(args[1:], stdout, stderr)

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,49 +9,74 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/hs3180/tidemux/internal/gateway"
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
-func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error {
-	flags := flag.NewFlagSet("budget", flag.ContinueOnError)
+func providerBudgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error {
+	ref, rest := leadingEndpoint(args)
+	flags := flag.NewFlagSet("provider budget", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
-	fiveHour := flags.Float64("budget-5h", 0, "rolling five-hour limit; zero disables it")
-	weekly := flags.Float64("budget-weekly", 0, "rolling seven-day limit; zero disables it")
+	fiveHour := flags.Float64("budget-5h", 0, "rolling five-hour limit; zero disables this window")
+	weekly := flags.Float64("budget-weekly", 0, "rolling seven-day limit; zero disables this window")
 	currency := flags.String("budget-currency", "", "budget currency")
 	mode := flags.String("budget-mode", "", "budget mode: alert, soft or hard")
 	threshold := flags.Float64("budget-alert-threshold", 0, "alert threshold from 0 to 1")
-	disable := flags.Bool("disable", false, "disable budget enforcement")
-	if err := flags.Parse(args); err != nil {
+	disable := flags.Bool("disable", false, "disable budget enforcement for this provider")
+	if err := flags.Parse(rest); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("unexpected budget argument")
+		return errors.New("unexpected provider budget argument")
+	}
+	if strings.TrimSpace(*configPath) == "" {
+		return errors.New("configuration path cannot be empty")
 	}
 	path, err := filepath.Abs(*configPath)
 	if err != nil {
 		return errors.New("invalid config path")
 	}
-	data, err := os.ReadFile(path)
+	before, err := os.ReadFile(path)
 	if err != nil {
 		return errors.New("cannot read config")
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return errors.New("invalid config JSON")
+	c, legacyBudget, legacyFieldsReplaced, err := gateway.LoadConfigForProviderBudgetMigration(path)
+	if err != nil {
+		return err
 	}
-	var current ledger.BudgetPolicy
-	legacyBudget := false
-	if value, ok := raw["budget"]; ok {
-		if object, ok := value.(map[string]any); ok {
-			legacyBudget = hasLegacyBudgetFields(object)
+	c, err = migrateLegacyProvider(c, nil)
+	if err != nil {
+		return err
+	}
+	if len(c.Providers) == 0 {
+		return errors.New("no provider is configured; run `tidemux provider add` first")
+	}
+	if ref == "" {
+		if len(c.Providers) != 1 {
+			return errors.New("specify a provider: `tidemux provider budget REF`")
 		}
-		encoded, _ := json.Marshal(value)
-		if err := json.Unmarshal(encoded, &current); err != nil {
-			return errors.New("invalid budget configuration")
+		ref = sortedProviderNames(c.Providers)[0]
+	}
+	provider, ok := c.Providers[ref]
+	if !ok {
+		return fmt.Errorf("provider %q not found", ref)
+	}
+	legacyMigration := legacyBudget != (ledger.BudgetPolicy{})
+	var current ledger.BudgetPolicy
+	if provider.Budget != nil {
+		current = *provider.Budget
+	}
+	if legacyMigration {
+		if current != (ledger.BudgetPolicy{}) && !*disable {
+			return fmt.Errorf("global budget and provider %q already have separate policies; use --disable to discard the old global policy", ref)
+		}
+		if current == (ledger.BudgetPolicy{}) && !*disable {
+			current = legacyBudget
 		}
 	}
 
@@ -81,7 +105,9 @@ func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error
 			current.AlertThreshold = *threshold
 		}
 	}
-	if current != (ledger.BudgetPolicy{}) {
+	if current.FiveHourLimit == 0 && current.WeeklyLimit == 0 {
+		current = ledger.BudgetPolicy{}
+	} else {
 		if current.Currency == "" {
 			current.Currency = "USD"
 		}
@@ -91,70 +117,28 @@ func budgetCommand(args []string, stdin *os.File, stdout, stderr *os.File) error
 		if current.Mode == "" {
 			current.Mode = "hard"
 		}
-		raw["budget"] = current
+	}
+	if current == (ledger.BudgetPolicy{}) {
+		provider.Budget = nil
 	} else {
-		delete(raw, "budget")
+		provider.Budget = &current
 	}
-	updated, err := json.Marshal(raw)
-	if err != nil {
-		return errors.New("cannot encode config")
-	}
-	validated, err := os.CreateTemp(filepath.Dir(path), ".tidemux-budget-*")
-	if err != nil {
-		return errors.New("cannot prepare config")
-	}
-	tmp := validated.Name()
-	defer os.Remove(tmp)
-	if err := validated.Chmod(0600); err != nil {
-		validated.Close()
-		return errors.New("cannot protect config")
-	}
-	if _, err := validated.Write(append(prettyJSON(updated), '\n')); err != nil {
-		validated.Close()
-		return errors.New("cannot write config")
-	}
-	if err := validated.Sync(); err != nil {
-		validated.Close()
-		return errors.New("cannot sync config")
-	}
-	if err := validated.Close(); err != nil {
-		return errors.New("cannot close config")
-	}
-	if _, err := gateway.LoadConfig(tmp); err != nil {
+	c.Providers[ref] = provider
+	if err := writeCommandConfig(path, c, before); err != nil {
 		return err
 	}
-	backup := fmt.Sprintf("%s.backup-budget-%d", path, time.Now().UnixNano())
-	if err := os.WriteFile(backup, data, 0600); err != nil {
-		return errors.New("cannot create config backup")
+	if legacyMigration {
+		if *disable {
+			fmt.Fprintln(stdout, "Removed the former global budget policy.")
+		} else {
+			fmt.Fprintf(stdout, "Moved the former global budget policy to provider %s.\n", ref)
+		}
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		return errors.New("cannot install config")
+	if legacyFieldsReplaced {
+		fmt.Fprintln(stdout, "Replaced the incompatible legacy budget fields with the current provider policy.")
 	}
-	if legacyBudget {
-		fmt.Fprintln(stdout, "Replaced legacy budget fields with the current schema.")
-	}
-	fmt.Fprintf(stdout, "Budget configuration updated: %s\n", path)
+	fmt.Fprintf(stdout, "Budget configuration updated for provider %s.\n", ref)
 	return nil
-}
-
-func hasLegacyBudgetFields(value map[string]any) bool {
-	for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
-		if _, ok := value[key]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func flagWasSet(flags *flag.FlagSet, names ...string) bool {
-	set := map[string]bool{}
-	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	for _, name := range names {
-		if set[name] {
-			return true
-		}
-	}
-	return false
 }
 
 func promptBudget(in *os.File, out *os.File, current ledger.BudgetPolicy) (ledger.BudgetPolicy, error) {
@@ -185,6 +169,9 @@ func promptBudget(in *os.File, out *os.File, current ledger.BudgetPolicy) (ledge
 	current.WeeklyLimit, err = parseBudgetValue(value)
 	if err != nil {
 		return current, err
+	}
+	if current.FiveHourLimit == 0 && current.WeeklyLimit == 0 {
+		return ledger.BudgetPolicy{}, nil
 	}
 	if current.Currency == "" {
 		current.Currency = "USD"
@@ -224,11 +211,13 @@ func parseBudgetValue(value string) (float64, error) {
 
 func formatBudget(value float64) string { return strconv.FormatFloat(value, 'g', -1, 64) }
 
-func prettyJSON(data []byte) []byte {
-	var value any
-	if json.Unmarshal(data, &value) != nil {
-		return data
+func flagWasSet(flags *flag.FlagSet, names ...string) bool {
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	for _, name := range names {
+		if set[name] {
+			return true
+		}
 	}
-	encoded, _ := json.MarshalIndent(value, "", "  ")
-	return encoded
+	return false
 }

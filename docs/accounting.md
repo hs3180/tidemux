@@ -236,22 +236,27 @@ measurements have been recorded.
 
 ## Budgets
 
-An optional `budget` config section applies to one ledger and one currency. It
-does not convert currencies. A matching configured `prices` entry for the
-configured model is required whenever `budget` is enabled. DeepSeek's peak
-built-in and custom rates are stored with provider configuration; `budget` only
-changes limits. The development CLI sets prices under `provider pricing` and
-budget limits under `tidemux budget`. If pricing is absent or uses another
-currency, TideMux refuses to start and never sends an upstream request. Budget
-windows are rolling five-hour and seven-day periods.
+An optional `providers.<ref>.budget` policy applies only to that provider. A
+provider's budgeted usage is isolated from other providers, even when they use
+the same currency; TideMux does not convert currencies. A matching configured
+price for that provider's default model is required. DeepSeek's peak built-in
+and custom rates are stored alongside provider pricing; the budget only sets
+limits. Configure prices with `tidemux provider pricing` and limits with
+`tidemux provider budget REF`. If pricing is absent or uses another currency,
+TideMux refuses to start and never sends an upstream request. Budget windows
+are rolling five-hour and seven-day periods.
 
 ```json
-"budget": {
-  "currency": "USD",
-  "five_hour_limit": 5,
-  "weekly_limit": 80,
-  "alert_threshold": 0.8,
-  "mode": "hard"
+"providers": {
+  "REF": {
+    "budget": {
+      "currency": "USD",
+      "five_hour_limit": 5,
+      "weekly_limit": 80,
+      "alert_threshold": 0.8,
+      "mode": "hard"
+    }
+  }
 }
 ```
 
@@ -264,6 +269,11 @@ remains unknown, later budget requests are blocked with
 `budget_usage_unknown`. A request for a model without a matching configured
 price is rejected with `budget_pricing_unconfigured` before upstream
 transmission.
+
+When upgrading from the former gateway-wide policy, use
+`tidemux provider budget REF` to assign it to one provider. Historical ledger
+charges that predate provider scoping are conservatively counted for each
+provider until they age out of the rolling windows.
 
 Budget admission persists a zero-value pending attempt before the upstream call.
 It is not a reserve and does not count toward the amount. If the process exits
@@ -283,9 +293,9 @@ exact provider token count. These records are marked
 `local_estimated_cache_prefix`, not supplier billing. Session prompt history is
 in memory; after a restart the next request starts without a local cache prefix.
 
-Pre-release budget tables and fields are not migrated automatically. A profile
-using the old budget schema must be replaced with the new configuration before
-the budget feature can be used.
+Pre-release budget tables and the older daily/monthly policy fields are not
+converted to rolling windows. Running `tidemux provider budget REF` replaces
+those incompatible fields with a newly configured provider policy.
 
 ## Daily reports and delivery
 

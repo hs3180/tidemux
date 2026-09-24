@@ -187,8 +187,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerClient := h.clientForRequestProtocol(protocol)
+	providerName := h.providerNameForRequest(protocol)
 	provider := h.providerForRequestProtocol(protocol)
-	if providerClient == nil || h.providerNameForRequest(protocol) == "" {
+	if providerClient == nil || providerName == "" {
 		h.reject(w, r, protocol, 503, "provider_not_configured")
 		return
 	}
@@ -246,25 +247,31 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	retainSession := false
 	defer func() { lease.Release(retainSession) }()
-	if h.config.Budget != (ledger.BudgetPolicy{}) {
-		if _, ok := provider.Prices[model]; !ok {
-			h.reject(w, r, protocol, 503, "budget_pricing_unconfigured")
-			return
-		}
-	}
 	client := providerClient
 	if client == nil {
 		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 		return
 	}
 	reservationID := ""
-	if h.config.Budget != (ledger.BudgetPolicy{}) {
+	var budget ledger.BudgetPolicy
+	if provider.Budget != nil {
+		budget = *provider.Budget
+	}
+	if budget != (ledger.BudgetPolicy{}) {
+		price, priced := provider.Prices[model]
+		if !priced {
+			price, priced = adapter.BuiltInPrice(provider.BaseURL, model, time.Now())
+		}
+		if !priced || price.Currency != budget.Currency {
+			h.reject(w, r, protocol, 503, "budget_pricing_unconfigured")
+			return
+		}
 		reservationID, err = newRequestID()
 		if err != nil {
 			h.reject(w, r, protocol, 500, "request_id_failed")
 			return
 		}
-		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
+		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, providerName, budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
 		if err != nil {
 			code := "budget_reservation_failed"
 			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {
@@ -279,7 +286,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	settle := func(auditID string) {
 		if reservationID != "" {
-			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, h.config.Budget.Currency, time.Now())
+			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now())
 		}
 	}
 	if mode.Stream {

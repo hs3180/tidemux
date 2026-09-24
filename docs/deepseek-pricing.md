@@ -31,7 +31,7 @@ tidemux provider pricing set REF deepseek-flash \
 ```
 
 All three rates are required and are per million tokens. Prices are stored in
-the local provider profile, not in Keychain or the budget section. The
+the local provider profile, separately from its budget policy. The
 published 0.1.1 release uses the legacy configure-time pricing options; see the
 [release demo](demo.md#pricing).
 

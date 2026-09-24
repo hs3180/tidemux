@@ -235,6 +235,9 @@ func TestProviderCommandDoesNotRetainConfigureAlias(t *testing.T) {
 	if err := run([]string{"configure"}, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "commands:") {
 		t.Fatalf("top-level configure still routed: %v", err)
 	}
+	if err := run([]string{"budget"}, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "commands:") {
+		t.Fatalf("top-level budget still routed: %v", err)
+	}
 }
 
 func TestLoadCommandConfigAllowsFirstProviderSetup(t *testing.T) {

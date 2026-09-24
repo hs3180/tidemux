@@ -31,6 +31,7 @@ type Provider struct {
 	UpstreamID        string                   `json:"upstream_id,omitempty"`
 	ModelCapabilities ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Prices            map[string]adapter.Price `json:"prices,omitempty"`
+	Budget            *ledger.BudgetPolicy     `json:"budget,omitempty"`
 	APIKey            string                   `json:"-"`
 }
 
@@ -46,7 +47,7 @@ type SecretLookup interface {
 }
 
 type Config struct {
-	Budget                          ledger.BudgetPolicy      `json:"budget,omitempty"`
+	LegacyBudget                    *ledger.BudgetPolicy     `json:"budget,omitempty"` // accepted only by the provider-budget migration command
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
 	ModelCapabilities               ModelCapabilities        `json:"model_capabilities,omitempty"`
@@ -75,6 +76,81 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("cannot read config")
 	}
+	c, err := decodeConfig(data)
+	if err != nil {
+		return Config{}, err
+	}
+	if c.LegacyBudget != nil && *c.LegacyBudget != (ledger.BudgetPolicy{}) {
+		return Config{}, errors.New("global budget settings are no longer supported; assign them with `tidemux provider budget REF`")
+	}
+	return c, c.Validate()
+}
+
+// LoadConfigForProviderBudgetMigration reads a config while allowing the
+// development-era global budget field to be moved to one named provider.
+func LoadConfigForProviderBudgetMigration(path string) (Config, ledger.BudgetPolicy, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, ledger.BudgetPolicy{}, false, errors.New("cannot read config")
+	}
+	c, err := decodeConfig(data)
+	legacyFieldsReplaced := false
+	if err != nil {
+		clean, replaced, stripErr := stripLegacyBudgetSection(data)
+		if stripErr != nil || !replaced {
+			return Config{}, ledger.BudgetPolicy{}, false, err
+		}
+		c, err = decodeConfig(clean)
+		if err != nil {
+			return Config{}, ledger.BudgetPolicy{}, false, err
+		}
+		legacyFieldsReplaced = true
+	}
+	var legacyBudget ledger.BudgetPolicy
+	if c.LegacyBudget != nil {
+		legacyBudget = *c.LegacyBudget
+	}
+	c.LegacyBudget = nil
+	if err := c.Validate(); err != nil {
+		return Config{}, ledger.BudgetPolicy{}, false, err
+	}
+	if err := legacyBudget.Validate(); err != nil {
+		return Config{}, ledger.BudgetPolicy{}, false, errors.New("invalid global budget configuration")
+	}
+	return c, legacyBudget, legacyFieldsReplaced, nil
+}
+
+func stripLegacyBudgetSection(data []byte) ([]byte, bool, error) {
+	var config map[string]json.RawMessage
+	if err := adapter.StrictJSON(data, &config); err != nil {
+		return nil, false, err
+	}
+	for key, raw := range config {
+		if !strings.EqualFold(key, "budget") {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return nil, false, err
+		}
+		legacy := false
+		for _, name := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
+			if _, ok := fields[name]; ok {
+				legacy = true
+				break
+			}
+		}
+		if !legacy {
+			return nil, false, nil
+		}
+		delete(config, key)
+		clean, err := json.Marshal(config)
+		return clean, true, err
+	}
+	return nil, false, nil
+}
+
+func decodeConfig(data []byte) (Config, error) {
 	var c Config
 	if adapter.StrictJSON(data, &c) != nil {
 		var raw struct {
@@ -83,17 +159,26 @@ func LoadConfig(path string) (Config, error) {
 		if json.Unmarshal(data, &raw) == nil {
 			for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
 				if _, ok := raw.Budget[key]; ok {
-					return c, errors.New("legacy budget fields conflict with the current schema; run `tidemux budget` before using provider commands")
+					return c, errors.New("legacy budget fields cannot be migrated automatically; configure a new policy with `tidemux provider budget REF`")
 				}
 			}
 		}
-		return c, errors.New("invalid config: use the current example; plaintext and legacy DeepSeek fields are not supported")
+		return c, errors.New("invalid config: use the current example; plaintext and legacy fields are not supported")
 	}
-	return c, c.Validate()
+	if c.LegacyBudget != nil && *c.LegacyBudget == (ledger.BudgetPolicy{}) {
+		c.LegacyBudget = nil
+	}
+	for name, provider := range c.Providers {
+		if provider.Budget != nil && *provider.Budget == (ledger.BudgetPolicy{}) {
+			provider.Budget = nil
+			c.Providers[name] = provider
+		}
+	}
+	return c, nil
 }
 func (c Config) Validate() error {
-	if err := c.Budget.Validate(); err != nil {
-		return err
+	if c.LegacyBudget != nil {
+		return errors.New("global budget settings are no longer supported; assign them with `tidemux provider budget REF`")
 	}
 	if err := c.Reconciliation.Validate(); err != nil {
 		return err
@@ -204,16 +289,19 @@ func (c Config) Validate() error {
 			if err := validatePrices(provider.Prices); err != nil {
 				return err
 			}
-			if c.Budget != (ledger.BudgetPolicy{}) {
+			if provider.Budget != nil && *provider.Budget != (ledger.BudgetPolicy{}) {
+				if err := provider.Budget.Validate(); err != nil {
+					return errors.New("providers." + name + ".budget: " + err.Error())
+				}
 				price, ok := provider.Prices[provider.Model]
 				if !ok {
 					price, ok = adapter.BuiltInPrice(provider.BaseURL, provider.Model, time.Now())
 				}
 				if !ok {
-					return errors.New("budget requires pricing for each configured provider model, including " + name)
+					return errors.New("providers." + name + ".budget requires pricing for its default model")
 				}
-				if price.Currency != c.Budget.Currency {
-					return errors.New("budget currency must match each provider model pricing currency, including " + name)
+				if price.Currency != provider.Budget.Currency {
+					return errors.New("providers." + name + ".budget currency must match the provider model pricing currency")
 				}
 			}
 		}
@@ -234,18 +322,6 @@ func (c Config) Validate() error {
 			if _, ok := c.DefaultProviders[protocol]; !ok && protocolCounts[protocol] > 1 && !hasAutoProvider {
 				return errors.New("default_providers must select a default for the " + protocol + " protocol")
 			}
-		}
-	}
-	if len(c.Providers) == 0 && c.BaseURL != "" && c.Budget != (ledger.BudgetPolicy{}) {
-		price, ok := c.Prices[c.Model]
-		if !ok {
-			price, ok = adapter.BuiltInPrice(c.BaseURL, c.Model, time.Now())
-		}
-		if !ok {
-			return errors.New("budget requires pricing for configured model")
-		}
-		if price.Currency != c.Budget.Currency {
-			return errors.New("budget currency must match model pricing currency")
 		}
 	}
 	if len(c.Providers) == 0 && (len(c.UpstreamID) > 80 || strings.ContainsAny(c.UpstreamID, " /:@?\r\n")) {

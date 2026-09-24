@@ -126,5 +126,6 @@ Audit input tokens are total input: Anthropic cache read/creation counts are add
 to input_tokens; OpenAI cache counts are subsets of prompt_tokens. Output includes
 reasoning tokens when the provider includes them in completion usage. Missing
 usage or pricing remains unknown. Pricing is never discovered automatically;
-when configured, rolling five-hour and seven-day budget checks are enforced
-before upstream requests. No cache tuning or claimed savings are provided.
+when configured for a provider, its rolling five-hour and seven-day budget is
+enforced before upstream requests and isolated from other providers. No cache
+tuning or claimed savings are provided.

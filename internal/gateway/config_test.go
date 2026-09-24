@@ -274,12 +274,15 @@ func TestNamedProvidersAllowSameProtocolAndValidateDefaults(t *testing.T) {
 }
 
 func TestBudgetRequiresConfiguredModelPricing(t *testing.T) {
-	c := testConfig("l.db", "https://example.com/prefix/v1")
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
+	c := namedProviderConfig(testConfig("l.db", "https://example.com/prefix/v1"), "openai-main")
+	provider := c.Providers["openai-main"]
+	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
+	c.Providers["openai-main"] = provider
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget requires pricing") {
 		t.Fatalf("missing pricing error=%v", err)
 	}
-	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	c.Providers["openai-main"] = provider
 	if err := c.Validate(); err != nil {
 		t.Fatalf("priced budget rejected: %v", err)
 	}
@@ -287,16 +290,8 @@ func TestBudgetRequiresConfiguredModelPricing(t *testing.T) {
 
 func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 	c := testConfig("l.db", "https://legacy.example/v1")
-	c.Protocol = ""
-	c.APIVersion = ""
-	c.UpstreamKeychain = KeychainReference{}
-	c.APIKey = ""
-	c.Model = ""
-	c.UpstreamID = ""
-	c.ModelCapabilities = ModelCapabilities{}
-	c.Prices = nil
-	c.BaseURL = ""
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
+	c.Protocol, c.APIVersion, c.UpstreamKeychain, c.APIKey = "", "", KeychainReference{}, ""
+	c.Model, c.UpstreamID, c.ModelCapabilities, c.Prices, c.BaseURL = "", "", ModelCapabilities{}, nil, ""
 	c.Providers = map[string]Provider{
 		"openai-main": {
 			Protocol:         "openai",
@@ -304,13 +299,13 @@ func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 			Model:            "openai-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 			Prices:           map[string]adapter.Price{"openai-model": testPrice()},
+			Budget:           &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"},
 		},
 		"anthropic-main": {
 			Protocol:         "anthropic",
 			BaseURL:          "https://anthropic.example/v1",
 			Model:            "anthropic-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
-			Prices:           map[string]adapter.Price{"anthropic-model": testPrice()},
 		},
 	}
 	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
@@ -320,7 +315,7 @@ func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 	openAI := c.Providers["openai-main"]
 	openAI.Prices = nil
 	c.Providers["openai-main"] = openAI
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "each configured provider model") {
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget requires pricing for its default model") {
 		t.Fatalf("missing one provider's price accepted: %v", err)
 	}
 }
@@ -330,10 +325,10 @@ func TestNamedProviderBudgetAcceptsMatchingBuiltInPrice(t *testing.T) {
 	c.Protocol, c.APIVersion, c.UpstreamKeychain, c.APIKey = "", "", KeychainReference{}, ""
 	c.Model, c.UpstreamID, c.BaseURL = "", "", ""
 	c.ModelCapabilities, c.Prices = ModelCapabilities{}, nil
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
 	c.Providers = map[string]Provider{"deepseek": {
 		Protocol: "openai", BaseURL: "https://api.deepseek.com/v1", Model: "deepseek-flash",
 		UpstreamID: "deepseek", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "deepseek"},
+		Budget: &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"},
 	}}
 	c.DefaultProviders = map[string]string{"openai": "deepseek"}
 	if err := c.Validate(); err != nil {
@@ -347,8 +342,38 @@ func TestLegacyBudgetConfigReportsConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := LoadConfig(path)
-	if err == nil || !strings.Contains(err.Error(), "legacy budget fields conflict") {
+	if err == nil || !strings.Contains(err.Error(), "legacy budget fields cannot be migrated automatically") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestGlobalBudgetMustBeAssignedToAProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	policy := ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 5, WeeklyLimit: 80, AlertThreshold: .8, Mode: "hard"}
+	c := namedProviderConfig(testConfig(path, "https://example.com/v1"), "test")
+	c.Providers["test"] = Provider{
+		Protocol: "openai", BaseURL: "https://example.com/v1", Model: "custom-model",
+		UpstreamID: "test", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "default"},
+		Prices: map[string]adapter.Price{"custom-model": testPrice()},
+	}
+	c.DefaultProviders = map[string]string{"openai": "test"}
+	c.LegacyBudget = &policy
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "tidemux provider budget REF") {
+		t.Fatalf("global budget loaded without reassignment: %v", err)
+	}
+	loaded, moved, replaced, err := LoadConfigForProviderBudgetMigration(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved != policy || replaced || loaded.LegacyBudget != nil {
+		t.Fatalf("migration result config=%+v budget=%+v replaced=%t", loaded, moved, replaced)
 	}
 }
 

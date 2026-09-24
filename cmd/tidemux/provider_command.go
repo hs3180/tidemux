@@ -19,7 +19,7 @@ import (
 
 func providerCommand(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux provider <add|list|show|update|remove|default|models|pricing>")
+		return errors.New("usage: tidemux provider <add|list|show|update|remove|default|models|pricing|budget>")
 	}
 	switch args[0] {
 	case "add":
@@ -38,8 +38,10 @@ func providerCommand(args []string, stdout, stderr *os.File) error {
 		return providerModels(args[1:], stdout, stderr)
 	case "pricing":
 		return providerPricing(args[1:], stdout, stderr)
+	case "budget":
+		return providerBudgetCommand(args[1:], os.Stdin, stdout, stderr)
 	default:
-		return errors.New("usage: tidemux provider <add|list|show|update|remove|default|models|pricing>")
+		return errors.New("usage: tidemux provider <add|list|show|update|remove|default|models|pricing|budget>")
 	}
 }
 
@@ -405,7 +407,11 @@ func providerList(args []string, stdout, stderr *os.File) error {
 		items := make([]map[string]any, 0, len(names))
 		for _, name := range names {
 			p := c.Providers[name]
-			items = append(items, map[string]any{"ref": name, "endpoint": p.BaseURL, "protocol": p.Protocol, "default_model": p.Model, "supported_models": p.SupportedModels, "default": c.DefaultProviders[p.Protocol] == name})
+			var budget any
+			if p.Budget != nil {
+				budget = p.Budget
+			}
+			items = append(items, map[string]any{"ref": name, "endpoint": p.BaseURL, "protocol": p.Protocol, "default_model": p.Model, "supported_models": p.SupportedModels, "budget": budget, "default": c.DefaultProviders[p.Protocol] == name})
 		}
 		return json.NewEncoder(stdout).Encode(items)
 	}
@@ -423,7 +429,11 @@ func providerList(args []string, stdout, stderr *os.File) error {
 		if c.DefaultProviders[p.Protocol] == name {
 			marker = " (default)"
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\tmodel=%s\t%s%s\n", name, p.Protocol, p.BaseURL, p.Model, scope, marker)
+		budget := "budget=off"
+		if p.Budget != nil {
+			budget = fmt.Sprintf("budget=%s 5h=%g 7d=%g %s", p.Budget.Currency, p.Budget.FiveHourLimit, p.Budget.WeeklyLimit, p.Budget.Mode)
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\tmodel=%s\t%s\t%s%s\n", name, p.Protocol, p.BaseURL, p.Model, scope, budget, marker)
 	}
 	return nil
 }
@@ -466,7 +476,11 @@ func providerShow(args []string, stdout, stderr *os.File) error {
 	if len(p.SupportedModels) > 0 {
 		scope = strings.Join(p.SupportedModels, ", ")
 	}
-	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nDefault model: %s\nModel scope: %s\nProtocol default: %t\n", ref, p.Protocol, p.BaseURL, p.Model, scope, c.DefaultProviders[p.Protocol] == ref)
+	budget := "disabled"
+	if p.Budget != nil {
+		budget = fmt.Sprintf("%s; 5h=%g; 7d=%g; threshold=%g; mode=%s", p.Budget.Currency, p.Budget.FiveHourLimit, p.Budget.WeeklyLimit, p.Budget.AlertThreshold, p.Budget.Mode)
+	}
+	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nDefault model: %s\nModel scope: %s\nProtocol default: %t\nBudget: %s\n", ref, p.Protocol, p.BaseURL, p.Model, scope, c.DefaultProviders[p.Protocol] == ref, budget)
 	return nil
 }
 

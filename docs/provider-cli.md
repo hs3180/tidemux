@@ -38,9 +38,10 @@ omit a model; all models are allowed unless an allowlist is set separately.
 
 Provider credentials are stored in macOS Keychain, never in command arguments
 or configuration JSON. Existing 0.1.x single-provider configurations are
-migrated to a named provider when one is added; listener, budget, report,
-ledger and gateway credential settings are retained. Configuration changes
-are validated and atomically installed.
+migrated to a named provider when one is added; listener, report, ledger and
+gateway credential settings are retained. A development-era global budget must
+be assigned explicitly with `tidemux provider budget REF`. Configuration
+changes are validated and atomically installed.
 
 ## Inspect and manage providers
 
@@ -98,8 +99,36 @@ tidemux provider pricing remove REF MODEL_ID
 All three rate flags are required when setting a price. Currency defaults to
 USD; source and version identify the rate reference. A matching built-in rate
 may be used when no explicit rate exists. Unknown prices remain unknown rather
-than guessed. An enabled budget requires a matching price for each provider's
-default model.
+than guessed. An enabled budget requires a matching price for that provider's
+default model and for each model used while that budget is active. Unpriced
+models remain usable when the provider has no budget.
+
+## Provider budget
+
+Budget policy and budgeted usage belong to an individual provider. Configure or
+edit its rolling five-hour and seven-day limits interactively, or pass flags:
+
+```sh
+tidemux provider budget REF
+tidemux provider budget REF --budget-5h 5 --budget-weekly 80 \
+  --budget-currency USD --budget-mode hard --budget-alert-threshold 0.8
+tidemux provider budget REF --disable
+```
+
+When exactly one provider is configured, `REF` may be omitted. With multiple
+providers it is required. Modes are `alert`, `soft` and `hard`; a zero limit
+disables that window, and setting both limits to zero disables the budget. An
+enabled budget requires a price whose currency matches
+the budget currency for the provider's default model. Other providers' usage
+does not count against this provider's limits.
+
+If a profile still has the former gateway-wide budget, the first
+`provider budget REF` operation moves it to the selected provider. Existing
+ledger charges without a provider label are conservatively counted toward each
+provider's budget until they age out of the rolling windows.
+Older daily/monthly budget fields cannot be translated to rolling windows; this
+command replaces them with the newly configured provider policy (or removes
+them with `--disable`).
 
 ## Gateway-wide settings
 
@@ -128,10 +157,9 @@ timeout. The default is five minutes; set
 `--active-session-idle-timeout-seconds` to override it (zero selects the
 five-minute default).
 
-Budget and report scheduling remain separate resource commands:
+Report scheduling remains a separate resource command:
 
 ```sh
-tidemux budget
 tidemux report schedule --time 09:00
 tidemux report schedule --disable
 ```

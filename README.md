@@ -133,8 +133,8 @@ development CLI.
 | Command | Semantics |
 | --- | --- |
 | `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model ID]` | Add exactly one provider without replacing others. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol and discover models, prompting only for missing choices. |
-| `tidemux provider list [--json]` | List provider references, endpoint, protocol, default model, model scope and whether each is a protocol default. Never reveal credentials. |
-| `tidemux provider show REF` | Show one provider's effective settings, but not its API key. |
+| `tidemux provider list [--json]` | List provider references, endpoint, protocol, default model, model scope, budget status and protocol defaults. Never reveal credentials. |
+| `tidemux provider show REF` | Show one provider's effective settings, including its budget, but not its API key. |
 | `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID] [--anthropic-version DATE] [--rotate-key]` | Change only the supplied fields. Updating a key uses hidden input; omitted fields and other providers remain unchanged. |
 | `tidemux provider remove REF [--default REF] [--yes]` | Remove only that provider. Confirm interactively; without a terminal require `--yes`. If it is a protocol default and alternatives remain, prompt for a replacement or require `--default`; if none remain, clear the route. Delete a Keychain item only when no remaining provider references it. |
 | `tidemux provider default PROTOCOL REF` | Select the provider used by default for OpenAI or Anthropic clients. The provider must serve that protocol. Adding another provider never silently changes an existing default. |
@@ -142,6 +142,7 @@ development CLI.
 | `tidemux provider pricing list REF` | Show that provider's per-model rates and their source/version. |
 | `tidemux provider pricing set REF MODEL --input-cache-hit RATE --input-cache-miss RATE --output RATE [other options]` | Set or replace all required per-million-token rates for one model; incomplete rate sets are rejected. |
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
+| `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
 
 Provider identity does not depend on a user-chosen name. TideMux creates and
@@ -174,19 +175,21 @@ remain on its old protocol. Configuration writes are validated and atomic;
 credentials created for a provider addition are rolled back if its config
 write fails.
 
-Provider-specific values (endpoint, credentials, protocol, model scope and
-prices) stay with the provider. Gateway-wide values such as listen mode and
-active-session limits are configured separately and apply to the whole gateway.
+Provider-specific values (endpoint, credentials, protocol, model scope, prices
+and spending budget) stay with the provider. Budget limits and accrued usage are
+isolated per provider, even when providers use the same currency. Gateway-wide
+values such as listen mode and active-session limits apply to the whole gateway.
 An automatically recognized built-in rate may be used when no explicit rate
-exists; otherwise cost remains unknown rather than guessed. Budget and report
-settings remain under their existing `budget` and `report` command groups.
+exists; otherwise cost remains unknown rather than guessed. Report scheduling
+remains under `tidemux report`.
 
 Rates are scoped by provider and model. `provider pricing set` requires all
 three per-million-token rate flags: `--input-cache-hit`, `--input-cache-miss`,
 and `--output`; `--currency` defaults to USD, while `--source` and `--version`
 identify the rate reference. Removing a custom rate reveals a matching built-in
-rate if one exists; otherwise cost remains unknown. Unpriced models remain
-usable, but an enabled budget still requires matching prices.
+rate if one exists; otherwise cost remains unknown. An enabled provider budget
+requires matching prices for the default model and every requested model;
+without a budget, unpriced models remain usable.
 
 Typical resource operations look like this; `<ref>` is the stable reference
 shown by `provider list`, not a name the user must invent:
@@ -196,6 +199,7 @@ tidemux provider add https://api.example.com/v1
 tidemux provider list
 tidemux provider models REF_FROM_LIST --only model-a,model-b
 tidemux provider default openai REF_FROM_LIST
+tidemux provider budget REF_FROM_LIST --budget-5h 5 --budget-weekly 80
 tidemux gateway configure --listen loopback
 ```
 
