@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/gateway"
 	"golang.org/x/term"
 )
@@ -144,15 +145,49 @@ func deleteStaleReportWebhookEndpoint(path string, reference gateway.KeychainRef
 	if c.ReportWebhook.Keychain == reference || c.AccessTokenKeychain == reference || c.UpstreamKeychain == reference {
 		return nil
 	}
-	for _, provider := range c.Providers {
-		if provider.UpstreamKeychain == reference {
-			return nil
-		}
+
+	used, err := providerUsesKeychainReference(path, reference)
+	if err != nil {
+		return errors.New("report webhook configuration was updated, but provider Keychain references could not be safely inspected")
+	}
+	if used {
+		return nil
 	}
 	if err := store.Delete(context.Background(), reference); err != nil {
 		return errors.New("report webhook configuration was updated, but the old endpoint could not be deleted from Keychain")
 	}
 	return nil
+}
+
+// providerUsesKeychainReference reads both the legacy singular provider key
+// field and newer key-group arrays. Lenient decoding keeps this cleanup logic
+// independent of provider schema additions while still rejecting malformed or
+// duplicate JSON before deleting a credential.
+func providerUsesKeychainReference(path string, reference gateway.KeychainReference) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	var config struct {
+		Providers map[string]struct {
+			UpstreamKeychain  gateway.KeychainReference   `json:"upstream_keychain"`
+			UpstreamKeychains []gateway.KeychainReference `json:"upstream_keychains"`
+		} `json:"providers"`
+	}
+	if err := adapter.LenientJSON(data, &config); err != nil {
+		return false, err
+	}
+	for _, provider := range config.Providers {
+		if provider.UpstreamKeychain == reference {
+			return true, nil
+		}
+		for _, candidate := range provider.UpstreamKeychains {
+			if candidate == reference {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func validateWebhookProvider(provider string) error {

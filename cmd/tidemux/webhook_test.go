@@ -106,6 +106,97 @@ func TestDeleteStaleReportWebhookEndpoint(t *testing.T) {
 	})
 }
 
+func TestProviderReferenceScanIncludesMultiKeyGroups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	config := `{"providers":{
+		"single":{"upstream_keychain":{"service":"provider","account":"single"}},
+		"group":{"upstream_keychains":[
+			{"service":"provider","account":"first"},
+			{"service":"provider","account":"second"}
+		]}
+	}}`
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	used, err := providerUsesKeychainReference(path, gateway.KeychainReference{Service: "provider", Account: "second"})
+	if err != nil || !used {
+		t.Fatalf("multi-key provider reference used=%t err=%v", used, err)
+	}
+	used, err = providerUsesKeychainReference(path, gateway.KeychainReference{Service: "provider", Account: "missing"})
+	if err != nil || used {
+		t.Fatalf("missing provider reference used=%t err=%v", used, err)
+	}
+
+	duplicate := `{"providers":{"group":{"upstream_keychains":[],"upstream_keychains":[]}}}`
+	if err := os.WriteFile(path, []byte(duplicate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := providerUsesKeychainReference(path, gateway.KeychainReference{Service: "provider", Account: "second"}); err == nil {
+		t.Fatal("duplicate provider key references should prevent cleanup")
+	}
+}
+
+func TestDeleteStaleWebhookCredentialPreservesMultiKeyProviderReference(t *testing.T) {
+	path := writeWebhookScheduleTestConfig(t)
+	current, err := gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := current.ReportWebhook.Keychain
+	if err := replaceReportWebhookConfig(path, gateway.ReportWebhookConfig{}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"protocol", "base_url", "model", "upstream_id", "upstream_keychain"} {
+		delete(raw, field)
+	}
+	provider := map[string]json.RawMessage{
+		"protocol": json.RawMessage(`"openai"`),
+		"base_url": json.RawMessage(`"https://provider.example/v1"`),
+		"model":    json.RawMessage(`"model"`),
+		"upstream_keychains": mustWebhookJSON([]gateway.KeychainReference{
+			previous,
+		}),
+	}
+	raw["providers"] = mustWebhookJSON(map[string]map[string]json.RawMessage{"primary": provider})
+	raw["default_providers"] = mustWebhookJSON(map[string]string{"openai": "primary"})
+	data, err = json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &webhookTestKeychain{values: map[string]string{previous.Service + "/" + previous.Account: "still-used-secret"}}
+	err = deleteStaleReportWebhookEndpoint(path, previous, store)
+	if _, exists := store.values[previous.Service+"/"+previous.Account]; !exists {
+		t.Fatal("a Keychain item referenced by a multi-key provider was deleted")
+	}
+	if err != nil {
+		if _, configErr := gateway.LoadConfig(path); configErr == nil {
+			t.Fatalf("valid multi-key config should be safely handled, got %v", err)
+		}
+	}
+}
+
+func mustWebhookJSON(value any) json.RawMessage {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
 func TestReportWebhookPayloadsArePlainText(t *testing.T) {
 	for _, provider := range []string{"generic", "telegram", "discord", "lark"} {
 		t.Run(provider, func(t *testing.T) {
