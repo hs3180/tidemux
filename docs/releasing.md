@@ -28,17 +28,6 @@ final directory. Never rewrite or replace a published tag or asset.
 The script packages but never publishes. CI uploads candidate workflow artifacts
 only, not GitHub Releases.
 
-## Live gate
-
-Use the live-verification tool or test harness that matches the candidate's
-configuration format and protocol routing. `scripts/verify_live.py` expects the
-legacy single-provider configuration and is not a verifier for named-provider
-profiles. Any live upstream call must be explicitly authorized and minimal.
-Reconcile response usage with the matching ledger record and configured price;
-retain sanitized evidence outside the public repository, without keys or full
-message content. Provider invoice reconciliation and claimed savings need
-separate evidence.
-
 ## Publish once all gates pass
 
 The intended source repository is `hs3180/tidemux`, and the personal tap is
@@ -57,9 +46,10 @@ An authenticated maintainer must:
    SHA256SUMS, SPDX JSON and BUILD.txt. Review download checksums.
 5. Publish the release, copy the generated formula to the tap's
    `Formula/tidemux.rb`, and push the tap commit.
-6. On clean macOS arm64, install via the tap, check the version and run doctor,
-   serve and an authorized live request. Check persistence and uninstall behavior.
-   Only then mark public delivery complete and add verified install instructions.
+6. On clean macOS arm64, install via the tap, check the version and run doctor.
+   Verify the gateway starts and stops cleanly with a local test configuration,
+   then check persistence and uninstall behavior. Only then mark public delivery
+   complete and add verified install instructions.
 
 If download/install fails after publication, flag the release as unusable and
 pause announcements. Fix via a new candidate/version; do not silently replace

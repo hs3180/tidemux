@@ -35,7 +35,6 @@ def build_artifacts(dest,commit,version,build_id):
         for name in ['LICENSE','NOTICE','README.md','PRIVACY.md','SECURITY.md','THIRD_PARTY_NOTICES.md','CHANGELOG.md','SBOM.md']:
             shutil.copyfile(ROOT/name,stage/name)
         for name in ['docs','licenses']:shutil.copytree(ROOT/name,stage/name)
-        (stage/'scripts').mkdir();shutil.copyfile(ROOT/'scripts/verify_live.py',stage/'scripts/verify_live.py')
         info=run('go','version','-m',str(binary));(stage/'BUILD.txt').write_text(f'commit: {commit}\nbuild_id: {build_id or version}\n'+info+'\n')
         timestamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         rootid='SPDXRef-TideMux'
@@ -65,7 +64,7 @@ def build_artifacts(dest,commit,version,build_id):
 
   def install
     bin.install "tidemux"
-    pkgshare.install "docs", "licenses", "scripts", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
+    pkgshare.install "docs", "licenses", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
   end
 
   test do
