@@ -462,7 +462,7 @@ func TestCrossProtocolResponseErrorsIdentifyFinishReason(t *testing.T) {
 }
 
 func TestOpenAIUnknownFieldsAreAcceptedAndNotForwarded(t *testing.T) {
-	body := `{"model":"custom-model","store":true,"messages":[{"role":"user","content":[{"type":"text","text":"use a tool","client_extension":{"trace":true}}]}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"},"eager_input_streaming":true}}]}`
+	body := `{"model":"custom-model","store":true,"dsh_plugin_packages":{"packages":["demo"]},"messages":[{"role":"user","content":[{"type":"text","text":"use a tool","client_extension":{"trace":true}}]}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"},"eager_input_streaming":true}}]}`
 	for _, providerProtocol := range []string{"openai", "anthropic"} {
 		t.Run(providerProtocol, func(t *testing.T) {
 			var upstreamBody string
@@ -487,7 +487,7 @@ func TestOpenAIUnknownFieldsAreAcceptedAndNotForwarded(t *testing.T) {
 			if out.Code != 200 {
 				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
 			}
-			if strings.Contains(upstreamBody, "store") || strings.Contains(upstreamBody, "eager_input_streaming") || strings.Contains(upstreamBody, "client_extension") {
+			if strings.Contains(upstreamBody, "store") || strings.Contains(upstreamBody, "dsh_plugin_packages") || strings.Contains(upstreamBody, "eager_input_streaming") || strings.Contains(upstreamBody, "client_extension") {
 				t.Fatalf("ignored fields reached %s provider: %s", providerProtocol, upstreamBody)
 			}
 		})
