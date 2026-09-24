@@ -12,7 +12,8 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-The Homebrew and pinned-download instructions here install the 0.1.1 release.
+The Homebrew and pinned-download instructions here install the 0.1.1 release,
+which predates the provider/gateway CLI described for current source builds.
 The formula downloads the verified macOS arm64 archive from
 [GitHub Releases](https://github.com/hs3180/tidemux/releases).
 
@@ -29,8 +30,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 The installer verifies the archive's SHA256 checksum and installs the binary in
 `~/.local/bin` without sudo. Add the PATH line to `~/.zshrc` for new terminals.
-Reinstalling preserves your configuration and Keychain credentials. For the
-released binary's setup steps, see the [0.1.1 demo guide](demo.md#recommended-configure-with-the-cli).
+Reinstalling preserves your configuration and Keychain credentials.
 
 Set `TIDEMUX_INSTALL_DIR` to choose another destination, or `TIDEMUX_VERSION` to
 select a published version. Pass these environment variables to `sh` when using
@@ -47,10 +47,9 @@ export PATH="$HOME/.local/bin:$PATH"
 tidemux version
 ```
 
-Add the PATH line to `~/.zshrc` for new terminals. For a source build from this
-development branch, use the [provider and gateway CLI guide](provider-cli.md).
-The published 0.1.1 binary continues to use the release-specific legacy setup
-documented in the demo guide.
+Add the PATH line to `~/.zshrc` for new terminals. For configuration and client
+setup on this source build, use the [provider and gateway CLI guide](provider-cli.md)
+and [client setup](clients.md).
 
 For clickable daily-report notifications, install the small macOS notification
 helper once:

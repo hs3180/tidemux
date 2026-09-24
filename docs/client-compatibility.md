@@ -56,9 +56,9 @@ this extension and other advanced behavior are not guaranteed on every
 Anthropic-compatible service. Kilo credentials use a trusted environment-variable
 reference, not a secret in workspace configuration.
 
-For setup on the 0.1.1 binary, see the [release demo](demo.md). Current
-launcher commands are in [client setup](clients.md); the
-[0.2.0 protocol boundaries](protocols.md) describe its provider routing.
+This page records 0.1.1 compatibility evidence, not setup instructions.
+Current launcher commands are in [client setup](clients.md); the
+[0.2.0 protocol boundaries](protocols.md) describe provider routing.
 Image/audio, provider server tools and other unimplemented APIs remain explicit limitations.
 The original failed baseline and complete private test evidence remain archived;
 they are not substituted for passing repair results. Release artifacts are available from the project’s GitHub Releases page.

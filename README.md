@@ -22,15 +22,19 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
+Homebrew currently installs the published 0.1.1 binary, which predates the
+0.2.0 commands below. The quick start assumes a current source build; see
+[build from source](docs/install.md#build-from-source).
+
 [Build from source or install without Homebrew →](docs/install.md)
 
 Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This is the **target 0.2.0 CLI** walkthrough, not a command sequence for the
-published 0.1.1 binary. To set up the released CLI, follow the
-[0.1.1 demo guide](docs/demo.md#recommended-configure-with-the-cli).
+This walkthrough describes the **target 0.2.0 CLI**. The published 0.1.1
+binary predates the provider commands below; build the current source version
+using [the installation guide](docs/install.md#build-from-source) first.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -52,10 +56,6 @@ All models are allowed by default. `--model` selects the fallback for clients
 that omit a model; it does not restrict the allowed model list. Use
 `tidemux provider models REF --only MODEL[,MODEL...]` only when you want to
 restrict that list. To configure just one protocol, add only its endpoint.
-
-These commands are available in the 0.2.0 development build. The published
-0.1.1 release still uses its legacy `tidemux configure` setup; see the
-[0.1.1 demo guide](docs/demo.md#recommended-configure-with-the-cli).
 
 ### 2. Start the gateway
 
@@ -127,9 +127,8 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The published 0.1.1 binary is version-scoped separately in
-the [release guide](docs/demo.md); the commands below describe the 0.2.0
-development CLI.
+`tidemux gateway`. The commands below describe the 0.2.0 development CLI;
+published older binaries may expose a different command set.
 
 | Command | Semantics |
 | --- | --- |

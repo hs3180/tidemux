@@ -3,8 +3,8 @@
 The 0.2.0 development CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
-retained. The published 0.1.1 binary has a separate, version-scoped guide in
-the [local demo](demo.md#recommended-configure-with-the-cli).
+retained. The published 0.1.1 binary predates this command structure; this guide
+describes the current source CLI.
 
 ## Add a provider
 

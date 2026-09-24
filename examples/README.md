@@ -23,4 +23,5 @@ they are not templates for the 0.2.0 provider model:
 - [`tidemux.example.json`](../tidemux.example.json), the packaged generic
   single-provider template.
 
-For runnable 0.1.1 setup steps, see the [local demo guide](../docs/demo.md).
+For current setup commands, see the [provider and gateway CLI
+guide](../docs/provider-cli.md).
