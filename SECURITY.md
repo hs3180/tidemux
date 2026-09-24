@@ -10,7 +10,7 @@ vulnerability details in public issues.
 
 ## Supported versions
 
-Security fixes target the latest published release. Version 0.1.0 supports
+Security fixes target the latest published release. Version 0.1.1 supports
 macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 
 ## Current boundary
@@ -27,7 +27,9 @@ macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 - Requests are sent to the configured upstream. No telemetry or diagnostic
   upload feature is implemented.
 
-The tested release scope is documented in [acceptance status](docs/mvp-acceptance.md).
+See [protocol support](docs/protocols.md) for current gateway boundaries and
+[client compatibility](docs/client-compatibility.md) for the tested 0.1.1
+client matrix.
 
 Security reports should cover the CLI, HTTP service, ledger, credentials,
 and bundled dependencies. Public release materials must identify affected

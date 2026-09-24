@@ -62,9 +62,9 @@ separate cache-write price.
 
 Rates are stored per model with currency, source and version. TideMux supplies a
 fixed peak price for recognized DeepSeek endpoints and models; custom `prices`
-entries override those built-in rates. In the 0.1.x CLI, provider prices are
-entered through the release's top-level `configure` command. The 0.2.0
-development CLI manages them with `tidemux provider pricing`. There is no generic price discovery, default
+entries override those built-in rates. The published 0.1.1 CLI used a legacy
+top-level `configure` flow; the 0.2.0 development CLI manages rates with
+`tidemux provider pricing`. There is no generic price discovery, default
 currency, or provider discount calculation.
 The gateway's configuration supplies the upstream context. Successful requests
 retain a copy of the selected price with their record, so later configuration

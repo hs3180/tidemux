@@ -1,17 +1,18 @@
 # Release procedure
 
-The 0.1.1 release requires the [acceptance conditions](mvp-acceptance.md), including
-live validation of both protocols. Candidate artifacts do not imply those gates
-passed. Release and tap permissions are required; never replace a published tag
-or published version's assets.
+Before publishing a release, pass the applicable automated, packaging and
+runtime checks. Candidate artifacts do not imply those gates passed. Release
+and tap permissions are required; never replace a published tag or published
+version's assets.
 
 ## Prepare and build
 
 1. Run `gofmt -l cmd internal`, `CGO_ENABLED=0 go test ./...`,
    `CGO_ENABLED=0 go vet ./...`, and `go test -race ./...`.
 2. Run `python3 scripts/licenses.py` and review dependency versions/notices.
-3. Update the source `version`, CHANGELOG and acceptance evidence. Commit all
-   reviewed files; do not include local credentials, config or databases.
+3. Update the source `version`, CHANGELOG and any affected user documentation.
+   Commit all reviewed files; do not include local credentials, config or
+   databases.
 4. Run `python3 scripts/release.py` from a clean Git tree. It builds arm64 with
    CGO disabled, includes build metadata, docs, example config, license texts and
    SPDX JSON, then emits a tarball, SHA256SUMS and matching `tidemux.rb` formula.
@@ -19,44 +20,24 @@ or published version's assets.
    fresh directory, and run the packaged binary's version / doctor / serve /
    ledger checks. Preserve source commit and test results in private evidence.
 
-`dist/<version>/` is immutable. For the unpublished 0.1.0 repair, retain the
-application version and run `python3 scripts/release.py --build-id` to create
-`dist/0.1.0+<commit-prefix>/` with a distinct archive filename. An explicit
-`--build-id repair-N` is also supported. BUILD.txt records both commit and build
-ID; compare binary SHA256 rather than version text when installing a same-version
-repair. An existing output directory is refused, and failed builds do not publish
-a partial final directory. For the final unpublished 0.1.0 freeze, preserve the original tag object under
-`archive/v0.1.0-text-only` before assigning `v0.1.0` to the final reviewed commit.
-Original asset directories remain unchanged. This local archival step does not
-authorize replacing any published tag or asset.
+`dist/<version>/` is immutable. Use a distinct build ID only for an unpublished
+same-version candidate; BUILD.txt records its source commit and build ID. An
+existing output directory is refused, and failed builds do not publish a partial
+final directory. Never rewrite or replace a published tag or asset.
 
 The script packages but never publishes. CI uploads candidate workflow artifacts
 only, not GitHub Releases.
 
-## 0.1.1 acceptance additions
-
-This checklist is not release evidence. Run it after the independent budget,
-reconciliation and reporting changes are merged.
-
-Use a copy of a 0.1.0 ledger to verify migrations are additive and
-`tidemux billing --details --json` remains readable. Exercise a hard-limit request
-against a local upstream and verify it receives no second call. Import a
-de-identified statement CSV and confirm unmatched lines remain unmatched.
-Generate a report, inspect its JSON for the absence of message bodies and
-credentials, then test macOS notification delivery and report delivery failure
-and retry behavior. SMTP and webhook delivery are deferred and are not release
-gates for 0.1.1. Daily balance API checks require an explicit authorized
-low-cost account; a balance delta is diagnostic only, never proof of a
-particular request charge.
-
 ## Live gate
 
-On macOS use [verify_live.py](../scripts/verify_live.py) as described in the demo
-for an authorized minimal call per protocol. It requires a running gateway and
-verified per-model prices. It checks returned usage, matching request ID, and
-cost arithmetic. Retain sanitized evidence outside the public repository; it
-must contain no key or full message content. Provider invoice reconciliation
-and any claimed savings require separate evidence.
+Use the live-verification tool or test harness that matches the candidate's
+configuration format and protocol routing. `scripts/verify_live.py` expects the
+legacy single-provider configuration and is not a verifier for named-provider
+profiles. Any live upstream call must be explicitly authorized and minimal.
+Reconcile response usage with the matching ledger record and configured price;
+retain sanitized evidence outside the public repository, without keys or full
+message content. Provider invoice reconciliation and claimed savings need
+separate evidence.
 
 ## Publish once all gates pass
 
@@ -82,5 +63,5 @@ An authenticated maintainer must:
 
 If download/install fails after publication, flag the release as unusable and
 pause announcements. Fix via a new candidate/version; do not silently replace
-assets or delete users' data. For later upgrades retain the last verified version
-and document database compatibility. Candidate v2 retains v1 legacy tables.
+assets or delete users' data. For upgrades, retain a tested rollback path and
+document database compatibility before changing persisted formats.
