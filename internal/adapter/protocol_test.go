@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestBuiltInDeepSeekPricingUsesPeakPreset(t *testing.T) {
+func TestBuiltInDeepSeekPricingUsesPeakRates(t *testing.T) {
 	cases := []string{"2026-09-21T02:00:00Z", "2026-09-21T05:00:00Z", "2026-09-20T08:00:00Z"}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {

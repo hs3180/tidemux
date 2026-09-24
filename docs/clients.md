@@ -1,117 +1,97 @@
-# Client connections (0.1.1)
+# Client setup
 
-Use `tidemux <client>` to start an installed client with TideMux settings.
-The direct commands replace the earlier `connect` interface. VS Code extension compatibility is outside the 0.1.1 scope.
-Each gateway process uses one provider profile. TideMux detects that provider's
-wire protocol when `serve` starts. Start `serve` before launching a client. The
-client command checks authenticated model discovery, reads only the local gateway
-credential from Keychain, and passes it in the child environment.
-The upstream API key stays in the gateway.
+This guide describes the current named-provider CLI. Install the client you
+want to use separately; TideMux does not install Claude Code, Kilo CLI or
+Hermes Agent. The tested 0.1.1 release matrix is documented in
+[client compatibility](client-compatibility.md); its single-provider routing
+is historical and does not describe the current provider model.
 
-## OpenAI client profile: Kilo CLI and Hermes
+## Add the provider routes
 
-```sh
-./tidemux configure --preset deepseek-flash
-./tidemux serve
-```
-
-In another terminal, from your working directory:
+Each provider has one API protocol, and each client is routed to the default
+provider for its protocol. To use Claude Code and OpenAI-compatible clients
+with DeepSeek, add both endpoint forms:
 
 ```sh
-./tidemux kilo -- run 'Explain this project'
-./tidemux hermes -- -q 'Explain this project'
+tidemux provider add https://api.deepseek.com --model deepseek-flash
+tidemux provider add https://api.deepseek.com/anthropic/v1 --model deepseek-flash
+tidemux provider list
 ```
 
-Install the respective client first. If it is not on PATH, put
-`--executable /absolute/path/to/client` before `--`. Use an absolute path to
-`tidemux` when working outside its build directory. Arguments after `--` go to the
-client, including its own permission and session controls.
+Each command securely prompts for the upstream API key. TideMux infers the
+provider protocol from its endpoint; all models are allowed by default, while
+`--model` selects the fallback when a client omits a model. The first provider
+for each protocol becomes its default. To use only one client protocol, add
+only its provider. To change a route later, use
+`tidemux provider default PROTOCOL REF` with a reference from `provider list`.
+
+Configure the shared gateway credential and listener, then start the gateway:
+
+```sh
+tidemux gateway configure
+tidemux doctor
+tidemux serve
+```
+
+Keep `serve` running in this terminal. The gateway API key is local client
+authentication; it is separate from the upstream provider keys. Gateway-wide
+settings such as the listener and active-session limit are shared by all
+provider routes.
+
+## Launch a client
+
+In another terminal, from your project directory, start a client through
+TideMux:
+
+```sh
+# Anthropic API client
+tidemux claude
+
+# OpenAI API clients — choose one
+tidemux kilo -- run 'Explain this project'
+tidemux hermes -- -q 'Explain this project'
+```
+
+Claude Code uses the Anthropic provider default. Kilo and Hermes use the
+OpenAI provider default. TideMux does not translate between provider protocols
+in the current routing model; add a provider for each protocol you need. Install
+each client first. If its executable is not on `PATH`, pass
+`--executable /absolute/path/to/client` before `--`. Arguments after `--` go
+to the client.
 
 Hermes uses a named custom provider with `chat_completions` transport. Selecting
 its `openai-api` provider can select the Responses API, which TideMux does not
-currently serve. The launcher makes this transport choice explicitly.
+currently serve; the TideMux launcher selects Chat Completions explicitly.
 
-## Anthropic client and provider combinations
-
-Create a provider profile with the Anthropic API root. The configure prompt
-collects the upstream key without echoing it:
+For a non-default TideMux configuration, pass the same `--config PATH` to both
+`serve` and the client command, for example:
 
 ```sh
-./tidemux configure --preset deepseek-flash \
-  --base-url https://api.deepseek.com/anthropic/v1 \
-  --listen 127.0.0.1:8788 --config "$HOME/.config/tidemux/anthropic.json"
-./tidemux serve --config "$HOME/.config/tidemux/anthropic.json"
+tidemux serve --config "$HOME/.config/tidemux/work.json"
+tidemux claude --config "$HOME/.config/tidemux/work.json"
 ```
 
-Kilo and Hermes use the OpenAI-compatible `/v1/chat/completions` endpoint;
-TideMux translates requests and responses to Anthropic Messages upstream.
-Claude Code uses the Anthropic-compatible `/v1/messages` endpoint. Both client
-routes remain available; the provider protocol is detected from the configured
-API root.
+## Credentials and client state
 
-In another terminal:
+Upstream keys stay in macOS Keychain and are never passed to client processes.
+TideMux reads only the local gateway key from Keychain, checks authenticated
+model discovery, and passes that local key to the client. If Keychain needs to
+be unlocked, run the client command from Terminal. If the gateway key is
+missing, create or rotate it with `tidemux gateway configure --rotate-key`.
 
-```sh
-./tidemux claude
-```
+Client state is isolated beside the selected gateway configuration under
+`client-state/`; TideMux does not overwrite the original Claude, Kilo or Hermes
+profiles. Hermes's generated `config.yaml` is TideMux-managed and regenerated
+on launch. Do not edit it for persistent customization. Client conversation
+history remains with the client; TideMux's audit ledger does not store message
+bodies.
 
-When using a non-default profile, add `--config`:
-
-```sh
-./tidemux claude --config "$HOME/.config/tidemux/anthropic.json"
-```
-
-The Claude launcher supplies `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`,
-`ANTHROPIC_MODEL`, and `CLAUDE_CODE_SIMPLE` in the child environment. It does
-not pass the model as a client-specific flag. The gateway remains a separate
-process started with `tidemux serve`; this command only performs the local
-credential/model preflight and launches Claude Code.
-
-Claude Code can also use a profile whose provider speaks OpenAI: TideMux
-translates the Anthropic client request and response to the OpenAI provider wire
-format. Likewise, an OpenAI client can use an Anthropic provider profile. The
-client route selects the client API; provider detection selects the upstream
-wire format.
-
-## Profiles and credentials
-
-Client state lives beside the gateway configuration, in
-`client-state/<client>-<config-path-hash>/`. Claude and Hermes retain sessions
-there; Kilo receives separate XDG directories. Original client home profiles are
-not overwritten. Existing `KILO_CONFIG_CONTENT` options are preserved, with the
-TideMux provider and model selected for the child process.
-
-Hermes's dedicated `config.yaml` is TideMux-managed and regenerated on each
-launch; do not edit that file for persistent customization. An existing file
-without the ownership marker is refused. The file contains an environment
-variable reference, not a token. Local credentials are not added to command-line
-arguments. Client programs may keep their own conversation history in their
-profiles; TideMux's audit ledger does not store message bodies.
-
-The gateway must be running with the same profile. Connection errors distinguish
-unreachable gateway, rejected local credentials, unavailable discovery, and a
-model mismatch. If credential lookup fails, an interactive Terminal session checks the Keychain
-and lets the macOS `security` utility request an unlock password when needed.
-TideMux does not read that password. Lookup is retried after the check; a missing
-credential still requires `configure`. Without a controlling terminal, the error
-explains how to retry interactively.
-
-Client launch is an environment handoff rather than a Unix pipe. Claude Code
-needs a bidirectional streaming HTTP endpoint and an interactive TTY; the same
-environment-based boundary can be reused by future clients without coupling
-them to a shell pipeline.
-
-## Provider compatibility
-
-The tested DeepSeek Anthropic-compatible endpoint accepts Claude's system-role
-messages within the message list. TideMux preserves those messages and their
-order, along with top-level system content. This is a provider compatibility
-extension; standard Anthropic endpoints may reject it. TideMux does not silently
-change system messages into user messages or relocate them. Parameter acceptance
-alone does not establish that an upstream implements every thinking or context
-management behavior; those capabilities depend on the chosen provider/model.
+The gateway must already be running with the same configuration. Connection
+errors distinguish an unreachable gateway, rejected local credentials,
+unavailable model discovery and a model mismatch. Claude Code requires an
+interactive terminal and a bidirectional streaming HTTP connection.
 
 ## Experimental implementation
 
-The existing `tidemux kilo-ide` command is retained as experimental code. VS Code
-extension compatibility is not part of 0.1.1 acceptance or a pending release gate.
+The existing `tidemux kilo-ide` command is experimental. VS Code extension
+compatibility is not part of the current release scope.

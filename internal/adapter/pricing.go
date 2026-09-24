@@ -8,9 +8,9 @@ import (
 
 const deepSeekPricingSource = "https://api-docs.deepseek.com/quick_start/pricing/"
 
-// BuiltInPrice returns TideMux's verified peak DeepSeek price preset. It is
-// deliberately limited to DeepSeek's official hostname; compatible third-party
-// endpoints must provide an explicit price in configuration.
+// BuiltInPrice returns TideMux's verified peak DeepSeek price. It is deliberately
+// limited to DeepSeek's official hostname; compatible third-party endpoints must
+// provide an explicit price in configuration.
 func BuiltInPrice(baseURL, model string, _ time.Time) (Price, bool) {
 	u, err := url.Parse(baseURL)
 	if err != nil || strings.ToLower(u.Hostname()) != "api.deepseek.com" {

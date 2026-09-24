@@ -12,6 +12,8 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
+The Homebrew and pinned-download instructions here install the 0.1.1 release,
+which predates the provider/gateway CLI described for current source builds.
 The formula downloads the verified macOS arm64 archive from
 [GitHub Releases](https://github.com/hs3180/tidemux/releases).
 
@@ -45,8 +47,9 @@ export PATH="$HOME/.local/bin:$PATH"
 tidemux version
 ```
 
-Add the PATH line to `~/.zshrc` for new terminals. Return to the
-[quick start](../README.md#quick-start) to configure your provider and client.
+Add the PATH line to `~/.zshrc` for new terminals. For configuration and client
+setup on this source build, use the [provider and gateway CLI guide](provider-cli.md)
+and [client setup](clients.md).
 
 For clickable daily-report notifications, install the small macOS notification
 helper once:

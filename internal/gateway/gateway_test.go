@@ -19,6 +19,23 @@ import (
 func testConfig(path, url string) Config {
 	return Config{ListenAddr: "127.0.0.1:0", Protocol: "openai", BaseURL: url, Model: "custom-model", UpstreamID: "test", APIKey: "provider-secret", AccessToken: "local-secret", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "default"}, AccessTokenKeychain: KeychainReference{Service: "test.gateway", Account: "default"}, MaxInFlight: 1, LedgerPath: path, APIVersion: "2023-06-01"}
 }
+
+func namedProviderConfig(c Config, name string) Config {
+	protocol, version := c.Protocol, c.APIVersion
+	if protocol == "" {
+		protocol = "openai"
+	}
+	if protocol == "openai" {
+		version = ""
+	}
+	provider := Provider{Protocol: protocol, BaseURL: c.BaseURL, UpstreamKeychain: c.UpstreamKeychain, APIVersion: version, Model: c.Model, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices, APIKey: c.APIKey}
+	c.Protocol, c.BaseURL, c.APIVersion = "", "", ""
+	c.UpstreamKeychain, c.Model, c.UpstreamID = KeychainReference{}, "", ""
+	c.ModelCapabilities, c.Prices, c.APIKey = ModelCapabilities{}, nil, ""
+	c.Providers = map[string]Provider{name: provider}
+	c.DefaultProviders = map[string]string{protocol: name}
+	return c
+}
 func requestBody(protocol string) string {
 	if protocol == "anthropic" {
 		return `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`
@@ -412,11 +429,18 @@ func TestValidationNeverCallsUpstream(t *testing.T) {
 
 func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 	calls := 0
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			calls++
+		}
+		io.WriteString(w, responseBody("openai"))
+	}))
 	defer up.Close()
-	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .5, Mode: "hard"}
-	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL), "openai-main")
+	provider := c.Providers["openai-main"]
+	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: .000004, WeeklyLimit: .000004, AlertThreshold: .5, Mode: "hard"}
+	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	c.Providers["openai-main"] = provider
 	h, closeDB, err := NewHandler(c, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -430,12 +454,64 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 		if i == 0 && out.Code != 200 {
 			t.Fatalf("first=%d", out.Code)
 		}
-		if i == 1 && out.Code != 200 {
+		if i == 1 && out.Code != 429 {
 			t.Fatalf("second=%d %s", out.Code, out.Body.String())
 		}
 	}
-	if calls != 2 {
+	if calls != 1 {
 		t.Fatalf("upstream calls=%d", calls)
+	}
+}
+
+func TestActiveBudgetsAreIsolatedBySelectedProvider(t *testing.T) {
+	var callsA, callsB int
+	newUpstream := func(calls *int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				*calls++
+			}
+			io.WriteString(w, responseBody("openai"))
+		}))
+	}
+	upA, upB := newUpstream(&callsA), newUpstream(&callsB)
+	defer upA.Close()
+	defer upB.Close()
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upA.URL), "provider-a")
+	providerA := c.Providers["provider-a"]
+	providerA.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: .000004, WeeklyLimit: .000004, AlertThreshold: .5, Mode: "hard"}
+	providerA.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	providerB := providerA
+	providerB.BaseURL = upB.URL
+	providerB.UpstreamID = "provider-b"
+	providerB.UpstreamKeychain = KeychainReference{Service: "test.provider", Account: "provider-b"}
+	providerB.APIKey = "provider-secret-b"
+	c.Providers["provider-a"] = providerA
+	c.Providers["provider-b"] = providerB
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	handler := h.(*handler)
+	send := func() int {
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		out := httptest.NewRecorder()
+		handler.ServeHTTP(out, req)
+		return out.Code
+	}
+	if got := send(); got != 200 {
+		t.Fatalf("provider-a first request=%d", got)
+	}
+	if got := send(); got != 429 {
+		t.Fatalf("provider-a over-budget request=%d", got)
+	}
+	handler.providerRoutes["openai"] = "provider-b"
+	if got := send(); got != 200 {
+		t.Fatalf("provider-b request inherited provider-a budget: %d", got)
+	}
+	if callsA != 1 || callsB != 1 {
+		t.Fatalf("upstream POST counts: provider-a=%d provider-b=%d", callsA, callsB)
 	}
 }
 
@@ -628,11 +704,18 @@ func testPrice() adapter.Price {
 
 func TestBudgetRejectsUnpricedRequestedModel(t *testing.T) {
 	calls := 0
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; io.WriteString(w, responseBody("openai")) }))
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			calls++
+		}
+		io.WriteString(w, responseBody("openai"))
+	}))
 	defer up.Close()
-	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
-	c.Budget = ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .5, Mode: "hard"}
-	c.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL), "openai-main")
+	provider := c.Providers["openai-main"]
+	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .5, Mode: "hard"}
+	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	c.Providers["openai-main"] = provider
 	h, closeDB, err := NewHandler(c, nil)
 	if err != nil {
 		t.Fatal(err)

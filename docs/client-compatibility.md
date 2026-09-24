@@ -3,6 +3,9 @@
 Verified on macOS arm64 on 2026-09-11 with real DeepSeek `deepseek-flash`.
 The 0.1.1 release carries forward the verified client matrix from the 0.1.0
 repair; use BUILD.txt and binary SHA256 to identify the exact release artifact.
+This is 0.1.1 release evidence only; it does not certify the 0.2.0
+protocol-specific provider routing. See [protocol support](protocols.md) for
+that development contract.
 
 The gateway exposes both client APIs in every profile: OpenAI clients call
 `/v1/chat/completions`, and Anthropic clients call `/v1/messages`. The selected
@@ -53,7 +56,9 @@ this extension and other advanced behavior are not guaranteed on every
 Anthropic-compatible service. Kilo credentials use a trusted environment-variable
 reference, not a secret in workspace configuration.
 
-See [client setup](clients.md) and [protocol boundaries](protocols.md). Image/audio,
-provider server tools and other unimplemented APIs remain explicit limitations.
+This page records 0.1.1 compatibility evidence, not setup instructions.
+Current launcher commands are in [client setup](clients.md); the
+[0.2.0 protocol boundaries](protocols.md) describe provider routing.
+Image/audio, provider server tools and other unimplemented APIs remain explicit limitations.
 The original failed baseline and complete private test evidence remain archived;
 they are not substituted for passing repair results. Release artifacts are available from the project’s GitHub Releases page.

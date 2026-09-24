@@ -42,8 +42,8 @@ type BudgetDecision struct {
 // CheckBudget checks rolling five-hour and seven-day windows using settled
 // charges only. It persists a zero-value pending attempt so a process restart
 // cannot lose an in-flight request; pending attempts do not act as a reserve.
-func (l *Ledger) CheckBudget(ctx context.Context, requestID string, p BudgetPolicy, confirmed bool, now time.Time) (BudgetDecision, error) {
-	if requestID == "" || p.Validate() != nil {
+func (l *Ledger) CheckBudget(ctx context.Context, requestID, provider string, p BudgetPolicy, confirmed bool, now time.Time) (BudgetDecision, error) {
+	if requestID == "" || strings.TrimSpace(provider) == "" || p.Validate() != nil {
 		return BudgetDecision{}, errors.New("invalid budget policy")
 	}
 	nowMS := now.UnixMilli()
@@ -55,17 +55,17 @@ func (l *Ledger) CheckBudget(ctx context.Context, requestID string, p BudgetPoli
 	}
 	defer tx.Rollback()
 	var unknown int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM budget_charges WHERE currency=? AND charged_at_ms>=? AND state='unknown'`, p.Currency, weeklyStart).Scan(&unknown); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM budget_charges WHERE (provider_scope=? OR provider_scope='') AND currency=? AND charged_at_ms>=? AND state='unknown'`, provider, p.Currency, weeklyStart).Scan(&unknown); err != nil {
 		return BudgetDecision{}, err
 	}
 	if unknown > 0 {
 		return BudgetDecision{}, errors.New("budget_usage_unknown")
 	}
 	var fiveHour, weekly float64
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(charged_amount),0) FROM budget_charges WHERE currency=? AND charged_at_ms>=? AND charged_at_ms<=?`, p.Currency, fiveHourStart, nowMS).Scan(&fiveHour); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(charged_amount),0) FROM budget_charges WHERE (provider_scope=? OR provider_scope='') AND currency=? AND charged_at_ms>=? AND charged_at_ms<=?`, provider, p.Currency, fiveHourStart, nowMS).Scan(&fiveHour); err != nil {
 		return BudgetDecision{}, err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(charged_amount),0) FROM budget_charges WHERE currency=? AND charged_at_ms>=? AND charged_at_ms<=?`, p.Currency, weeklyStart, nowMS).Scan(&weekly); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(charged_amount),0) FROM budget_charges WHERE (provider_scope=? OR provider_scope='') AND currency=? AND charged_at_ms>=? AND charged_at_ms<=?`, provider, p.Currency, weeklyStart, nowMS).Scan(&weekly); err != nil {
 		return BudgetDecision{}, err
 	}
 	fiveRatio, weekRatio := ratio(fiveHour, p.FiveHourLimit), ratio(weekly, p.WeeklyLimit)
@@ -77,7 +77,7 @@ func (l *Ledger) CheckBudget(ctx context.Context, requestID string, p BudgetPoli
 	if p.Mode == "soft" && (over || warning) && !confirmed {
 		return BudgetDecision{}, errors.New("budget_confirmation_required")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,currency,charged_amount,state) VALUES (?,?,?,?,?,?)`, requestID, "", nowMS, p.Currency, 0, "pending"); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,provider_scope,currency,charged_amount,state) VALUES (?,?,?,?,?,?,?)`, requestID, "", nowMS, provider, p.Currency, 0, "pending"); err != nil {
 		return BudgetDecision{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -88,7 +88,7 @@ func (l *Ledger) CheckBudget(ctx context.Context, requestID string, p BudgetPoli
 
 // RecordBudgetCharge records actual usage. Unknown usage is never replaced by
 // a guessed amount; it blocks later budget requests in the active window.
-func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, currency string, chargedAt time.Time) error {
+func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, provider, currency string, chargedAt time.Time) error {
 	var cost *float64
 	err := l.db.QueryRowContext(ctx, `SELECT estimated_cost FROM request_audit WHERE id=?`, auditID).Scan(&cost)
 	if err != nil && !strings.Contains(err.Error(), "no rows") {
@@ -99,14 +99,14 @@ func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, cur
 		state = "settled"
 		amount = *cost
 	}
-	result, err := l.db.ExecContext(ctx, `UPDATE budget_charges SET audit_id=?,charged_at_ms=?,currency=?,charged_amount=?,state=? WHERE request_id=?`, auditID, chargedAt.UnixMilli(), currency, amount, state, requestID)
+	result, err := l.db.ExecContext(ctx, `UPDATE budget_charges SET audit_id=?,charged_at_ms=?,provider_scope=?,currency=?,charged_amount=?,state=? WHERE request_id=?`, auditID, chargedAt.UnixMilli(), provider, currency, amount, state, requestID)
 	if err != nil {
 		return fmt.Errorf("record budget charge: %w", err)
 	}
 	if affected, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("record budget charge result: %w", err)
 	} else if affected == 0 {
-		if _, err := l.db.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,currency,charged_amount,state) VALUES (?,?,?,?,?,?)`, requestID, auditID, chargedAt.UnixMilli(), currency, amount, state); err != nil {
+		if _, err := l.db.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,provider_scope,currency,charged_amount,state) VALUES (?,?,?,?,?,?,?)`, requestID, auditID, chargedAt.UnixMilli(), provider, currency, amount, state); err != nil {
 			return fmt.Errorf("record budget charge insert: %w", err)
 		}
 	}

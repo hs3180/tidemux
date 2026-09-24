@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,126 @@ func TestProviderProtocolHintAvoidsProbe(t *testing.T) {
 	}
 }
 
+func TestInspectProviderEndpointDetectsProtocolAndReturnsModels(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path=%s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion {
+			t.Errorf("Anthropic auth headers = %q / %q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
+		}
+		_, _ = w.Write([]byte(`{"data":[{"type":"model","id":"z-model"},{"type":"model","id":"a-model"}],"has_more":false}`))
+	}))
+	defer server.Close()
+
+	info, err := InspectProviderEndpoint(context.Background(), server.URL+"/v1", "provider-secret", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Protocol != "anthropic" || !info.ModelsKnown || strings.Join(info.Models, ",") != "a-model,z-model" {
+		t.Fatalf("endpoint info = %+v", info)
+	}
+	if calls != 2 {
+		t.Fatalf("probe calls=%d, want two authentication attempts", calls)
+	}
+}
+
+func TestDiscoverProviderModelsCanUseAnExplicitProtocol(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("x-api-key") != "" {
+			t.Errorf("auth headers = %q / %q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
+		}
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"custom-model"}]}`))
+	}))
+	defer server.Close()
+
+	models, known := DiscoverProviderModels(server.URL+"/v1", "provider-secret", "", "openai", server.Client())
+	if !known || strings.Join(models, ",") != "custom-model" {
+		t.Fatalf("models=%v known=%v", models, known)
+	}
+}
+
+func TestResolveNamedProviderAutomaticallyDetectsProtocolAndDefaultRoute(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("x-api-key") != "provider-secret" || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion {
+			t.Fatal("automatic Anthropic probe did not use the configured key and default version")
+		}
+		_, _ = w.Write([]byte(`{"data":[{"type":"model","id":"model","display_name":"Model"}]}`))
+	}))
+	defer server.Close()
+
+	providers, routes, err := resolveProviders(Config{
+		Providers: map[string]Provider{
+			"auto-provider": {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "provider-secret", Model: "model"},
+		},
+	}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providers["auto-provider"].Protocol != "anthropic" || providers["auto-provider"].APIVersion != defaultAnthropicAPIVersion {
+		t.Fatalf("resolved provider = %+v", providers["auto-provider"])
+	}
+	if routes["anthropic"] != "auto-provider" || len(routes) != 1 {
+		t.Fatalf("inferred routes = %#v", routes)
+	}
+	if calls != 2 {
+		t.Fatalf("probe calls = %d, want OpenAI and Anthropic auth attempts", calls)
+	}
+}
+
+func TestResolveNamedProviderProtocolOverrideSkipsDetection(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	providers, routes, err := resolveProviders(Config{
+		Providers: map[string]Provider{
+			"forced-openai": {Protocol: "openai", BaseURL: server.URL + "/v1", APIKey: "provider-secret", Model: "model"},
+		},
+	}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providers["forced-openai"].Protocol != "openai" || routes["openai"] != "forced-openai" || calls != 0 {
+		t.Fatalf("providers=%+v routes=%v probe calls=%d", providers, routes, calls)
+	}
+}
+
+func TestResolveNamedProvidersRequiresDefaultForProtocolWithMultipleProfiles(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"model","object":"model"}]}`))
+	}))
+	defer server.Close()
+
+	_, _, err := resolveProviders(Config{
+		Providers: map[string]Provider{
+			"first":  {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "key-1", Model: "model"},
+			"second": {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "key-2", Model: "model"},
+		},
+	}, server.Client())
+	if err == nil || !strings.Contains(err.Error(), "default_providers.openai") {
+		t.Fatalf("error=%v, want missing OpenAI default route", err)
+	}
+}
+
 func TestNewHandlerAutoDetectsProviderProtocol(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -97,5 +218,51 @@ func TestNewHandlerAutoDetectsProviderProtocol(t *testing.T) {
 	resolved := h.(*handler).config
 	if resolved.Protocol != "anthropic" || resolved.APIVersion != defaultAnthropicAPIVersion {
 		t.Fatalf("resolved provider=%q version=%q", resolved.Protocol, resolved.APIVersion)
+	}
+}
+
+func TestDiscoverProviderModelsUsesEndpointProtocolAndAuth(t *testing.T) {
+	for _, test := range []struct {
+		protocol string
+		body     string
+		wantAuth string
+		want     string
+	}{
+		{protocol: "openai", body: `{"object":"list","data":[{"id":"z-model"},{"id":"a-model"},{"id":"a-model"}]}`, wantAuth: "Bearer endpoint-secret", want: "a-model,z-model"},
+		{protocol: "anthropic", body: `{"data":[{"id":"z-model","type":"model"},{"id":"a-model","type":"model"}],"has_more":false}`, wantAuth: "x-api-key:endpoint-secret", want: "a-model,z-model"},
+	} {
+		t.Run(test.protocol, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/models" {
+					t.Errorf("path=%s", r.URL.Path)
+				}
+				if test.protocol == "openai" {
+					if r.Header.Get("Authorization") != test.wantAuth || r.Header.Get("x-api-key") != "" {
+						t.Errorf("OpenAI headers = %q / %q", r.Header.Get("Authorization"), r.Header.Get("x-api-key"))
+					}
+				} else if r.Header.Get("x-api-key") != "endpoint-secret" || r.Header.Get("anthropic-version") != "2024-01-01" || r.Header.Get("Authorization") != "" {
+					t.Errorf("Anthropic headers = %q / %q / %q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"), r.Header.Get("Authorization"))
+				}
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			endpoint := Provider{APIKey: "endpoint-secret", APIVersion: "2024-01-01"}
+			models, known := discoverProviderModels(server.URL+"/v1", endpoint, test.protocol, server.Client())
+			if !known || strings.Join(models, ",") != test.want {
+				t.Fatalf("models=%v known=%v", models, known)
+			}
+		})
+	}
+}
+
+func TestDiscoverProviderModelsDoesNotTrustPartialPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"first-page-only"}],"has_more":true}`))
+	}))
+	defer server.Close()
+
+	models, known := discoverProviderModels(server.URL+"/v1", Provider{APIKey: "endpoint-secret"}, "openai", server.Client())
+	if known || len(models) != 0 {
+		t.Fatalf("partial model page was treated as authoritative: models=%v known=%v", models, known)
 	}
 }

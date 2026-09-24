@@ -10,7 +10,6 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -20,62 +19,51 @@ import (
 	"github.com/hs3180/tidemux/internal/limiter"
 )
 
-func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, error) {
-	if err := c.Validate(); err != nil {
-		return nil, nil, err
-	}
-	if c.APIKey == "" || c.AccessToken == "" || c.APIKey == c.AccessToken {
-		return nil, nil, errors.New("distinct resolved credentials are required")
-	}
-	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
-	if err != nil {
-		return nil, nil, err
-	}
-	c.Protocol = protocol
-	c.APIVersion = apiVersion
-	if err := c.Validate(); err != nil {
-		return nil, nil, err
-	}
-	l, err := ledger.Open(c.LedgerPath)
-	if err != nil {
-		return nil, nil, errors.New("cannot open ledger")
-	}
-	stopReconciliation := startStatementSync(c, l)
-	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
-	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second
-	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions, idleTTL)
-	if err != nil {
-		stopReconciliation()
-		_ = l.Close()
-		return nil, nil, err
-	}
-	cache := adapter.NewPromptCache()
-	clients := map[string]*adapter.Client{c.Protocol: {Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, APIVersion: c.APIVersion, Upstream: c.UpstreamID, Prices: c.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: c.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}}
-	return &handler{config: c, ledger: l, sessions: sessions, clients: clients}, func() error {
-		stopReconciliation()
-		sessions.Close()
-		return l.Close()
-	}, nil
-}
-
-func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
-	h, closeLedger, err := NewHandler(c, client)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	listener, err := net.Listen("tcp", c.ListenAddr)
-	if err != nil {
-		closeLedger()
-		return nil, nil, nil, errors.New("cannot bind configured listener")
-	}
-	return listener, &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}, func() error { listener.Close(); return closeLedger() }, nil
-}
-
 type handler struct {
-	config   Config
-	ledger   *ledger.Ledger
-	sessions *limiter.SessionLimiter
-	clients  map[string]*adapter.Client
+	config         Config
+	ledger         *ledger.Ledger
+	sessions       *limiter.SessionLimiter
+	providers      map[string]Provider
+	providerRoutes map[string]string
+	clients        map[string]*adapter.Client
+	models         map[string][]string
+	modelsKnown    map[string]bool
+}
+
+func (h *handler) clientForRequestProtocol(protocol string) *adapter.Client {
+	return h.clients[h.providerNameForRequest(protocol)]
+}
+
+func (h *handler) providerNameForRequest(protocol string) string {
+	return h.providerRoutes[protocol]
+}
+
+func (h *handler) providerForRequestProtocol(protocol string) Provider {
+	return h.providers[h.providerNameForRequest(protocol)]
+}
+
+func (h *handler) modelsForRequestProtocol(protocol string) ([]string, bool) {
+	providerName := h.providerNameForRequest(protocol)
+	if providerName == "" {
+		return nil, false
+	}
+	return h.modelsForProvider(providerName)
+}
+
+func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
+	if provider, ok := h.providers[providerName]; ok && len(provider.SupportedModels) > 0 {
+		return provider.SupportedModels, true
+	}
+	return h.models[providerName], h.modelsKnown[providerName]
+}
+
+func containsModel(models []string, model string) bool {
+	for _, candidate := range models {
+		if candidate == model {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string, param ...string) {
@@ -112,9 +100,11 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 }
 
 func (h *handler) protocolForRequest(r *http.Request) string {
-	// Both client-facing protocols are always available. The configured
-	// protocol only selects the upstream provider wire format.
-	if r.URL.Path == "/v1/messages" {
+	// Messages has a unique path. Model discovery shares /v1/models across
+	// protocols, so use Anthropic's authentication/version headers only there;
+	// other client-only headers must not change the selected client protocol.
+	modelRoute := r.Method == http.MethodGet && (r.URL.Path == "/v1/models" || r.URL.Path == "/models" || strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/"))
+	if r.URL.Path == "/v1/messages" || modelRoute && (r.Header.Get("anthropic-version") != "" || r.Header.Get("x-api-key") != "") {
 		return "anthropic"
 	}
 	return "openai"
@@ -137,30 +127,54 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelList := r.URL.Path == "/v1/models" || r.URL.Path == "/models"
 	modelDetail := strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/")
 	if r.Method == "GET" && (modelList || modelDetail) {
+		provider := h.providerForRequestProtocol(protocol)
+		if h.providerNameForRequest(protocol) == "" {
+			h.reject(w, r, protocol, 503, "provider_not_configured")
+			return
+		}
+		models, _ := h.modelsForRequestProtocol(protocol)
 		if modelDetail {
 			modelID := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
-			if modelID != h.config.Model {
+			if !containsModel(models, modelID) {
 				h.reject(w, r, protocol, 404, "model_not_found")
 				return
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		model := map[string]any{"id": h.config.Model, "object": "model", "created": 0, "owned_by": h.config.UpstreamID}
 		if protocol == "anthropic" {
-			model = map[string]any{"id": h.config.Model, "type": "model", "display_name": h.config.Model}
-			h.config.ModelCapabilities.addToModel(model)
 			if modelDetail {
+				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
+				model := map[string]any{"id": id, "type": "model", "display_name": id}
+				provider.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"data": []any{model}, "has_more": false, "first_id": h.config.Model, "last_id": h.config.Model})
+			data := make([]map[string]any, 0, len(models))
+			for _, id := range models {
+				model := map[string]any{"id": id, "type": "model", "display_name": id}
+				provider.ModelCapabilities.addToModel(model)
+				data = append(data, model)
+			}
+			result := map[string]any{"data": data, "has_more": false}
+			if len(models) > 0 {
+				result["first_id"], result["last_id"] = models[0], models[len(models)-1]
+			}
+			json.NewEncoder(w).Encode(result)
 		} else {
-			h.config.ModelCapabilities.addToModel(model)
 			if modelDetail {
+				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
+				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": provider.UpstreamID}
+				provider.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{model}})
+			data := make([]map[string]any, 0, len(models))
+			for _, id := range models {
+				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": provider.UpstreamID}
+				provider.ModelCapabilities.addToModel(model)
+				data = append(data, model)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 		}
 		return
 	}
@@ -170,6 +184,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path != path || r.Method != "POST" {
 		h.reject(w, r, protocol, 404, "unsupported_endpoint")
+		return
+	}
+	providerClient := h.clientForRequestProtocol(protocol)
+	providerName := h.providerNameForRequest(protocol)
+	provider := h.providerForRequestProtocol(protocol)
+	if providerClient == nil || providerName == "" {
+		h.reject(w, r, protocol, 503, "provider_not_configured")
 		return
 	}
 	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
@@ -183,12 +204,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 413, "request_too_large")
 		return
 	}
-	body, model, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, h.config.Model)
+	body, model, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, provider.Model)
 	if len(ignoredFields) > 0 {
 		log.Printf("tidemux: ignored unsupported request fields protocol=%s fields=%q", protocol, ignoredFields)
 	}
 	if err != nil {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
+		return
+	}
+	if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, model) {
+		h.reject(w, r, protocol, 404, "model_not_found")
 		return
 	}
 	if options.SessionID == "" {
@@ -222,25 +247,31 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	retainSession := false
 	defer func() { lease.Release(retainSession) }()
-	if h.config.Budget != (ledger.BudgetPolicy{}) {
-		if _, ok := h.config.Prices[model]; !ok {
-			h.reject(w, r, protocol, 503, "budget_pricing_unconfigured")
-			return
-		}
-	}
-	client := h.clients[h.config.Protocol]
+	client := providerClient
 	if client == nil {
 		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
 		return
 	}
 	reservationID := ""
-	if h.config.Budget != (ledger.BudgetPolicy{}) {
+	var budget ledger.BudgetPolicy
+	if provider.Budget != nil {
+		budget = *provider.Budget
+	}
+	if budget != (ledger.BudgetPolicy{}) {
+		price, priced := provider.Prices[model]
+		if !priced {
+			price, priced = adapter.BuiltInPrice(provider.BaseURL, model, time.Now())
+		}
+		if !priced || price.Currency != budget.Currency {
+			h.reject(w, r, protocol, 503, "budget_pricing_unconfigured")
+			return
+		}
 		reservationID, err = newRequestID()
 		if err != nil {
 			h.reject(w, r, protocol, 500, "request_id_failed")
 			return
 		}
-		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, h.config.Budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
+		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, providerName, budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
 		if err != nil {
 			code := "budget_reservation_failed"
 			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {
@@ -255,7 +286,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	settle := func(auditID string) {
 		if reservationID != "" {
-			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, h.config.Budget.Currency, time.Now())
+			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now())
 		}
 	}
 	if mode.Stream {

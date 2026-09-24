@@ -2,6 +2,8 @@
 
 ## 0.2.0 development
 
+- Remove the DeepSeek `--preset` shortcut; use the general `--base-url` and
+  `--model` options, which still select verified built-in rates for known models.
 - Expose OpenAI Chat Completions and Anthropic Messages APIs simultaneously to
   clients and automatically detect the provider protocol from the configured
   API root/model discovery.

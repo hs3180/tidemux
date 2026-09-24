@@ -92,10 +92,42 @@ func Open(path string) (*Ledger, error) {
 func (l *Ledger) initBudget(ctx context.Context) error {
 	_, err := l.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS budget_charges (
  request_id TEXT PRIMARY KEY, audit_id TEXT, charged_at_ms INTEGER NOT NULL,
- currency TEXT NOT NULL, charged_amount REAL NOT NULL,
+ provider_scope TEXT NOT NULL DEFAULT '', currency TEXT NOT NULL, charged_amount REAL NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('pending','settled','unknown')));
- CREATE INDEX IF NOT EXISTS budget_charge_period ON budget_charges(currency,charged_at_ms);`)
+ `)
 	if err != nil {
+		return err
+	}
+	rows, err := l.db.QueryContext(ctx, `PRAGMA table_info(budget_charges)`)
+	if err != nil {
+		return err
+	}
+	hasProviderScope := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, kind string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "provider_scope" {
+			hasProviderScope = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !hasProviderScope {
+		if _, err := l.db.ExecContext(ctx, `ALTER TABLE budget_charges ADD COLUMN provider_scope TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err := l.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS budget_charge_provider_period ON budget_charges(provider_scope,currency,charged_at_ms)`); err != nil {
 		return err
 	}
 	_, err = l.db.ExecContext(ctx, `UPDATE budget_charges SET state='unknown' WHERE state='pending'`)

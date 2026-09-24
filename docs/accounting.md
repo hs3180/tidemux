@@ -60,10 +60,12 @@ cost = (input_cache_miss × input_cache_miss_rate
 Cache creation/write tokens are included in `input_cache_miss`; there is no
 separate cache-write price.
 
-Rates are stored per model with currency, source and version. The DeepSeek
-preset supplies one fixed peak price for supported models; custom `prices`
-entries are selected by `configure` and override the preset. There is no
-generic price discovery, default currency, or provider discount calculation.
+Rates are stored per model with currency, source and version. TideMux supplies a
+fixed peak price for recognized DeepSeek endpoints and models; custom `prices`
+entries override those built-in rates. The published 0.1.1 CLI used a legacy
+top-level `configure` flow; the 0.2.0 development CLI manages rates with
+`tidemux provider pricing`. There is no generic price discovery, default
+currency, or provider discount calculation.
 The gateway's configuration supplies the upstream context. Successful requests
 retain a copy of the selected price with their record, so later configuration
 changes do not rewrite history. TideMux does not perform currency conversion.
@@ -234,21 +236,27 @@ measurements have been recorded.
 
 ## Budgets
 
-An optional `budget` config section applies to one ledger and one currency. It
-does not convert currencies. A matching configured `prices` entry for the
-configured model is required whenever `budget` is enabled. DeepSeek's peak
-preset and custom rates are written by `configure` alongside the provider API
-key; `budget` only changes limits. If pricing is absent or uses another
-currency, TideMux refuses to start and never sends an upstream request. Budget
-windows are rolling five-hour and seven-day periods.
+An optional `providers.<ref>.budget` policy applies only to that provider. A
+provider's budgeted usage is isolated from other providers, even when they use
+the same currency; TideMux does not convert currencies. A matching configured
+price for that provider's default model is required. DeepSeek's peak built-in
+and custom rates are stored alongside provider pricing; the budget only sets
+limits. Configure prices with `tidemux provider pricing` and limits with
+`tidemux provider budget REF`. If pricing is absent or uses another currency,
+TideMux refuses to start and never sends an upstream request. Budget windows
+are rolling five-hour and seven-day periods.
 
 ```json
-"budget": {
-  "currency": "USD",
-  "five_hour_limit": 5,
-  "weekly_limit": 80,
-  "alert_threshold": 0.8,
-  "mode": "hard"
+"providers": {
+  "REF": {
+    "budget": {
+      "currency": "USD",
+      "five_hour_limit": 5,
+      "weekly_limit": 80,
+      "alert_threshold": 0.8,
+      "mode": "hard"
+    }
+  }
 }
 ```
 
@@ -261,6 +269,11 @@ remains unknown, later budget requests are blocked with
 `budget_usage_unknown`. A request for a model without a matching configured
 price is rejected with `budget_pricing_unconfigured` before upstream
 transmission.
+
+When upgrading from the former gateway-wide policy, use
+`tidemux provider budget REF` to assign it to one provider. Historical ledger
+charges that predate provider scoping are conservatively counted for each
+provider until they age out of the rolling windows.
 
 Budget admission persists a zero-value pending attempt before the upstream call.
 It is not a reserve and does not count toward the amount. If the process exits
@@ -280,9 +293,9 @@ exact provider token count. These records are marked
 `local_estimated_cache_prefix`, not supplier billing. Session prompt history is
 in memory; after a restart the next request starts without a local cache prefix.
 
-Pre-release budget tables and fields are not migrated automatically. A profile
-using the old budget schema must be replaced with the new configuration before
-the budget feature can be used.
+Pre-release budget tables and the older daily/monthly policy fields are not
+converted to rolling windows. Running `tidemux provider budget REF` replaces
+those incompatible fields with a newly configured provider policy.
 
 ## Daily reports and delivery
 
@@ -331,8 +344,9 @@ are blocked, it opens the notification settings page automatically. SMTP
 delivery is intentionally deferred; this release supports macOS
 Notification Center only.
 
-The initial `tidemux configure` flow asks for an optional daily notification
-time in local time. The same setting can be managed from the command line:
+The 0.1.1 `tidemux configure` wizard asks for an optional daily notification
+time in local time. This is a release-specific onboarding detail; scheduling is
+managed separately with the report command in both the current and target CLI:
 
 ```sh
 tidemux report schedule --time 09:00

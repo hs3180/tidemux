@@ -1,55 +1,76 @@
 # Protocol support — 0.2.0 development
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
-`/v1/chat/completions`; Anthropic clients use `/v1/messages`. `base_url` is the
-single API root for the provider. At gateway startup TideMux identifies the
-provider protocol from a well-known API root or a safe `GET /models` response;
-the user does not need to choose `openai` or `anthropic`. Credentials, gateway
-authentication, model identity and the local ledger remain shared.
+`/v1/chat/completions`; Anthropic clients use `/v1/messages`. Named profiles
+are keyed by provider name and each has one inferred or explicitly selected
+`protocol`, its own `base_url`,
+Keychain reference, default model, billing identity, model limits and prices.
+`default_providers` maps each client protocol to the named provider that serves
+it. Multiple named providers may use the same protocol; only the selected
+default receives requests. In the target `provider add` flow, the first
+provider added for a protocol is recorded as its default, and adding another
+provider does not replace it. A hand-written configuration with multiple
+providers for one protocol and no default must specify one explicitly. Gateway
+authentication, active-session limits and the local ledger remain shared.
 
-Detection is local for recognized roots such as OpenAI, Anthropic and the
-DeepSeek preset. For another root, TideMux sends an authenticated `GET` to
-`base_url + /models` using the two standard authentication shapes and classifies
-the returned model objects. It never sends a completion or message just to
-detect the protocol. If neither a root hint nor a recognizable model response
-is available, `serve` stops with an actionable configuration error.
+The 0.1.x single-provider configuration and its cross-protocol translation are
+historical compatibility behavior, not part of the 0.2.0 provider model. A 0.2.0
+provider serves only clients using its protocol; add one provider per protocol
+when both client APIs are needed. Do not rely on migration of a legacy
+single-provider configuration as a 0.2.0 compatibility guarantee.
 
-| Feature | Detected OpenAI provider | Detected Anthropic provider |
+For named providers, an explicitly configured `protocol` of `openai` or
+`anthropic` forces that upstream format and skips detection. Otherwise TideMux
+checks recognized endpoint host/path hints such as OpenAI, Anthropic and
+DeepSeek. For other roots it sends an authenticated `GET` to `base_url + /models`
+using OpenAI and Anthropic authentication shapes, then classifies the returned
+model objects. It never sends a completion or message just to detect the
+protocol. If it cannot confidently identify the format, startup fails with the
+provider reference so the user can explicitly set the protocol. Model discovery
+then uses the resolved protocol and the same endpoint. The older single-provider
+detection behavior belongs to the 0.1.x compatibility path only.
+
+| Feature | Named OpenAI provider | Named Anthropic provider |
 | --- | --- | --- |
 | OpenAI client endpoint | `/v1/chat/completions` | `/v1/chat/completions` |
 | Anthropic client endpoint | `/v1/messages` | `/v1/messages` |
 | Upstream endpoint | `/chat/completions` | `/messages` |
 | Upstream credential | Bearer key | `x-api-key` |
 | Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
-| Provider model discovery | OpenAI-shaped `/models` or root hint | Anthropic-shaped `/models` or root hint |
-| OpenAI client ↔ provider | Passed through after validation | Chat Completions translated to/from Messages |
-| Anthropic client ↔ provider | Messages translated to/from Chat Completions | Passed through after validation |
-| Streaming | Client format is preserved or translated to the selected provider format | Client format is preserved or translated to the selected provider format |
+| Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
+| Matching client protocol | OpenAI client passes through after validation | Anthropic client passes through after validation |
+| Non-matching client protocol | Not routed to this provider | Not routed to this provider |
+| Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-The two client endpoints are independent of provider detection. For example,
-Claude Code can call `/v1/messages` while the detected provider speaks OpenAI,
-and an OpenAI client can call `/v1/chat/completions` while the detected provider
-speaks Anthropic. Matching pairs are passed through; non-matching pairs are
-translated. This is one provider configuration, not a second base URL or a
-`protocol: both` mode. Existing profiles that explicitly contain
-`"protocol": "openai"` or `"protocol": "anthropic"` remain compatible, but new
-profiles omit that field.
+The client endpoints are independent of provider registration, but routing is
+protocol-specific: each client goes only to the configured default with the
+same protocol, with no cross-provider retry or cross-protocol translation. Each
+named provider's `GET /models`
+response is used only on its client route when it is a complete, recognized model list.
+By default that catalogue is informational: any model ID is forwarded to the
+selected provider. Setting the provider's optional `supported_models` list
+restricts completion requests and the gateway's model listing to that subset.
+If a provider does not expose a complete recognizable list, its route returns
+an empty model catalogue unless an explicit allowlist is configured; direct
+requests are still sent to that provider. The current development build may
+accept existing 0.1.x single-provider configurations during transition; this is
+a compatibility bridge, not a 0.2.0 guarantee.
 
-The translation boundary covers text, system/developer instructions, tools,
-tool calls/results, stop sequences, output schemas and streaming terminal
-events in both directions. Provider-specific features that have no equivalent
-on the other wire format remain explicitly unsupported rather than silently
-forwarded.
+The following translation details describe the historical 0.1.x
+single-provider mode only; they do not apply to 0.2.0 named-provider routing.
+That legacy mode translated text, system/developer instructions, tools, tool
+calls/results, stop sequences, output schemas and streaming terminal events in
+both directions. Provider-specific features without an equivalent on the other
+wire format remained unsupported rather than silently forwarded.
 
 Explicit parameters are retained; provider acceptance is not inferred from the
-model name. Native Anthropic client requests can include Anthropic-compatible
-system-role messages and cache markers when the upstream is Anthropic. When the
-upstream is OpenAI, only the supported top-level system/text subset is
-translated; unsupported provider-only blocks are rejected. Claude's observed
-requests carry a mid-conversation-system beta declaration. Providers can
-reject this or other beta features; TideMux does not change system instructions
-into user text.
+model name. The 0.1.x compatibility adapter handled Anthropic system-role
+messages and cache markers when its upstream was Anthropic; for an OpenAI
+upstream it translated only the supported top-level system/text subset and
+rejected unsupported provider-only blocks. This historical behavior is not a
+cross-protocol routing promise for 0.2.0. Providers can reject beta features;
+TideMux does not change system instructions into user text.
 
 The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
 configured provider unchanged. If active-session limiting is enabled and the
@@ -62,12 +83,14 @@ validated. Tools and history use the selected protocol's wire format; no tool
 execution occurs inside TideMux. Thinking/format options must match their wire
 schema, but actual reasoning and schema enforcement depend on the upstream.
 
-Unknown top-level request/config fields, duplicate JSON keys, multiple JSON
-documents, malformed tool envelopes and invalid beta headers are rejected.
+Unknown request fields are ignored with a gateway log warning. Unknown config
+fields, duplicate JSON keys, multiple JSON documents, malformed tool envelopes
+and invalid beta headers are rejected.
 Images, document/audio blocks, provider server tools, Responses API, embeddings,
 batches and token-counting endpoints are not implemented. These remain explicit
 boundaries; normal tested client workflows do not prove every client feature or
-every upstream model is supported. See [client acceptance](client-compatibility.md).
+every upstream model is supported. See the [0.1.1 client acceptance matrix](client-compatibility.md)
+for prior-release evidence; it does not certify the 0.2.0 routing model.
 
 ## Streaming and errors
 
@@ -89,7 +112,7 @@ a different transport, creating separate auditable attempts.
 
 Defaults remain 1 MiB request, 8 MiB non-streaming response, 64 MiB SSE stream,
 1 MiB SSE event, and 60 seconds after concurrency admission. All are configurable
-through `limits`; see [configuration](configure.md). Retained active sessions use
+through `limits`; see [provider and gateway CLI](provider-cli.md). Retained active sessions use
 a five-minute input/output idle timeout by default, configurable independently.
 Queue waiting is cancelable and reported separately. Upstream redirects are not
 followed.
@@ -103,5 +126,6 @@ Audit input tokens are total input: Anthropic cache read/creation counts are add
 to input_tokens; OpenAI cache counts are subsets of prompt_tokens. Output includes
 reasoning tokens when the provider includes them in completion usage. Missing
 usage or pricing remains unknown. Pricing is never discovered automatically;
-when configured, rolling five-hour and seven-day budget checks are enforced
-before upstream requests. No cache tuning or claimed savings are provided.
+when configured for a provider, its rolling five-hour and seven-day budget is
+enforced before upstream requests and isolated from other providers. No cache
+tuning or claimed savings are provided.
