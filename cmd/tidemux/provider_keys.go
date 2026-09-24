@@ -287,26 +287,8 @@ func removeProviderKey(path string, c gateway.Config, before []byte, providerNam
 	if err := writeCommandConfig(path, c, before); err != nil {
 		return err
 	}
-	shared := false
-	for _, candidate := range c.Providers {
-		candidateRefs, candidateErr := candidate.KeychainReferences()
-		if candidateErr != nil {
-			continue
-		}
-		for _, candidateRef := range candidateRefs {
-			if candidateRef == target {
-				shared = true
-				break
-			}
-		}
-		if shared {
-			break
-		}
-	}
-	if !shared {
-		if err := store.Delete(context.Background(), target); err != nil {
-			return errors.New("provider key removed from configuration, but its Keychain item could not be deleted")
-		}
+	if err := deleteUnreferencedProviderKeys(c, []gateway.KeychainReference{target}, store); err != nil {
+		return err
 	}
 	return nil
 }
