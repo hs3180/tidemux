@@ -104,6 +104,47 @@ func TestAnthropicKeyCandidatesFailOverWithXAPIKey(t *testing.T) {
 	}
 }
 
+func TestStreamingCandidateFailoverBeforeFirstFrameKeepsOneLogicalID(t *testing.T) {
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Header.Get("Authorization"))
+		if r.Header.Get(SessionIDHeader) != "session-123" {
+			t.Errorf("session ID not preserved across attempts: %q", r.Header.Get(SessionIDHeader))
+		}
+		if r.Header.Get("Authorization") == "Bearer key-a" {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.BaseURL = upstream.URL + "/v1"
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	var frameIDs []string
+	var frames [][]byte
+	response, id, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", func(frameID string, frame []byte) error {
+		frameIDs = append(frameIDs, frameID)
+		frames = append(frames, append([]byte(nil), frame...))
+		return nil
+	}, CallOptions{SessionID: "session-123"}, []string{"key-a", "key-b"}, nil)
+	if err != nil || len(calls) != 2 || calls[0] != "Bearer key-a" || calls[1] != "Bearer key-b" {
+		t.Fatalf("err=%v calls=%v", err, calls)
+	}
+	if id == "" || len(frameIDs) != 2 || frameIDs[0] != id || frameIDs[1] != id || len(response) == 0 {
+		t.Fatalf("requestID=%q frameIDs=%v response=%s frames=%q", id, frameIDs, response, frames)
+	}
+	rows, err := l.Recent(context.Background(), 10)
+	if err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Status != "ok" {
+		t.Fatalf("audits=%+v err=%v", rows, err)
+	}
+}
+
 func TestPreWriteTransportFailureCanFailOver(t *testing.T) {
 	attempts := 0
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
