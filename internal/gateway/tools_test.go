@@ -83,3 +83,51 @@ func TestToolConversationThroughGateway(t *testing.T) {
 		})
 	}
 }
+
+func TestAnthropicToolContinuationThroughOpenAIProvider(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		data, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/provider/v1/chat/completions" {
+			t.Errorf("upstream path=%q", r.URL.Path)
+		}
+		if calls == 1 {
+			io.WriteString(w, `{"id":"chat1","object":"chat.completion","model":"custom-model","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call1","type":"function","function":{"name":"lookup","arguments":"{\"id\":\"1\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`)
+			return
+		}
+		if !strings.Contains(string(data), `"tool_call_id":"call1"`) || !strings.Contains(string(data), "fixture-result") {
+			t.Errorf("Anthropic tool result did not continue as an OpenAI tool message: %s", data)
+		}
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+	c.Protocol = "openai"
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	bodies := []string{
+		`{"model":"custom-model","max_tokens":32,"messages":[{"role":"user","content":"look up item 1"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
+		`{"model":"custom-model","max_tokens":32,"messages":[{"role":"user","content":"look up item 1"},{"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"lookup","input":{"id":"1"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":"fixture-result"}]}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
+	}
+	for turn, body := range bodies {
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		req.Header.Set("x-api-key", "local-secret")
+		req.Header.Set("anthropic-version", "2023-06-01")
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		if out.Code != 200 {
+			t.Fatalf("turn %d: status=%d body=%s", turn, out.Code, out.Body.String())
+		}
+		if turn == 0 && (!strings.Contains(out.Body.String(), `"type":"tool_use"`) || !strings.Contains(out.Body.String(), `"id":"call1"`)) {
+			t.Fatalf("OpenAI tool call was not converted for Anthropic client: %s", out.Body.String())
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("provider calls=%d want 2", calls)
+	}
+}

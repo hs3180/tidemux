@@ -312,6 +312,45 @@ func TestAnthropicToolHintIsAcceptedAndNotForwarded(t *testing.T) {
 	}
 }
 
+func TestAnthropicForeignDialectFieldsDoNotRejectRequest(t *testing.T) {
+	body := `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"hi","tool_calls":"invalid","tool_call_id":false,"reasoning_content":4}],"reasoning_effort":123,"response_format":"invalid","stop":{"invalid":true},"stream_options":"invalid","parallel_tool_calls":{},"max_completion_tokens":"invalid","user":false,"dsh_plugin_packages":false}`
+	for _, providerProtocol := range []string{"anthropic", "openai"} {
+		t.Run(providerProtocol, func(t *testing.T) {
+			var upstreamBody string
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				upstreamBody = string(data)
+				io.WriteString(w, responseBody(providerProtocol))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+			c.Protocol = providerProtocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+
+			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+			req.Header.Set("x-api-key", "local-secret")
+			req.Header.Set("anthropic-version", "2023-06-01")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != 200 {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+			for _, field := range []string{"reasoning_effort", "response_format", "stop", "stream_options", "parallel_tool_calls", "max_completion_tokens", "tool_calls", "tool_call_id", "reasoning_content", "dsh_plugin_packages"} {
+				if strings.Contains(upstreamBody, `"`+field+`":`) {
+					t.Errorf("foreign field %q reached %s provider: %s", field, providerProtocol, upstreamBody)
+				}
+			}
+			if strings.Contains(upstreamBody, `"user":`) {
+				t.Errorf("foreign user field reached %s provider: %s", providerProtocol, upstreamBody)
+			}
+		})
+	}
+}
+
 func TestValidationErrorIdentifiesParameter(t *testing.T) {
 	for _, test := range []struct {
 		name, protocol, path, body string
@@ -363,8 +402,67 @@ func TestValidationErrorIdentifiesParameter(t *testing.T) {
 	}
 }
 
+func TestCrossProtocolResponseErrorsIdentifyFinishReason(t *testing.T) {
+	for _, test := range []struct {
+		name, clientProtocol, providerProtocol, response, field string
+	}{
+		{
+			name:             "openai content filter to anthropic",
+			clientProtocol:   "anthropic",
+			providerProtocol: "openai",
+			response:         `{"id":"chat1","object":"chat.completion","model":"custom-model","choices":[{"index":0,"message":{"role":"assistant","content":"filtered"},"finish_reason":"content_filter"}]}`,
+			field:            "choices[0].finish_reason",
+		},
+		{
+			name:             "anthropic pause turn to openai",
+			clientProtocol:   "openai",
+			providerProtocol: "anthropic",
+			response:         `{"id":"msg1","type":"message","role":"assistant","model":"custom-model","content":[{"type":"text","text":"continuing"}],"stop_reason":"pause_turn"}`,
+			field:            "stop_reason",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, test.response)
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+			c.Protocol = test.providerProtocol
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			path := endpoint(test.clientProtocol)
+			if test.clientProtocol == "anthropic" {
+				path = "/v1/messages"
+			}
+			req := httptest.NewRequest("POST", path, strings.NewReader(requestBody(test.clientProtocol)))
+			if test.clientProtocol == "anthropic" {
+				req.Header.Set("x-api-key", "local-secret")
+				req.Header.Set("anthropic-version", "2023-06-01")
+			} else {
+				req.Header.Set("Authorization", "Bearer local-secret")
+			}
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != http.StatusBadGateway {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(out.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			detail, ok := payload["error"].(map[string]any)
+			if !ok || detail["param"] != test.field || detail["message"] != "unrepresentable_finish_reason" {
+				t.Fatalf("error does not identify the lost field: %s", out.Body.String())
+			}
+		})
+	}
+}
+
 func TestOpenAIUnknownFieldsAreAcceptedAndNotForwarded(t *testing.T) {
-	body := `{"model":"custom-model","store":true,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"},"eager_input_streaming":true}}]}`
+	body := `{"model":"custom-model","store":true,"dsh_plugin_packages":{"packages":["demo"]},"messages":[{"role":"user","content":[{"type":"text","text":"use a tool","client_extension":{"trace":true}}]}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"},"eager_input_streaming":true}}]}`
 	for _, providerProtocol := range []string{"openai", "anthropic"} {
 		t.Run(providerProtocol, func(t *testing.T) {
 			var upstreamBody string
@@ -389,7 +487,7 @@ func TestOpenAIUnknownFieldsAreAcceptedAndNotForwarded(t *testing.T) {
 			if out.Code != 200 {
 				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
 			}
-			if strings.Contains(upstreamBody, "store") || strings.Contains(upstreamBody, "eager_input_streaming") {
+			if strings.Contains(upstreamBody, "store") || strings.Contains(upstreamBody, "dsh_plugin_packages") || strings.Contains(upstreamBody, "eager_input_streaming") || strings.Contains(upstreamBody, "client_extension") {
 				t.Fatalf("ignored fields reached %s provider: %s", providerProtocol, upstreamBody)
 			}
 		})

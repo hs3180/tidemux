@@ -57,20 +57,38 @@ requests are still sent to that provider. The current development build may
 accept existing 0.1.x single-provider configurations during transition; this is
 a compatibility bridge, not a 0.2.0 guarantee.
 
-The following translation details describe the historical 0.1.x
-single-provider mode only; they do not apply to 0.2.0 named-provider routing.
-That legacy mode translated text, system/developer instructions, tools, tool
-calls/results, stop sequences, output schemas and streaming terminal events in
-both directions. Provider-specific features without an equivalent on the other
-wire format remained unsupported rather than silently forwarded.
+The adapter has a cross-protocol conversion path for a single-provider
+compatibility configuration. Named-provider routing remains same-protocol-only
+in this release; native-route preference and cross-protocol fallback are tracked
+separately in #33. A same-protocol request is not round-tripped through the
+converter.
 
-Explicit parameters are retained; provider acceptance is not inferred from the
-model name. The 0.1.x compatibility adapter handled Anthropic system-role
-messages and cache markers when its upstream was Anthropic; for an OpenAI
-upstream it translated only the supported top-level system/text subset and
-rejected unsupported provider-only blocks. This historical behavior is not a
-cross-protocol routing promise for 0.2.0. Providers can reject beta features;
-TideMux does not change system instructions into user text.
+Cross-protocol conversion covers supported text/system messages, tools and
+tool results, token limits, stop conditions, JSON-schema output where an
+equivalent exists, usage, finish reasons and SSE events. Unsupported optional
+or out-of-dialect fields are omitted and their paths are logged. For example,
+reasoning_effort and Anthropic effort controls are not treated as interchangeable
+without a declared mapping; cache markers have no OpenAI Chat Completions
+equivalent. An explicit Anthropic `thinking` control can pass to an Anthropic
+provider, while enabled thinking and context-management requests cannot be
+represented by an OpenAI provider and are rejected with a field path. OpenAI
+system/developer messages that occur after conversation messages must be moved
+to Anthropic's top-level system field; this is done with a diagnostic. OpenAI
+tool `strict` settings are likewise omitted with a diagnostic when the target
+does not support them.
+
+`end_turn`, `max_tokens` and `tool_use` stop reasons map to their OpenAI
+counterparts. An Anthropic stop sequence or refusal marker can be flattened to
+an ordinary stop and is logged. A pause-turn, content-filter, or unknown finish
+reason has no safe equivalent and returns a field-specific translation error.
+
+Provider-owned response values are never fabricated. Anthropic thinking text
+can be represented as OpenAI reasoning_content, but an OpenAI reasoning-only
+response cannot be turned into an Anthropic thinking block without a valid
+provider signature; TideMux returns an explicit translation error instead of
+an empty successful response. When ordinary text or tool output is also
+available, unrepresentable reasoning is omitted with a diagnostic. TideMux does
+not rewrite system instructions into user text.
 
 The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
 configured provider unchanged. If active-session limiting is enabled and the
