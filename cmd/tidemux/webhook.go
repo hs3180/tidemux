@@ -41,6 +41,7 @@ func configureReportWebhook(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	if *disable {
+		previousKeychain := current.ReportWebhook.Keychain
 		if current.ReportSchedule.Channel == "webhook" {
 			if err := replaceReportScheduleConfig(path, gateway.ReportSchedule{}); err != nil {
 				return err
@@ -50,6 +51,9 @@ func configureReportWebhook(args []string, stdout, stderr *os.File) error {
 			}
 		}
 		if err := replaceReportWebhookConfig(path, gateway.ReportWebhookConfig{}); err != nil {
+			return err
+		}
+		if err := deleteStaleReportWebhookEndpoint(path, previousKeychain, gateway.MacOSKeychain{}); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Report webhook disabled: %s\n", path)
@@ -107,14 +111,47 @@ func configureReportWebhook(args []string, stdout, stderr *os.File) error {
 			_ = store.Delete(context.Background(), candidate.ReportWebhook.Keychain)
 		}
 	}()
-	if _, err := candidate.ResolveCredentials(ctx, store); err != nil {
+	stored, lookupErr := store.Lookup(ctx, candidate.ReportWebhook.Keychain)
+	if lookupErr != nil || stored != endpoint {
 		return errors.New("report webhook Keychain read-back verification failed")
 	}
 	if err := replaceReportWebhookConfig(path, candidate.ReportWebhook); err != nil {
 		return err
 	}
 	committed = true
+	if err := deleteStaleReportWebhookEndpoint(path, current.ReportWebhook.Keychain, store); err != nil {
+		return err
+	}
 	fmt.Fprintf(stdout, "Report webhook configured for %s. The endpoint is stored in macOS Keychain.\n", *provider)
+	return nil
+}
+
+type reportWebhookKeychainDeleter interface {
+	Delete(context.Context, gateway.KeychainReference) error
+}
+
+func deleteStaleReportWebhookEndpoint(path string, reference gateway.KeychainReference, store reportWebhookKeychainDeleter) error {
+	if reference == (gateway.KeychainReference{}) {
+		return nil
+	}
+	if store == nil {
+		return errors.New("report webhook configuration was updated, but the old Keychain item could not be deleted")
+	}
+	c, err := gateway.LoadConfig(path)
+	if err != nil {
+		return errors.New("report webhook configuration was updated, but the old Keychain item could not be safely removed")
+	}
+	if c.ReportWebhook.Keychain == reference || c.AccessTokenKeychain == reference || c.UpstreamKeychain == reference {
+		return nil
+	}
+	for _, provider := range c.Providers {
+		if provider.UpstreamKeychain == reference {
+			return nil
+		}
+	}
+	if err := store.Delete(context.Background(), reference); err != nil {
+		return errors.New("report webhook configuration was updated, but the old endpoint could not be deleted from Keychain")
+	}
 	return nil
 }
 

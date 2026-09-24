@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,8 +11,100 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hs3180/tidemux/internal/gateway"
 	"github.com/hs3180/tidemux/internal/ledger"
 )
+
+type webhookTestKeychain struct {
+	values     map[string]string
+	failDelete bool
+}
+
+func (k *webhookTestKeychain) Delete(_ context.Context, reference gateway.KeychainReference) error {
+	if k.failDelete {
+		return errors.New("simulated Keychain deletion failure")
+	}
+	delete(k.values, reference.Service+"/"+reference.Account)
+	return nil
+}
+
+func TestDeleteStaleReportWebhookEndpoint(t *testing.T) {
+	t.Run("deletes a replaced endpoint after the config is updated", func(t *testing.T) {
+		path := writeWebhookScheduleTestConfig(t)
+		current, err := gateway.LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldRef := current.ReportWebhook.Keychain
+		newRef := gateway.KeychainReference{Service: "com.tidemux.report-webhook", Account: "new"}
+		store := &webhookTestKeychain{values: map[string]string{
+			oldRef.Service + "/" + oldRef.Account: "old-endpoint-secret",
+			newRef.Service + "/" + newRef.Account: "new-endpoint-secret",
+		}}
+		if err := replaceReportWebhookConfig(path, gateway.ReportWebhookConfig{Provider: "discord", Keychain: newRef}); err != nil {
+			t.Fatal(err)
+		}
+		if err := deleteStaleReportWebhookEndpoint(path, oldRef, store); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := store.values[oldRef.Service+"/"+oldRef.Account]; exists {
+			t.Fatal("replaced webhook endpoint remains in Keychain")
+		}
+		if _, exists := store.values[newRef.Service+"/"+newRef.Account]; !exists {
+			t.Fatal("current webhook endpoint was deleted")
+		}
+	})
+
+	t.Run("preserves an endpoint reference still used by another credential", func(t *testing.T) {
+		path := writeWebhookScheduleTestConfig(t)
+		current, err := gateway.LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldRef := current.ReportWebhook.Keychain
+		current.UpstreamKeychain = oldRef
+		data, err := json.Marshal(current)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := replaceReportWebhookConfig(path, gateway.ReportWebhookConfig{}); err != nil {
+			t.Fatal(err)
+		}
+		store := &webhookTestKeychain{values: map[string]string{oldRef.Service + "/" + oldRef.Account: "shared-secret"}}
+		if err := deleteStaleReportWebhookEndpoint(path, oldRef, store); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := store.values[oldRef.Service+"/"+oldRef.Account]; !exists {
+			t.Fatal("Keychain item still referenced by upstream config was deleted")
+		}
+	})
+
+	t.Run("reports Keychain deletion failure without disclosing the endpoint", func(t *testing.T) {
+		path := writeWebhookScheduleTestConfig(t)
+		current, err := gateway.LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldRef := current.ReportWebhook.Keychain
+		if err := replaceReportWebhookConfig(path, gateway.ReportWebhookConfig{}); err != nil {
+			t.Fatal(err)
+		}
+		store := &webhookTestKeychain{values: map[string]string{oldRef.Service + "/" + oldRef.Account: "private-endpoint"}, failDelete: true}
+		err = deleteStaleReportWebhookEndpoint(path, oldRef, store)
+		if err == nil || !strings.Contains(err.Error(), "could not be deleted from Keychain") {
+			t.Fatalf("expected explicit cleanup error, got %v", err)
+		}
+		if strings.Contains(err.Error(), "private-endpoint") {
+			t.Fatal("cleanup error exposed the webhook endpoint")
+		}
+		if _, exists := store.values[oldRef.Service+"/"+oldRef.Account]; !exists {
+			t.Fatal("failed Keychain deletion unexpectedly removed the item")
+		}
+	})
+}
 
 func TestReportWebhookPayloadsArePlainText(t *testing.T) {
 	for _, provider := range []string{"generic", "telegram", "discord", "lark"} {

@@ -450,14 +450,5 @@ func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Co
 			return Config{}, errors.New("use separate upstream and gateway credentials")
 		}
 	}
-	if c.ReportWebhook != (ReportWebhookConfig{}) {
-		c.ReportWebhookURL, err = lookup.Lookup(ctx, c.ReportWebhook.Keychain)
-		if err != nil {
-			return Config{}, errors.New("report webhook Keychain item unavailable")
-		}
-		if strings.TrimSpace(c.ReportWebhookURL) == "" || strings.ContainsAny(c.ReportWebhookURL, "\r\n\x00") {
-			return Config{}, errors.New("invalid report webhook endpoint")
-		}
-	}
 	return c, nil
 }

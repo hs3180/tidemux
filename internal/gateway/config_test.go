@@ -444,8 +444,11 @@ func TestReportScheduleValidation(t *testing.T) {
 	if err := without.Validate(); err == nil || !strings.Contains(err.Error(), "requires report_webhook") {
 		t.Fatalf("missing webhook config error=%v", err)
 	}
-	resolved, err := webhook.ResolveCredentials(context.Background(), testSecrets{"test.provider": "provider-private", "test.gateway": "local-private", "webhook": "http://127.0.0.1:8787/hook"})
-	if err != nil || resolved.ReportWebhookURL == "" {
-		t.Fatalf("webhook credential resolution: %+v %v", resolved, err)
+	resolved, err := webhook.ResolveCredentials(context.Background(), testSecrets{"test.provider": "provider-private", "test.gateway": "local-private"})
+	if err != nil {
+		t.Fatalf("gateway credentials should not depend on the optional report webhook: %v", err)
+	}
+	if resolved.ReportWebhookURL != "" {
+		t.Fatal("gateway credential resolution loaded the report webhook endpoint")
 	}
 }
