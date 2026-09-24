@@ -73,6 +73,9 @@ func TestKeyCandidatesFailOverWithOneAuditRecord(t *testing.T) {
 	if rows[0].ID != id || rows[0].Status != "ok" || !containsEvent(rows[0].Events, "rate_limit_429") || !containsEvent(rows[0].Events, "key_failover") {
 		t.Fatalf("audit = %+v", rows[0])
 	}
+	if rows[0].InputTokens == nil || *rows[0].InputTokens != 2 || rows[0].OutputTokens == nil || *rows[0].OutputTokens != 1 {
+		t.Fatalf("audit usage should come from the successful attempt only: %+v", rows[0])
+	}
 	if strings.Contains(strings.Join(rows[0].Events, ","), "key-a") || strings.Contains(strings.Join(rows[0].Events, ","), "key-b") {
 		t.Fatalf("audit exposed key material: %+v", rows[0].Events)
 	}
