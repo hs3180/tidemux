@@ -98,8 +98,9 @@ details, or select a period with `--from` and `--to`. The summary shows its exac
 RFC3339 date bounds. Use `tidemux doctor --diagnostics` to inspect local request
 rejections. See [accounting](docs/accounting.md#billing-statistics-and-download)
 for periods, synchronization status, statement coverage and the CSV format.
-For the currently released client launchers, see the
-[0.1.1 client setup guide](docs/clients.md).
+For current client launch commands and profile behavior, see the
+[client setup guide](docs/clients.md). The tested 0.1.1 release matrix is
+documented separately in [client compatibility](docs/client-compatibility.md).
 
 ## Compatibility
 
@@ -206,7 +207,7 @@ tidemux gateway configure --listen loopback
 ## Documentation
 
 [Provider and gateway CLI](docs/provider-cli.md) ·
-[0.1.1 client setup](docs/clients.md) ·
+[Client setup](docs/clients.md) ·
 [Configuration examples](examples/README.md) ·
 [Accounting](docs/accounting.md) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·

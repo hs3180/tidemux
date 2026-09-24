@@ -1,7 +1,10 @@
 # Local demo
 
 Requires macOS, Keychain Access and a non-streaming text-capable OpenAI or
-Anthropic compatible endpoint. The release is `0.1.1`.
+Anthropic compatible endpoint. This guide applies only to the published
+`0.1.1` binary. Its top-level `tidemux configure` command was removed from the
+current source CLI; for current builds, use the [provider and gateway CLI
+guide](provider-cli.md) and [client setup](clients.md).
 
 ## Build or extract
 

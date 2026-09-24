@@ -17,10 +17,10 @@ macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 
 - The gateway binds a loopback IP and requires a local Bearer token by default.
   Setting `listen_addr` to `0.0.0.0` enables all-interface LAN access and emits a
-  warning; configure requires a separate Gateway API key for this mode. The key
-  can be supplied by the user or generated randomly by pressing Enter. It is
-  plain HTTP and must be protected by a trusted network, firewall, and preferably
-  a TLS-terminating reverse proxy.
+  warning. Enabling this mode with `tidemux gateway configure` requires a
+  separate Gateway API key. Supply one or press Enter to generate it randomly.
+  Traffic is plain HTTP and must be protected by a trusted network, firewall,
+  and preferably a TLS-terminating reverse proxy.
 - Provider and gateway credentials are read from macOS Keychain references.
 - Configuration does not serialize runtime credentials. Errors avoid exposing
   upstream response bodies; full prompts and responses are not persisted.
