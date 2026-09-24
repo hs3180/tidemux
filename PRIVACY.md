@@ -19,4 +19,4 @@ extracts, review them first; metadata may reveal usage patterns.
 
 Material changes will be recorded in [CHANGELOG](CHANGELOG.md).
 
-Updated: 2026-09-11.
+Updated: 2026-09-24.
