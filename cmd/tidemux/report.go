@@ -273,7 +273,7 @@ func deliverReport(channel string, r ledger.DailyReport, reportPath, webhookURL,
 		return notifyMacOS(subject, body, reportPath)
 	}
 	if channel == "webhook" {
-		return postReportWebhook(webhookURL, webhookProvider, subject+"\n"+body)
+		return postReportWebhook(webhookURL, webhookProvider, body)
 	}
 	return errors.New("notification channel must be macos or webhook")
 }
@@ -467,14 +467,51 @@ func findTerminalNotifier() (string, bool) {
 
 func reportText(r ledger.DailyReport) string {
 	cost := reportCostText(r)
-	mismatches, unmatched := "unknown", "unknown"
+	if cost == "unknown" {
+		cost = "未知"
+	}
+	date := "日期：" + r.Day
+	if timezone := strings.TrimSpace(r.Timezone); timezone != "" {
+		date += " · 时区：" + timezone
+	}
+	lines := []string{
+		"📊 TideMux 每日用量",
+		date,
+		"",
+		fmt.Sprintf("请求：%s 次（失败 %s 次）", reportCountText(r.RequestCount), reportCountText(r.FailureCount)),
+		fmt.Sprintf("Token：输入 %s · 输出 %s", reportCountText(r.InputTokens), reportCountText(r.OutputTokens)),
+		fmt.Sprintf("本地估算费用：%s", cost),
+		fmt.Sprintf("未知费用请求：%s 次", reportCountText(r.UnknownCostRequests)),
+	}
+	checks := make([]string, 0, 2)
 	if r.TokenizerMismatches != nil {
-		mismatches = strconv.FormatInt(*r.TokenizerMismatches, 10)
+		checks = append(checks, fmt.Sprintf("Token 统计差异：%s", reportCountText(*r.TokenizerMismatches)))
 	}
 	if r.UnmatchedStatements != nil {
-		unmatched = strconv.FormatInt(*r.UnmatchedStatements, 10)
+		checks = append(checks, fmt.Sprintf("未匹配账单行：%s", reportCountText(*r.UnmatchedStatements)))
 	}
-	return fmt.Sprintf("Requests: %d; failures: %d; input tokens: %d; output tokens: %d; local estimated cost: %s; unknown local costs: %d; tokenizer mismatches: %s; unmatched statement lines: %s.", r.RequestCount, r.FailureCount, r.InputTokens, r.OutputTokens, cost, r.UnknownCostRequests, mismatches, unmatched)
+	if len(checks) > 0 {
+		lines = append(lines, "", "数据校验")
+		lines = append(lines, checks...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func reportCountText(value int64) string {
+	digits := strconv.FormatInt(value, 10)
+	sign := 0
+	if strings.HasPrefix(digits, "-") {
+		sign = 1
+	}
+	var formatted strings.Builder
+	formatted.Grow(len(digits) + (len(digits)-sign-1)/3)
+	for i := range len(digits) {
+		if i > sign && (len(digits)-i)%3 == 0 {
+			formatted.WriteByte(',')
+		}
+		formatted.WriteByte(digits[i])
+	}
+	return formatted.String()
 }
 
 func reportCostText(r ledger.DailyReport) string {

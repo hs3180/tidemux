@@ -330,10 +330,53 @@ func TestDeliverReportWebhookSendsSummaryWithoutHTMLExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := payload["text"]
-	if !strings.Contains(message, "TideMux 2026-09-24 usage report") || !strings.Contains(message, "Requests: 3") {
+	if !strings.Contains(message, "📊 TideMux 每日用量") || !strings.Contains(message, "日期：2026-09-24") || !strings.Contains(message, "请求：3 次（失败 0 次）") {
 		t.Fatalf("webhook did not contain the readable report summary: %q", message)
+	}
+	if strings.Contains(message, "TideMux 2026-09-24 usage report") {
+		t.Fatalf("webhook contains a duplicate report title: %q", message)
 	}
 	if strings.Contains(message, privateHTML) || strings.Contains(message, htmlPath) || strings.Contains(strings.ToLower(message), "<html") {
 		t.Fatalf("webhook included local HTML report data: %q", message)
+	}
+}
+
+func TestReportTextIsReadableAndOmitsUnavailableChecks(t *testing.T) {
+	cost := 1.234567
+	mismatch := int64(0)
+	report := ledger.DailyReport{
+		Day:                 "2026-09-24",
+		Timezone:            "Asia/Shanghai",
+		RequestCount:        12345,
+		FailureCount:        2,
+		InputTokens:         1234567,
+		OutputTokens:        234567,
+		EstimatedCost:       &cost,
+		Currency:            "USD",
+		UnknownCostRequests: 3,
+		TokenizerMismatches: &mismatch,
+	}
+
+	want := "📊 TideMux 每日用量\n日期：2026-09-24 · 时区：Asia/Shanghai\n\n请求：12,345 次（失败 2 次）\nToken：输入 1,234,567 · 输出 234,567\n本地估算费用：1.234567 USD\n未知费用请求：3 次\n\n数据校验\nToken 统计差异：0"
+	if got := reportText(report); got != want {
+		t.Fatalf("report text =\n%s\nwant =\n%s", got, want)
+	}
+	if strings.Contains(reportText(ledger.DailyReport{Day: "2026-09-24"}), "数据校验") {
+		t.Fatal("unavailable optional checks should be omitted rather than shown as unknown")
+	}
+}
+
+func TestReportCountTextGroupsThousands(t *testing.T) {
+	for value, want := range map[int64]string{
+		0:                    "0",
+		999:                  "999",
+		1000:                 "1,000",
+		123456789:            "123,456,789",
+		-1234567:             "-1,234,567",
+		-9223372036854775808: "-9,223,372,036,854,775,808",
+	} {
+		if got := reportCountText(value); got != want {
+			t.Errorf("reportCountText(%d) = %q, want %q", value, got, want)
+		}
 	}
 }
