@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,6 +34,60 @@ func TestDailyReportIsContentFreeAndPersistent(t *testing.T) {
 	d, e := l.ReportDeliveries(context.Background(), r.ID)
 	if e != nil || len(d) != 1 || d[0].Attempts != 1 {
 		t.Fatalf("d=%+v e=%v", d, e)
+	}
+}
+
+func TestReportWebhookDeliveryAndLegacySchemaMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE daily_reports (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, timezone TEXT NOT NULL,
+ report_json TEXT NOT NULL, created_at_ms INTEGER NOT NULL, UNIQUE(day,timezone));
+ CREATE TABLE report_deliveries (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, report_id INTEGER NOT NULL REFERENCES daily_reports(id),
+ channel TEXT NOT NULL CHECK(channel IN ('macos')), status TEXT NOT NULL CHECK(status IN ('pending','sent','failed')),
+ attempts INTEGER NOT NULL, error_code TEXT NOT NULL, updated_at_ms INTEGER NOT NULL,
+ UNIQUE(report_id,channel));
+ INSERT INTO daily_reports(id,day,timezone,report_json,created_at_ms) VALUES (1,'2026-09-24','UTC','{}',1);
+ INSERT INTO report_deliveries(report_id,channel,status,attempts,error_code,updated_at_ms) VALUES (1,'macos','failed',1,'delivery_failed',1);`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	prior, err := l.ReportDeliveries(context.Background(), 1)
+	if err != nil || len(prior) != 1 || prior[0].Channel != "macos" || prior[0].Attempts != 1 {
+		t.Fatalf("existing delivery not preserved: %+v err=%v", prior, err)
+	}
+	if err := l.RecordDelivery(context.Background(), 1, "webhook", "failed", "delivery_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RecordDelivery(context.Background(), 1, "webhook", "sent", ""); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := l.ReportDeliveries(context.Background(), 1)
+	if err != nil || len(deliveries) != 2 {
+		t.Fatalf("deliveries=%+v err=%v", deliveries, err)
+	}
+	var webhook *ReportDelivery
+	for i := range deliveries {
+		if deliveries[i].Channel == "webhook" {
+			webhook = &deliveries[i]
+		}
+	}
+	if webhook == nil || webhook.Status != "sent" || webhook.Attempts != 2 || webhook.ErrorCode != "" {
+		t.Fatalf("webhook retry record=%+v", webhook)
 	}
 }
 
