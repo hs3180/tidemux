@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hs3180/tidemux/internal/gateway"
 	"github.com/hs3180/tidemux/internal/ledger"
@@ -200,7 +202,7 @@ func report(args []string, stdout, stderr *os.File) error {
 		return e
 	}
 	if err != nil {
-		return errors.New(code)
+		return fmt.Errorf("%s: %w", code, err)
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": selected.ID, "channel": *channel, "status": status})
 }
@@ -239,7 +241,7 @@ func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, 
 		if recordErr := l.RecordDelivery(context.Background(), report.ID, channel, status, code); recordErr != nil {
 			return recordErr
 		}
-		return errors.New(code)
+		return fmt.Errorf("%s: %w", code, err)
 	}
 	if err := l.RecordDelivery(context.Background(), report.ID, channel, status, code); err != nil {
 		return err
@@ -292,13 +294,90 @@ func postReportWebhook(endpoint, provider, message string) error {
 	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(req)
 	if err != nil {
-		return errors.New("report webhook request failed")
+		return fmt.Errorf("report webhook request failed: %s", safeWebhookDiagnostic(err.Error(), endpoint))
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return errors.New("report webhook returned a non-success status")
+	if provider != "lark" {
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return fmt.Errorf("report webhook returned HTTP %d", response.StatusCode)
+		}
+		return nil
 	}
-	return nil
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxReportWebhookResponseBytes+1))
+	if err != nil {
+		return errors.New("could not read Feishu webhook response")
+	}
+	if len(body) > maxReportWebhookResponseBytes {
+		return errors.New("Feishu webhook response exceeded the diagnostic size limit")
+	}
+	return validateLarkWebhookResponse(response.StatusCode, body, endpoint)
+}
+
+const maxReportWebhookResponseBytes = 4096
+
+func validateLarkWebhookResponse(status int, body []byte, endpoint string) error {
+	var result struct {
+		Code          *int64 `json:"code"`
+		Message       string `json:"msg"`
+		StatusCode    *int64 `json:"StatusCode"`
+		StatusMessage string `json:"StatusMessage"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("Feishu returned HTTP %d with an invalid JSON response", status)
+	}
+	code, message := result.Code, result.Message
+	if code == nil {
+		code, message = result.StatusCode, result.StatusMessage
+	}
+	if code == nil {
+		return fmt.Errorf("Feishu returned HTTP %d without a response code", status)
+	}
+	if status >= 200 && status < 300 && *code == 0 {
+		return nil
+	}
+	detail := fmt.Sprintf("Feishu returned HTTP %d, code %d", status, *code)
+	if safeMessage := safeWebhookDiagnostic(message, endpoint); safeMessage != "" {
+		detail += ": " + safeMessage
+	}
+	return errors.New(detail)
+}
+
+// safeWebhookDiagnostic includes useful transport/provider details without
+// allowing a URL, path token, or query credential to escape into CLI output.
+func safeWebhookDiagnostic(message, endpoint string) string {
+	secrets := []string{endpoint}
+	if parsed, err := url.Parse(endpoint); err == nil {
+		for _, segment := range strings.Split(parsed.EscapedPath(), "/") {
+			decoded, decodeErr := url.PathUnescape(segment)
+			if decodeErr == nil && len(decoded) >= 16 {
+				secrets = append(secrets, decoded, segment)
+			}
+		}
+		for _, values := range parsed.Query() {
+			for _, value := range values {
+				if len(value) >= 8 {
+					secrets = append(secrets, value)
+				}
+			}
+		}
+	}
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	message = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, message)
+	message = strings.Join(strings.Fields(message), " ")
+	runes := []rune(message)
+	if len(runes) > 256 {
+		message = string(runes[:256]) + "…"
+	}
+	return message
 }
 
 func validateReportWebhookEndpoint(endpoint string) error {

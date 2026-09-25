@@ -208,6 +208,11 @@ func TestReportWebhookPayloadsArePlainText(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 					t.Error(err)
 				}
+				if provider == "lark" {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"code":0,"msg":"success"}`))
+					return
+				}
 				w.WriteHeader(http.StatusNoContent)
 			}))
 			defer server.Close()
@@ -228,6 +233,26 @@ func TestReportWebhookPayloadsArePlainText(t *testing.T) {
 				t.Fatalf("payload=%#v", payload)
 			}
 		})
+	}
+}
+
+func TestLarkWebhookReportsProviderRejectionWithoutLeakingEndpoint(t *testing.T) {
+	const token = "test-webhook-secret-token-123456"
+	var endpoint string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":19021,"msg":"token ` + token + ` is not allowed"}`))
+	}))
+	defer server.Close()
+	endpoint = server.URL + "/hook/" + token
+
+	err := postReportWebhook(endpoint, "lark", "TideMux test report")
+	if err == nil || !strings.Contains(err.Error(), "code 19021") || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("error = %v, want provider code and safe message", err)
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), endpoint) {
+		t.Fatalf("error exposed webhook credential: %v", err)
 	}
 }
 
