@@ -216,7 +216,7 @@ func reportLocation(timezone string) (*time.Location, error) {
 
 func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, timezone string) error {
 	if channel == "webhook" {
-		resolved, err := c.ResolveCredentials(context.Background(), gateway.MacOSKeychain{})
+		resolved, err := resolveReportWebhook(c, gateway.MacOSKeychain{})
 		if err != nil {
 			return err
 		}
@@ -247,6 +247,24 @@ func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, 
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": report.ID, "channel": channel, "status": status})
+}
+
+func resolveReportWebhook(c gateway.Config, lookup gateway.SecretLookup) (gateway.Config, error) {
+	if c.ReportWebhook == (gateway.ReportWebhookConfig{}) {
+		return c, errors.New("report webhook is not configured")
+	}
+	if lookup == nil {
+		return gateway.Config{}, errors.New("report webhook Keychain lookup unavailable")
+	}
+	endpoint, err := lookup.Lookup(context.Background(), c.ReportWebhook.Keychain)
+	if err != nil {
+		return gateway.Config{}, errors.New("report webhook Keychain item unavailable")
+	}
+	if err := validateReportWebhookEndpoint(endpoint); err != nil {
+		return gateway.Config{}, err
+	}
+	c.ReportWebhookURL = endpoint
+	return c, nil
 }
 
 func deliverReport(channel string, r ledger.DailyReport, reportPath, webhookURL, webhookProvider string) error {

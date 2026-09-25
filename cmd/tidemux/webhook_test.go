@@ -20,12 +20,54 @@ type webhookTestKeychain struct {
 	failDelete bool
 }
 
+func (k *webhookTestKeychain) Lookup(_ context.Context, reference gateway.KeychainReference) (string, error) {
+	value, ok := k.values[reference.Service+"/"+reference.Account]
+	if !ok {
+		return "", errors.New("simulated missing Keychain item")
+	}
+	return value, nil
+}
+
 func (k *webhookTestKeychain) Delete(_ context.Context, reference gateway.KeychainReference) error {
 	if k.failDelete {
 		return errors.New("simulated Keychain deletion failure")
 	}
 	delete(k.values, reference.Service+"/"+reference.Account)
 	return nil
+}
+
+func TestResolveReportWebhookLoadsValidatedEndpointFromKeychain(t *testing.T) {
+	reference := gateway.KeychainReference{Service: "com.tidemux.report-webhook", Account: "test"}
+	endpoint := "https://hooks.example.invalid/bot/private-token"
+	config := gateway.Config{ReportWebhook: gateway.ReportWebhookConfig{Provider: "lark", Keychain: reference}}
+	lookup := &webhookTestKeychain{values: map[string]string{reference.Service + "/" + reference.Account: endpoint}}
+
+	resolved, err := resolveReportWebhook(config, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ReportWebhookURL != endpoint {
+		t.Fatalf("resolved endpoint = %q, want Keychain value", resolved.ReportWebhookURL)
+	}
+	if config.ReportWebhookURL != "" {
+		t.Fatal("resolving endpoint mutated the original config")
+	}
+}
+
+func TestResolveReportWebhookRejectsMissingOrInvalidKeychainEndpoint(t *testing.T) {
+	reference := gateway.KeychainReference{Service: "com.tidemux.report-webhook", Account: "test"}
+	config := gateway.Config{ReportWebhook: gateway.ReportWebhookConfig{Provider: "lark", Keychain: reference}}
+
+	if _, err := resolveReportWebhook(config, &webhookTestKeychain{values: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "Keychain item unavailable") {
+		t.Fatalf("missing Keychain item error = %v", err)
+	}
+	lookup := &webhookTestKeychain{values: map[string]string{reference.Service + "/" + reference.Account: "http://example.com/private-token"}}
+	if _, err := resolveReportWebhook(config, lookup); err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
+		t.Fatalf("invalid endpoint error = %v", err)
+	}
+	if _, err := resolveReportWebhook(gateway.Config{}, lookup); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("unconfigured webhook error = %v", err)
+	}
 }
 
 func TestDeleteStaleReportWebhookEndpoint(t *testing.T) {
