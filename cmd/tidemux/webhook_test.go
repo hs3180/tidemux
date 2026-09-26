@@ -422,6 +422,67 @@ func TestReportWebhookDeliverRetryAndAttemptHistory(t *testing.T) {
 	}
 }
 
+func TestReportNotifyUsesConfiguredWebhookScheduleAndRecordsSuccess(t *testing.T) {
+	dir := t.TempDir()
+	ledgerPath := filepath.Join(dir, "ledger.db")
+	endpointRef := gateway.KeychainReference{Service: "com.tidemux.report-webhook", Account: "scheduled-endpoint"}
+	configPath := filepath.Join(dir, "config.json")
+	config := gateway.Config{
+		ListenAddr:          defaultListenAddr,
+		MaxInFlight:         1,
+		LedgerPath:          ledgerPath,
+		AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"},
+		ReportSchedule:      gateway.ReportSchedule{Time: "09:00", Channel: "webhook"},
+		ReportWebhook:       gateway.ReportWebhookConfig{Provider: "generic", Keychain: endpointRef},
+	}
+	if err := writeCommandConfig(configPath, config, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var message string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("request = %s %s", r.Method, r.Header.Get("Content-Type"))
+		}
+		var payload map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode report payload: %v", err)
+		}
+		message = payload["text"]
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	keychain := &webhookTestKeychain{values: map[string]string{endpointRef.Service + "/" + endpointRef.Account: server.URL}}
+
+	output, err := runReportWithKeychainTest(t, keychain, "notify", "--config", configPath)
+	if err != nil {
+		t.Fatalf("scheduled webhook notify output=%s err=%v", output, err)
+	}
+	if !strings.Contains(string(output), `"channel":"webhook"`) || !strings.Contains(string(output), `"status":"sent"`) {
+		t.Fatalf("unexpected notify result: %s", output)
+	}
+	if message == "" || strings.Contains(strings.ToLower(message), "<html") || strings.Contains(string(output), server.URL) {
+		t.Fatalf("unexpected or sensitive webhook delivery: message=%q output=%s", message, output)
+	}
+	if _, err := os.Stat(defaultReportPath(ledgerPath)); !os.IsNotExist(err) {
+		t.Fatalf("webhook notify unexpectedly exported HTML: %v", err)
+	}
+
+	store, err := ledger.Open(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reports, err := store.ListDailyReports(context.Background(), 1)
+	if err != nil || len(reports) != 1 {
+		t.Fatalf("reports=%+v err=%v", reports, err)
+	}
+	deliveries, err := store.ReportDeliveries(context.Background(), reports[0].ID)
+	if err != nil || len(deliveries) != 1 || deliveries[0].Channel != "webhook" || deliveries[0].Status != "sent" || deliveries[0].Attempts != 1 {
+		t.Fatalf("deliveries=%+v err=%v", deliveries, err)
+	}
+}
+
 func TestReportNotifyRecordsWebhookKeychainFailure(t *testing.T) {
 	dir := t.TempDir()
 	ledgerPath := filepath.Join(dir, "ledger.db")
