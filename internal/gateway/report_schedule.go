@@ -13,6 +13,25 @@ type ReportSchedule struct {
 	Channel string `json:"channel,omitempty"`
 }
 
+// ReportWebhookConfig stores only a Keychain reference in the profile. The
+// endpoint itself is resolved just before delivery and never serialized.
+type ReportWebhookConfig struct {
+	Provider string            `json:"provider,omitempty"`
+	Keychain KeychainReference `json:"keychain,omitempty"`
+}
+
+func (c ReportWebhookConfig) Validate() error {
+	if c == (ReportWebhookConfig{}) {
+		return nil
+	}
+	switch c.Provider {
+	case "generic", "telegram", "discord", "lark":
+	default:
+		return errors.New("report_webhook.provider must be generic, telegram, discord or lark")
+	}
+	return c.Keychain.Validate("report_webhook.keychain")
+}
+
 func (s ReportSchedule) Validate() error {
 	if s == (ReportSchedule{}) {
 		return nil
@@ -23,8 +42,8 @@ func (s ReportSchedule) Validate() error {
 	if _, err := NormalizeReportScheduleTime(s.Time); err != nil {
 		return err
 	}
-	if s.Channel != "" && s.Channel != "macos" {
-		return errors.New("report_schedule.channel must be macos")
+	if s.Channel != "" && s.Channel != "macos" && s.Channel != "webhook" {
+		return errors.New("report_schedule.channel must be macos or webhook")
 	}
 	return nil
 }
@@ -57,5 +76,8 @@ func (s ReportSchedule) HourMinute() (int, int, error) {
 }
 
 func (s ReportSchedule) EffectiveChannel() string {
+	if s.Channel == "webhook" {
+		return "webhook"
+	}
 	return "macos"
 }

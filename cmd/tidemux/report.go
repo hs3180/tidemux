@@ -6,12 +6,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hs3180/tidemux/internal/gateway"
 	"github.com/hs3180/tidemux/internal/ledger"
@@ -26,6 +29,9 @@ func report(args []string, stdout, stderr *os.File) error {
 	command := args[0]
 	if command == "schedule" {
 		return scheduleCommand(args[1:], stdout, stderr)
+	}
+	if command == "webhook" {
+		return configureReportWebhook(args[1:], stdout, stderr)
 	}
 	if command != "generate" && command != "list" && command != "export" && command != "open" && command != "deliver" && command != "retry" && command != "notify" {
 		return errors.New(usage)
@@ -126,8 +132,8 @@ func report(args []string, stdout, stderr *os.File) error {
 			}
 			selectedChannel = c.ReportSchedule.EffectiveChannel()
 		}
-		if selectedChannel != "macos" {
-			return errors.New("notification channel must be macos")
+		if selectedChannel != "macos" && selectedChannel != "webhook" {
+			return errors.New("notification channel must be macos or webhook")
 		}
 		notifyTimezone := "Local"
 		if flagWasSet(flags, "timezone") {
@@ -185,7 +191,7 @@ func report(args []string, stdout, stderr *os.File) error {
 		}
 	}
 	if err == nil {
-		err = deliverReport(*channel, *selected, reportPath)
+		err = deliverReport(*channel, *selected, reportPath, c.ReportWebhookURL, c.ReportWebhook.Provider)
 	}
 	status, code := "sent", ""
 	if err != nil {
@@ -195,7 +201,7 @@ func report(args []string, stdout, stderr *os.File) error {
 		return e
 	}
 	if err != nil {
-		return errors.New(code)
+		return fmt.Errorf("%s: %w", code, err)
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": selected.ID, "channel": *channel, "status": status})
 }
@@ -208,22 +214,33 @@ func reportLocation(timezone string) (*time.Location, error) {
 }
 
 func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, timezone string) error {
+	if channel == "webhook" {
+		resolved, err := resolveReportWebhook(c, gateway.MacOSKeychain{})
+		if err != nil {
+			return err
+		}
+		c = resolved
+	}
 	through := time.Now()
 	report, err := l.GenerateDailyReport(context.Background(), through, timezone, ledger.ReportBudget{})
 	if err != nil {
 		return err
 	}
-	export, err := exportHTMLReport(context.Background(), l, defaultReportPath(c.LedgerPath), timezone, through, 30, ledger.ReportBudget{}, false)
-	if err != nil {
-		return err
+	reportPath := ""
+	if channel == "macos" {
+		export, err := exportHTMLReport(context.Background(), l, defaultReportPath(c.LedgerPath), timezone, through, 30, ledger.ReportBudget{}, false)
+		if err != nil {
+			return err
+		}
+		reportPath = export.Path
 	}
 	status, code := "sent", ""
-	if err := deliverReport(channel, report, export.Path); err != nil {
+	if err := deliverReport(channel, report, reportPath, c.ReportWebhookURL, c.ReportWebhook.Provider); err != nil {
 		status, code = "failed", "delivery_failed"
 		if recordErr := l.RecordDelivery(context.Background(), report.ID, channel, status, code); recordErr != nil {
 			return recordErr
 		}
-		return errors.New(code)
+		return fmt.Errorf("%s: %w", code, err)
 	}
 	if err := l.RecordDelivery(context.Background(), report.ID, channel, status, code); err != nil {
 		return err
@@ -231,12 +248,169 @@ func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, 
 	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": report.ID, "channel": channel, "status": status})
 }
 
-func deliverReport(channel string, r ledger.DailyReport, reportPath string) error {
-	subject, body := fmt.Sprintf("TideMux %s usage report", r.Day), reportText(r)
+func resolveReportWebhook(c gateway.Config, lookup gateway.SecretLookup) (gateway.Config, error) {
+	if c.ReportWebhook == (gateway.ReportWebhookConfig{}) {
+		return c, errors.New("report webhook is not configured")
+	}
+	if lookup == nil {
+		return gateway.Config{}, errors.New("report webhook Keychain lookup unavailable")
+	}
+	endpoint, err := lookup.Lookup(context.Background(), c.ReportWebhook.Keychain)
+	if err != nil {
+		return gateway.Config{}, errors.New("report webhook Keychain item unavailable")
+	}
+	if err := validateReportWebhookEndpoint(endpoint); err != nil {
+		return gateway.Config{}, err
+	}
+	c.ReportWebhookURL = endpoint
+	return c, nil
+}
+
+func deliverReport(channel string, r ledger.DailyReport, reportPath, webhookURL, webhookProvider string) error {
+	return deliverReportWithLocale(channel, r, reportPath, webhookURL, webhookProvider, detectReportLocale())
+}
+
+func deliverReportWithLocale(channel string, r ledger.DailyReport, reportPath, webhookURL, webhookProvider string, locale reportLocale) error {
+	messages := reportMessagesFor(locale)
+	subject, body := fmt.Sprintf(messages.subjectFormat, r.Day), reportTextForLocale(r, locale)
 	if channel == "macos" {
 		return notifyMacOS(subject, body, reportPath)
 	}
-	return errors.New("notification channel must be macos")
+	if channel == "webhook" {
+		return postReportWebhook(webhookURL, webhookProvider, body)
+	}
+	return errors.New("notification channel must be macos or webhook")
+}
+
+const maxReportWebhookBytes = 10000
+
+func postReportWebhook(endpoint, provider, message string) error {
+	if err := validateReportWebhookEndpoint(endpoint); err != nil {
+		return err
+	}
+	parsed, err := url.Parse(endpoint)
+	if len([]byte(message)) > maxReportWebhookBytes {
+		return errors.New("report webhook message is too large")
+	}
+	var payload any
+	switch provider {
+	case "generic", "telegram":
+		payload = map[string]string{"text": message}
+	case "discord":
+		payload = map[string]string{"content": message}
+	case "lark":
+		payload = map[string]any{"msg_type": "text", "content": map[string]string{"text": message}}
+	default:
+		return errors.New("unsupported report webhook provider")
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return errors.New("cannot encode report webhook")
+	}
+	req, err := http.NewRequest(http.MethodPost, parsed.String(), strings.NewReader(string(data)))
+	if err != nil {
+		return errors.New("cannot prepare report webhook")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "tidemux/"+version)
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("report webhook request failed: %s", safeWebhookDiagnostic(err.Error(), endpoint))
+	}
+	defer response.Body.Close()
+	if provider != "lark" {
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return fmt.Errorf("report webhook returned HTTP %d", response.StatusCode)
+		}
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxReportWebhookResponseBytes+1))
+	if err != nil {
+		return errors.New("could not read Feishu webhook response")
+	}
+	if len(body) > maxReportWebhookResponseBytes {
+		return errors.New("Feishu webhook response exceeded the diagnostic size limit")
+	}
+	return validateLarkWebhookResponse(response.StatusCode, body, endpoint)
+}
+
+const maxReportWebhookResponseBytes = 4096
+
+func validateLarkWebhookResponse(status int, body []byte, endpoint string) error {
+	var result struct {
+		Code          *int64 `json:"code"`
+		Message       string `json:"msg"`
+		StatusCode    *int64 `json:"StatusCode"`
+		StatusMessage string `json:"StatusMessage"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("Feishu returned HTTP %d with an invalid JSON response", status)
+	}
+	code, message := result.Code, result.Message
+	if code == nil {
+		code, message = result.StatusCode, result.StatusMessage
+	}
+	if code == nil {
+		return fmt.Errorf("Feishu returned HTTP %d without a response code", status)
+	}
+	if status >= 200 && status < 300 && *code == 0 {
+		return nil
+	}
+	detail := fmt.Sprintf("Feishu returned HTTP %d, code %d", status, *code)
+	if safeMessage := safeWebhookDiagnostic(message, endpoint); safeMessage != "" {
+		detail += ": " + safeMessage
+	}
+	return errors.New(detail)
+}
+
+// safeWebhookDiagnostic includes useful transport/provider details without
+// allowing a URL, path token, or query credential to escape into CLI output.
+func safeWebhookDiagnostic(message, endpoint string) string {
+	secrets := []string{endpoint}
+	if parsed, err := url.Parse(endpoint); err == nil {
+		for _, segment := range strings.Split(parsed.EscapedPath(), "/") {
+			decoded, decodeErr := url.PathUnescape(segment)
+			if decodeErr == nil && len(decoded) >= 16 {
+				secrets = append(secrets, decoded, segment)
+			}
+		}
+		for _, values := range parsed.Query() {
+			for _, value := range values {
+				if len(value) >= 8 {
+					secrets = append(secrets, value)
+				}
+			}
+		}
+	}
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	message = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, message)
+	message = strings.Join(strings.Fields(message), " ")
+	runes := []rune(message)
+	if len(runes) > 256 {
+		message = string(runes[:256]) + "…"
+	}
+	return message
+}
+
+func validateReportWebhookEndpoint(endpoint string) error {
+	if strings.TrimSpace(endpoint) == "" {
+		return errors.New("report webhook endpoint is not configured")
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && net.ParseIP(parsed.Hostname()) != nil && net.ParseIP(parsed.Hostname()).IsLoopback())) {
+		return errors.New("report webhook endpoint must use HTTPS, except loopback HTTP")
+	}
+	return nil
 }
 
 func notifyMacOS(subject, body, reportPath string) error {
@@ -293,32 +467,6 @@ func findTerminalNotifier() (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func reportText(r ledger.DailyReport) string {
-	cost := reportCostText(r)
-	mismatches, unmatched := "unknown", "unknown"
-	if r.TokenizerMismatches != nil {
-		mismatches = strconv.FormatInt(*r.TokenizerMismatches, 10)
-	}
-	if r.UnmatchedStatements != nil {
-		unmatched = strconv.FormatInt(*r.UnmatchedStatements, 10)
-	}
-	return fmt.Sprintf("Requests: %d; failures: %d; input tokens: %d; output tokens: %d; local estimated cost: %s; unknown local costs: %d; tokenizer mismatches: %s; unmatched statement lines: %s.", r.RequestCount, r.FailureCount, r.InputTokens, r.OutputTokens, cost, r.UnknownCostRequests, mismatches, unmatched)
-}
-
-func reportCostText(r ledger.DailyReport) string {
-	if r.RequestCount == 0 {
-		return "0"
-	}
-	if r.EstimatedCost == nil {
-		return "unknown"
-	}
-	cost := fmt.Sprintf("%.6f", *r.EstimatedCost)
-	if r.Currency != "" {
-		cost += " " + r.Currency
-	}
-	return cost
 }
 
 func appleQuote(s string) string { return "\"" + strings.ReplaceAll(s, "\"", "\\\"") + "\"" }

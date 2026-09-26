@@ -16,6 +16,58 @@ import (
 	"golang.org/x/term"
 )
 
+func configurationKeychainReferencesInUse(c gateway.Config) (map[gateway.KeychainReference]struct{}, error) {
+	inUse := make(map[gateway.KeychainReference]struct{})
+	for _, reference := range []gateway.KeychainReference{c.AccessTokenKeychain, c.UpstreamKeychain} {
+		if reference != (gateway.KeychainReference{}) {
+			inUse[reference] = struct{}{}
+		}
+	}
+	for _, provider := range c.Providers {
+		references, err := provider.KeychainReferences()
+		if err != nil {
+			return nil, errors.New("provider Keychain references are invalid")
+		}
+		for _, reference := range references {
+			inUse[reference] = struct{}{}
+		}
+	}
+	return inUse, nil
+}
+
+func deleteUnreferencedProviderKeys(c gateway.Config, references []gateway.KeychainReference, store secretWriter) error {
+	if store == nil {
+		return errors.New("Keychain access is required")
+	}
+	for _, reference := range references {
+		if err := reference.Validate("upstream_keychains"); err != nil {
+			return errors.New("configuration was updated, but API key cleanup was skipped because a Keychain reference is invalid")
+		}
+	}
+	inUse, err := configurationKeychainReferencesInUse(c)
+	if err != nil {
+		return errors.New("configuration was updated, but API key cleanup was skipped because Keychain references are invalid")
+	}
+	seen := make(map[gateway.KeychainReference]struct{}, len(references))
+	deleteFailed := false
+	for _, reference := range references {
+		if _, duplicate := seen[reference]; duplicate {
+			continue
+		}
+		seen[reference] = struct{}{}
+		if _, referenced := inUse[reference]; referenced {
+			continue
+		}
+		if err := store.Delete(context.Background(), reference); err != nil {
+			deleteFailed = true
+		}
+	}
+	if deleteFailed {
+		return errors.New("configuration was updated, but one or more removed API keys could not be deleted from Keychain")
+	}
+	return nil
+}
+
 func providerUpdate(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
@@ -60,6 +112,16 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	if !ok {
 		return fmt.Errorf("provider %q not found", ref)
 	}
+	var previousKeyRefs []gateway.KeychainReference
+	if *rotateKey && len(p.UpstreamKeychains) > 1 {
+		return errors.New("provider update --rotate-key supports one-key profiles; use provider key management for a key group")
+	}
+	if *rotateKey {
+		previousKeyRefs, err = p.KeychainReferences()
+		if err != nil {
+			return errors.New("provider Keychain references are invalid")
+		}
+	}
 	oldProtocol := p.Protocol
 	if *endpoint != "" {
 		if err := gateway.ValidateProviderBaseURL(*endpoint); err != nil {
@@ -81,7 +143,11 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	}
 	key := ""
 	if *endpoint != "" || *protocol != "" {
-		key, err = (gateway.MacOSKeychain{}).Lookup(context.Background(), p.UpstreamKeychain)
+		references, referenceErr := p.KeychainReferences()
+		if referenceErr != nil {
+			return errors.New("provider Keychain references are invalid")
+		}
+		key, err = (gateway.MacOSKeychain{}).Lookup(context.Background(), references[0])
 		if err != nil {
 			return errors.New("provider Keychain item unavailable")
 		}
@@ -187,7 +253,12 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		if err != nil {
 			return err
 		}
-		p.UpstreamKeychain = newRef
+		if len(p.UpstreamKeychains) > 0 {
+			p.UpstreamKeychains = []gateway.KeychainReference{newRef}
+			p.UpstreamKeychain = gateway.KeychainReference{}
+		} else {
+			p.UpstreamKeychain = newRef
+		}
 		c.Providers[ref] = p
 		store := gateway.MacOSKeychain{}
 		if err := store.StoreNew(context.Background(), newRef, string(newKey)); err != nil {
@@ -200,6 +271,9 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		}
 		if err := writeCommandConfig(abs, c, before); err != nil {
 			_ = store.Delete(context.Background(), newRef)
+			return err
+		}
+		if err := deleteUnreferencedProviderKeys(c, previousKeyRefs, store); err != nil {
 			return err
 		}
 	} else if err := writeCommandConfig(abs, c, before); err != nil {
@@ -239,6 +313,10 @@ func providerRemove(args []string, stdout, stderr *os.File) error {
 	p, ok := c.Providers[ref]
 	if !ok {
 		return fmt.Errorf("provider %q not found", ref)
+	}
+	keyReferences, err := p.KeychainReferences()
+	if err != nil {
+		return errors.New("provider Keychain references are invalid")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("provider removal requires macOS Keychain")
@@ -292,15 +370,8 @@ func providerRemove(args []string, stdout, stderr *os.File) error {
 	if err := writeCommandConfig(abs, c, before); err != nil {
 		return err
 	}
-	shared := false
-	for _, candidate := range c.Providers {
-		if candidate.UpstreamKeychain == p.UpstreamKeychain {
-			shared = true
-			break
-		}
-	}
-	if !shared {
-		_ = (gateway.MacOSKeychain{}).Delete(context.Background(), p.UpstreamKeychain)
+	if err := deleteUnreferencedProviderKeys(c, keyReferences, gateway.MacOSKeychain{}); err != nil {
+		return err
 	}
 	fmt.Fprintf(stdout, "Removed provider %s.\n", ref)
 	return nil

@@ -43,6 +43,32 @@ gateway credential settings are retained. A development-era global budget must
 be assigned explicitly with `tidemux provider budget REF`. Configuration
 changes are validated and atomically installed.
 
+## Add API keys to a provider
+
+A named provider profile is also its API-key group: all keys in the group share
+one endpoint, protocol, default model, model scope and budget. The initial
+`provider add` flow creates the first key. Add or inspect additional keys with:
+
+```sh
+tidemux provider key add REF
+tidemux provider key list REF
+tidemux provider key remove REF INDEX
+```
+
+`key add` reads the new secret through hidden terminal input, stores it in
+Keychain and atomically appends only its reference to the profile. Keys are
+selected round-robin per request; one selected key is retained for the entire
+response stream. A configured `supported_models` allowlist applies to the
+whole group. With no allowlist, every model remains eligible.
+
+`key list` prints numbered redacted slots, not credentials or Keychain account
+details. `key remove` uses the listed index, asks for confirmation and requires
+the group to retain at least one key; use `--yes` for non-interactive operation.
+A Keychain item is deleted only when no remaining provider references it. The
+older `provider update --rotate-key`
+continues to rotate a single-key profile; use the `provider key` commands for a
+multi-key group.
+
 ## Inspect and manage providers
 
 ```sh

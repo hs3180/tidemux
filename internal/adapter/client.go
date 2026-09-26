@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -74,10 +75,11 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, Model: model, Status: "error", Events: []string{}}
-	providerBody, preparedModel, e := PrepareRequest(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
+	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
 	if e != nil {
 		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e)}
 	}
+	logConversionWarnings(clientProtocol, c.Protocol, requestWarnings)
 	if preparedModel != "" {
 		model = preparedModel
 		a.Model = model
@@ -191,6 +193,10 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 			if translator != nil {
 				frame, e = translator.frame(frame)
 				if e != nil {
+					var conversion *TranslationError
+					if errors.As(e, &conversion) {
+						return &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
+					}
 					return &CallError{Status: 502, Code: "invalid_upstream_stream"}
 				}
 			}
@@ -205,8 +211,15 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 		if e == nil && translator != nil {
 			data, e = translator.terminal(data)
 		}
+		if translator != nil {
+			logConversionWarnings(clientProtocol, c.Protocol, translator.warnings())
+		}
 		if e != nil {
 			localEstimate(observed.Bytes())
+			var conversion *TranslationError
+			if errors.As(e, &conversion) {
+				return nil, id, &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
+			}
 			return nil, id, e
 		}
 	} else {
@@ -222,9 +235,15 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 			localEstimate(data)
 			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_response"}
 		}
-		data, e = TranslateResponse(c.Protocol, clientProtocol, data, model)
+		var responseWarnings []string
+		data, responseWarnings, e = TranslateResponseWithWarnings(c.Protocol, clientProtocol, data, model)
+		logConversionWarnings(clientProtocol, c.Protocol, responseWarnings)
 		if e != nil {
 			localEstimate(data)
+			var conversion *TranslationError
+			if errors.As(e, &conversion) {
+				return nil, id, &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
+			}
 			return nil, id, &CallError{Status: 502, Code: "invalid_upstream_response"}
 		}
 	}
@@ -246,4 +265,11 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 	}
 	a.Status = "ok"
 	return data, id, nil
+}
+
+func logConversionWarnings(clientProtocol, providerProtocol string, fields []string) {
+	if len(fields) == 0 {
+		return
+	}
+	log.Printf("tidemux: cross-protocol conversion omitted fields client_protocol=%s provider_protocol=%s fields=%q", clientProtocol, providerProtocol, sortedUniqueStrings(append([]string(nil), fields...)))
 }

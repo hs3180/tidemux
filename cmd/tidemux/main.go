@@ -29,7 +29,7 @@ commands:
   provider    add and manage upstream providers
   gateway     configure gateway-wide settings
   billing     inspect local usage and cost records (--details for requests)
-  report      generate, view or deliver usage reports
+  report      generate, view, deliver reports, and configure webhook delivery
               use --diagnostics [--json] for recent local rejections
   claude      launch Claude Code through the gateway
   kilo        launch Kilo CLI through the gateway
@@ -42,8 +42,9 @@ common examples:
   tidemux gateway configure --listen loopback
   tidemux serve --config /path/to/config.json
 
-Each provider uses one API protocol, endpoint and Keychain credential. Provider
-protocol is detected from its endpoint unless explicitly forced.
+Each provider uses one API protocol and endpoint, with one or more API keys
+stored in Keychain. Provider protocol is detected from its endpoint unless
+explicitly forced.
 Clients prefer a same-protocol default; if absent, the other protocol's default
 is used with conversion. Upstream failures do not trigger provider retries.
 `

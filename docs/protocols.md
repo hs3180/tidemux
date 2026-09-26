@@ -61,15 +61,36 @@ If a provider does not expose a complete recognizable list, its route returns
 an empty model catalogue unless an explicit allowlist is configured; direct
 requests are still sent to that provider.
 
-Cross-protocol fallback uses the same adapter path as other cross-protocol
-requests. It translates supported common fields such as text, system/developer
-instructions, tools and tool results, stop sequences, output schemas and
-streaming events. Provider-specific features without an equivalent on the
-other wire format may be dropped with a warning or rejected; see issue #29 for
-the separate minimum-loss conversion work.
+The adapter provides cross-protocol conversion for both named-provider fallback
+and the single-provider compatibility configuration. A same-protocol request
+uses its native route and is not round-tripped through the converter.
 
-Provider acceptance is not inferred from the model name. TideMux does not
-change system instructions into user text.
+Cross-protocol conversion covers supported text/system messages, tools and
+tool results, token limits, stop conditions, JSON-schema output where an
+equivalent exists, usage, finish reasons and SSE events. Unsupported optional
+or out-of-dialect fields are omitted and their paths are logged. For example,
+reasoning_effort and Anthropic effort controls are not treated as interchangeable
+without a declared mapping; cache markers have no OpenAI Chat Completions
+equivalent. An explicit Anthropic `thinking` control can pass to an Anthropic
+provider, while enabled thinking and context-management requests cannot be
+represented by an OpenAI provider and are rejected with a field path. OpenAI
+system/developer messages that occur after conversation messages must be moved
+to Anthropic's top-level system field; this is done with a diagnostic. OpenAI
+tool `strict` settings are likewise omitted with a diagnostic when the target
+does not support them.
+
+`end_turn`, `max_tokens` and `tool_use` stop reasons map to their OpenAI
+counterparts. An Anthropic stop sequence or refusal marker can be flattened to
+an ordinary stop and is logged. A pause-turn, content-filter, or unknown finish
+reason has no safe equivalent and returns a field-specific translation error.
+
+Provider-owned response values are never fabricated. Anthropic thinking text
+can be represented as OpenAI reasoning_content, but an OpenAI reasoning-only
+response cannot be turned into an Anthropic thinking block without a valid
+provider signature; TideMux returns an explicit translation error instead of
+an empty successful response. When ordinary text or tool output is also
+available, unrepresentable reasoning is omitted with a diagnostic. TideMux does
+not rewrite system instructions into user text.
 
 The client-provided `X-TideMux-Session-ID` is validated and forwarded to the
 configured provider unchanged. If active-session limiting is enabled and the

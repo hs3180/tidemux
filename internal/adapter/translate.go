@@ -3,6 +3,8 @@ package adapter
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,16 +17,24 @@ const defaultAnthropicMaxTokens int64 = 4096
 // the gateway boundary; the resolved provider protocol selects the upstream
 // wire format.
 func PrepareRequest(clientProtocol, providerProtocol string, data []byte, defaultModel string, maxOutputTokens int64) ([]byte, string, error) {
+	body, model, _, err := PrepareRequestWithWarnings(clientProtocol, providerProtocol, data, defaultModel, maxOutputTokens)
+	return body, model, err
+}
+
+// PrepareRequestWithWarnings validates and translates a request. Warnings list
+// source-protocol fields intentionally omitted because the target protocol has
+// no safe equivalent.
+func PrepareRequestWithWarnings(clientProtocol, providerProtocol string, data []byte, defaultModel string, maxOutputTokens int64) ([]byte, string, []string, error) {
 	if clientProtocol == providerProtocol {
-		return data, firstNonEmpty(modelFromBody(data), defaultModel), nil
+		return data, firstNonEmpty(modelFromBody(data), defaultModel), nil, nil
 	}
 	switch {
 	case clientProtocol == "openai" && providerProtocol == "anthropic":
-		return translateOpenAIRequest(data, defaultModel, maxOutputTokens)
+		return translateOpenAIRequestWithWarnings(data, defaultModel, maxOutputTokens)
 	case clientProtocol == "anthropic" && providerProtocol == "openai":
-		return translateAnthropicRequest(data, defaultModel)
+		return translateAnthropicRequestWithWarnings(data, defaultModel)
 	default:
-		return nil, "", errors.New("unsupported_protocol_translation")
+		return nil, "", nil, errors.New("unsupported_protocol_translation")
 	}
 }
 
@@ -41,6 +51,7 @@ func modelFromBody(data []byte) string {
 type anthropicRequest struct {
 	Model         string                 `json:"model"`
 	Messages      []translatedMessage    `json:"messages"`
+	Thinking      *Thinking              `json:"thinking,omitempty"`
 	MaxTokens     int64                  `json:"max_tokens"`
 	Stream        bool                   `json:"stream,omitempty"`
 	System        json.RawMessage        `json:"system,omitempty"`
@@ -49,6 +60,7 @@ type anthropicRequest struct {
 	StopSequences []string               `json:"stop_sequences,omitempty"`
 	Tools         []anthropicTool        `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage        `json:"tool_choice,omitempty"`
+	Metadata      *Metadata              `json:"metadata,omitempty"`
 	OutputConfig  *anthropicOutputConfig `json:"output_config,omitempty"`
 }
 
@@ -73,23 +85,36 @@ type anthropicOutputFormat struct {
 }
 
 func translateOpenAIRequest(data []byte, defaultModel string, maxOutputTokens int64) ([]byte, string, error) {
-	validated, model, err := Request("openai", data, defaultModel)
+	body, model, _, err := translateOpenAIRequestWithWarnings(data, defaultModel, maxOutputTokens)
+	return body, model, err
+}
+
+func translateOpenAIRequestWithWarnings(data []byte, defaultModel string, maxOutputTokens int64) ([]byte, string, []string, error) {
+	validated, model, warnings, err := RequestWithWarnings("openai", data, defaultModel)
 	if err != nil {
-		return nil, "", err
+		return nil, "", warnings, err
 	}
 	var in Input
 	if err := StrictJSON(validated, &in); err != nil {
-		return nil, "", errors.New("invalid_request")
+		return nil, "", warnings, errors.New("invalid_request")
 	}
+	warnings = append(warnings, openAIRequestConversionLosses(in)...)
 	if in.ReasoningEffort != "" {
-		return nil, "", errors.New("reasoning_effort")
+		// OpenAI reasoning effort and Anthropic thinking controls do not have a
+		// generic one-to-one mapping. Keep the request usable, but make the loss
+		// observable instead of guessing a target budget.
+		warnings = append(warnings, "reasoning_effort")
 	}
 	out := anthropicRequest{
 		Model:       in.Model,
 		MaxTokens:   defaultAnthropicMaxTokens,
+		Thinking:    in.Thinking,
 		Stream:      in.Stream,
 		Temperature: in.Temperature,
 		TopP:        in.TopP,
+	}
+	if in.User != "" {
+		out.Metadata = &Metadata{UserID: in.User}
 	}
 	if maxOutputTokens > 0 {
 		out.MaxTokens = maxOutputTokens
@@ -99,19 +124,24 @@ func translateOpenAIRequest(data []byte, defaultModel string, maxOutputTokens in
 	} else if in.MaxTokens != nil {
 		out.MaxTokens = *in.MaxTokens
 	}
+	if in.Thinking != nil && in.Thinking.Type == "enabled" {
+		if in.Thinking.BudgetTokens == nil || *in.Thinking.BudgetTokens < 1024 || *in.Thinking.BudgetTokens >= out.MaxTokens {
+			return nil, "", warnings, validationError("thinking", "thinking.budget_tokens")
+		}
+	}
 
 	system, messages, err := translateMessages(in.Messages)
 	if err != nil {
-		return nil, "", err
+		return nil, "", warnings, err
 	}
 	out.System = system
 	out.Messages = messages
 	if out.StopSequences, err = stopSequences(in.Stop); err != nil {
-		return nil, "", errors.New("stop")
+		return nil, "", warnings, errors.New("stop")
 	}
 	for _, tool := range in.Tools {
 		if tool.Function == nil {
-			return nil, "", errors.New("tools")
+			return nil, "", warnings, errors.New("tools")
 		}
 		schema := tool.Function.Parameters
 		if len(schema) == 0 {
@@ -119,25 +149,64 @@ func translateOpenAIRequest(data []byte, defaultModel string, maxOutputTokens in
 		}
 		out.Tools = append(out.Tools, anthropicTool{Name: tool.Function.Name, Description: tool.Function.Description, InputSchema: schema})
 	}
-	if len(in.Tools) > 0 && in.ToolChoice != nil {
-		out.ToolChoice, err = translateToolChoice(in.ToolChoice)
+	if len(in.Tools) > 0 && (in.ToolChoice != nil || in.ParallelToolCalls != nil) {
+		out.ToolChoice, err = translateOpenAIToolChoice(in.ToolChoice, in.ParallelToolCalls)
 		if err != nil {
-			return nil, "", errors.New("tools")
+			return nil, "", warnings, errors.New("tools")
 		}
 	}
 	if in.ResponseFormat != nil {
-		format := &anthropicOutputFormat{Type: "json_schema"}
-		if in.ResponseFormat.Type == "json_object" {
-			format.Schema = json.RawMessage(`{"type":"object"}`)
-		} else if in.ResponseFormat.JSONSchema != nil {
-			format.Schema = in.ResponseFormat.JSONSchema.Schema
-		} else {
-			return nil, "", errors.New("response_format")
+		var format *anthropicOutputFormat
+		switch in.ResponseFormat.Type {
+		case "text":
+			// Text is the default response mode on Messages; no target field is
+			// needed to preserve this setting.
+		case "json_object":
+			format = &anthropicOutputFormat{Type: "json_schema", Schema: json.RawMessage(`{"type":"object"}`)}
+		case "json_schema":
+			if in.ResponseFormat.JSONSchema == nil {
+				return nil, "", warnings, validationError("response_format", "response_format.json_schema")
+			}
+			format = &anthropicOutputFormat{Type: "json_schema", Schema: in.ResponseFormat.JSONSchema.Schema}
+			if in.ResponseFormat.JSONSchema.Name != "" {
+				warnings = append(warnings, "response_format.json_schema.name")
+			}
+			if in.ResponseFormat.JSONSchema.Description != "" {
+				warnings = append(warnings, "response_format.json_schema.description")
+			}
+			if in.ResponseFormat.JSONSchema.Strict != nil {
+				warnings = append(warnings, "response_format.json_schema.strict")
+			}
+		default:
+			return nil, "", warnings, validationError("response_format", "response_format.type")
 		}
-		out.OutputConfig = &anthropicOutputConfig{Format: format}
+		if format != nil {
+			out.OutputConfig = &anthropicOutputConfig{Format: format}
+		}
 	}
 	encoded, err := json.Marshal(out)
-	return encoded, model, err
+	sort.Strings(warnings)
+	return encoded, model, uniqueStrings(warnings), err
+}
+
+func openAIRequestConversionLosses(input Input) []string {
+	var fields []string
+	conversationStarted := false
+	for index, message := range input.Messages {
+		if message.Role == "system" || message.Role == "developer" {
+			if conversationStarted {
+				fields = append(fields, fmt.Sprintf("messages[%d].role", index))
+			}
+			continue
+		}
+		conversationStarted = true
+	}
+	for index, tool := range input.Tools {
+		if tool.Function != nil && tool.Function.Strict != nil {
+			fields = append(fields, fmt.Sprintf("tools[%d].function.strict", index))
+		}
+	}
+	return sortedUniqueStrings(fields)
 }
 
 type translatedOpenAIRequest struct {
@@ -157,23 +226,30 @@ type translatedOpenAIRequest struct {
 }
 
 func translateAnthropicRequest(data []byte, defaultModel string) ([]byte, string, error) {
-	validated, model, err := Request("anthropic", data, defaultModel)
+	body, model, _, err := translateAnthropicRequestWithWarnings(data, defaultModel)
+	return body, model, err
+}
+
+func translateAnthropicRequestWithWarnings(data []byte, defaultModel string) ([]byte, string, []string, error) {
+	validated, model, warnings, err := RequestWithWarnings("anthropic", data, defaultModel)
 	if err != nil {
-		return nil, "", err
+		return nil, "", warnings, err
 	}
 	var in Input
 	if err := StrictJSON(validated, &in); err != nil {
-		return nil, "", errors.New("invalid_request")
+		return nil, "", warnings, errors.New("invalid_request")
 	}
+	warnings = append(warnings, anthropicConversionLosses(in)...)
+	warnings = sortedUniqueStrings(warnings)
 	if in.ContextManagement != nil {
-		return nil, "", errors.New("context_management")
+		return nil, "", warnings, validationError("context_management", "context_management")
 	}
 	if in.Thinking != nil && in.Thinking.Type != "disabled" {
-		return nil, "", errors.New("thinking")
+		return nil, "", warnings, validationError("thinking", "thinking")
 	}
 	system, messages, err := translateAnthropicMessages(in.System, in.Messages)
 	if err != nil {
-		return nil, "", err
+		return nil, "", warnings, err
 	}
 	out := translatedOpenAIRequest{
 		Model:       in.Model,
@@ -188,11 +264,11 @@ func translateAnthropicRequest(data []byte, defaultModel string) ([]byte, string
 	}
 	if len(in.StopSequences) > 0 {
 		if len(in.StopSequences) > 4 {
-			return nil, "", errors.New("stop_sequences")
+			return nil, "", warnings, validationError("stop_sequences", "stop_sequences")
 		}
 		out.Stop, err = json.Marshal(in.StopSequences)
 		if err != nil {
-			return nil, "", errors.New("stop_sequences")
+			return nil, "", warnings, validationError("stop_sequences", "stop_sequences")
 		}
 	}
 	for _, tool := range in.Tools {
@@ -209,19 +285,13 @@ func translateAnthropicRequest(data []byte, defaultModel string) ([]byte, string
 	if in.ToolChoice != nil {
 		out.ToolChoice, out.ParallelToolCalls, err = translateAnthropicToolChoice(in.ToolChoice)
 		if err != nil {
-			return nil, "", errors.New("tools")
+			return nil, "", warnings, validationError("tools", "tool_choice")
 		}
 	}
 	if in.Metadata != nil {
 		out.User = in.Metadata.UserID
 	}
 	if in.OutputConfig != nil {
-		if in.OutputConfig.Effort != "" {
-			if in.OutputConfig.Effort == "max" {
-				return nil, "", errors.New("output_config")
-			}
-			out.ReasoningEffort = in.OutputConfig.Effort
-		}
 		if in.OutputConfig.Format != nil {
 			out.ResponseFormat, err = json.Marshal(map[string]any{
 				"type": "json_schema",
@@ -231,23 +301,62 @@ func translateAnthropicRequest(data []byte, defaultModel string) ([]byte, string
 				},
 			})
 			if err != nil {
-				return nil, "", errors.New("output_config")
+				return nil, "", warnings, errors.New("output_config.format")
 			}
 		}
 	}
 	encoded, err := json.Marshal(out)
-	return encoded, model, err
+	sort.Strings(warnings)
+	return encoded, model, uniqueStrings(warnings), err
+}
+
+func anthropicConversionLosses(input Input) []string {
+	var fields []string
+	if input.OutputConfig != nil && input.OutputConfig.Effort != "" {
+		fields = append(fields, "output_config.effort")
+	}
+	for index, tool := range input.Tools {
+		if tool.CacheControl != nil {
+			fields = append(fields, fmt.Sprintf("tools[%d].cache_control", index))
+		}
+	}
+	fields = appendBlockConversionLosses(fields, "system", input.System)
+	for index, message := range input.Messages {
+		prefix := fmt.Sprintf("messages[%d].content", index)
+		fields = appendBlockConversionLosses(fields, prefix, message.Content)
+	}
+	return sortedUniqueStrings(fields)
+}
+
+func appendBlockConversionLosses(fields []string, prefix string, raw json.RawMessage) []string {
+	var blocks []contentBlock
+	if LenientJSON(raw, &blocks) != nil {
+		return fields
+	}
+	for index, block := range blocks {
+		path := fmt.Sprintf("%s[%d]", prefix, index)
+		if block.CacheControl != nil {
+			fields = append(fields, path+".cache_control")
+		}
+		if block.Type == "tool_result" && block.IsError != nil && *block.IsError {
+			fields = append(fields, path+".is_error")
+		}
+		if block.Type == "tool_result" {
+			fields = appendBlockConversionLosses(fields, path+".content", block.Content)
+		}
+	}
+	return fields
 }
 
 func translateAnthropicMessages(system json.RawMessage, messages []Message) (string, []Message, error) {
 	systemText, err := anthropicSystemText(system)
 	if err != nil {
-		return "", nil, err
+		return "", nil, validationError("invalid_request", "system")
 	}
 	var out []Message
-	for _, message := range messages {
+	for messageIndex, message := range messages {
 		if len(message.Content) == 0 || string(message.Content) == "null" {
-			return "", nil, errors.New("messages")
+			return "", nil, validationError("invalid_request", fmt.Sprintf("messages[%d].content", messageIndex))
 		}
 		var text string
 		if json.Unmarshal(message.Content, &text) == nil {
@@ -256,23 +365,25 @@ func translateAnthropicMessages(system json.RawMessage, messages []Message) (str
 		}
 		var blocks []contentBlock
 		if LenientJSON(message.Content, &blocks) != nil || len(blocks) == 0 {
-			return "", nil, errors.New("messages")
+			return "", nil, validationError("invalid_request", fmt.Sprintf("messages[%d].content", messageIndex))
 		}
 		switch message.Role {
 		case "assistant":
-			translated, err := translateAnthropicAssistantBlocks(blocks)
+			translated, err := translateAnthropicAssistantBlocks(blocks, messageIndex)
 			if err != nil {
 				return "", nil, err
 			}
 			out = append(out, translated)
 		case "user":
-			translated, err := translateAnthropicUserBlocks(blocks)
+			translated, err := translateAnthropicUserBlocks(blocks, messageIndex)
 			if err != nil {
 				return "", nil, err
 			}
 			out = append(out, translated...)
+		case "system":
+			out = append(out, Message{Role: "system", Content: message.Content})
 		default:
-			return "", nil, errors.New("messages")
+			return "", nil, validationError("invalid_request", fmt.Sprintf("messages[%d].role", messageIndex))
 		}
 	}
 	return systemText, out, nil
@@ -300,26 +411,26 @@ func anthropicSystemText(raw json.RawMessage) (string, error) {
 	return strings.Join(texts, "\n"), nil
 }
 
-func translateAnthropicAssistantBlocks(blocks []contentBlock) (Message, error) {
+func translateAnthropicAssistantBlocks(blocks []contentBlock, messageIndex int) (Message, error) {
 	var text strings.Builder
 	var calls []ToolCall
-	for _, block := range blocks {
+	for blockIndex, block := range blocks {
 		switch block.Type {
 		case "text":
 			if block.Text == nil {
-				return Message{}, errors.New("messages")
+				return Message{}, validationError("invalid_request", fmt.Sprintf("messages[%d].content[%d].text", messageIndex, blockIndex))
 			}
 			text.WriteString(*block.Text)
 		case "tool_use":
 			if block.ID == "" || block.Name == "" || !object(block.Input) {
-				return Message{}, errors.New("tool_calls")
+				return Message{}, validationError("invalid_request", fmt.Sprintf("messages[%d].content[%d]", messageIndex, blockIndex))
 			}
 			call := ToolCall{ID: block.ID, Type: "function"}
 			call.Function.Name = block.Name
 			call.Function.Arguments = string(block.Input)
 			calls = append(calls, call)
 		default:
-			return Message{}, errors.New("messages")
+			return Message{}, validationError("unsupported_request_feature", fmt.Sprintf("messages[%d].content[%d].type", messageIndex, blockIndex))
 		}
 	}
 	message := Message{Role: "assistant"}
@@ -330,10 +441,11 @@ func translateAnthropicAssistantBlocks(blocks []contentBlock) (Message, error) {
 	return message, nil
 }
 
-func translateAnthropicUserBlocks(blocks []contentBlock) ([]Message, error) {
+func translateAnthropicUserBlocks(blocks []contentBlock, messageIndex int) ([]Message, error) {
 	var out []Message
 	var text strings.Builder
 	hasText := false
+	blockIndex := 0
 	flushText := func() {
 		if !hasText {
 			return
@@ -342,11 +454,12 @@ func translateAnthropicUserBlocks(blocks []contentBlock) ([]Message, error) {
 		text.Reset()
 		hasText = false
 	}
-	for _, block := range blocks {
+	for index, block := range blocks {
+		blockIndex = index
 		switch block.Type {
 		case "text":
 			if block.Text == nil {
-				return nil, errors.New("messages")
+				return nil, validationError("invalid_request", fmt.Sprintf("messages[%d].content[%d].text", messageIndex, index))
 			}
 			text.WriteString(*block.Text)
 			hasText = true
@@ -354,19 +467,19 @@ func translateAnthropicUserBlocks(blocks []contentBlock) ([]Message, error) {
 			flushText()
 			content, err := anthropicToolResultText(block.Content)
 			if err != nil {
-				return nil, err
+				return nil, validationError("unsupported_request_feature", fmt.Sprintf("messages[%d].content[%d].content", messageIndex, index))
 			}
 			if block.IsError != nil && *block.IsError {
 				content = "Tool error: " + content
 			}
 			out = append(out, Message{Role: "tool", ToolCallID: block.ToolUseID, Content: json.RawMessage(strconv.Quote(content))})
 		default:
-			return nil, errors.New("messages")
+			return nil, validationError("unsupported_request_feature", fmt.Sprintf("messages[%d].content[%d].type", messageIndex, index))
 		}
 	}
 	flushText()
 	if len(out) == 0 {
-		return nil, errors.New("messages")
+		return nil, validationError("invalid_request", fmt.Sprintf("messages[%d].content[%d]", messageIndex, blockIndex))
 	}
 	return out, nil
 }
@@ -430,7 +543,7 @@ func translateAnthropicToolChoice(raw json.RawMessage) (json.RawMessage, *bool, 
 
 func translateMessages(messages []Message) (json.RawMessage, []translatedMessage, error) {
 	var systemText []string
-	var systemBlocks []any
+	var systemParts []any
 	hasSystemBlocks := false
 	var out []translatedMessage
 	for _, message := range messages {
@@ -438,14 +551,21 @@ func translateMessages(messages []Message) (json.RawMessage, []translatedMessage
 			var text string
 			if json.Unmarshal(message.Content, &text) == nil {
 				systemText = append(systemText, text)
+				systemParts = append(systemParts, map[string]any{"type": "text", "text": text})
 				continue
 			}
-			var blocks []any
+			var blocks []json.RawMessage
 			if LenientJSON(message.Content, &blocks) != nil || len(blocks) == 0 {
 				return nil, nil, errors.New("system")
 			}
 			hasSystemBlocks = true
-			systemBlocks = append(systemBlocks, blocks...)
+			for _, block := range blocks {
+				var value any
+				if json.Unmarshal(block, &value) != nil {
+					return nil, nil, errors.New("system")
+				}
+				systemParts = append(systemParts, value)
+			}
 			continue
 		}
 		content, err := translateMessageContent(message)
@@ -464,10 +584,7 @@ func translateMessages(messages []Message) (json.RawMessage, []translatedMessage
 	var system json.RawMessage
 	if hasSystemBlocks || len(systemText) > 0 {
 		if hasSystemBlocks {
-			for _, text := range systemText {
-				systemBlocks = append(systemBlocks, map[string]any{"type": "text", "text": text})
-			}
-			encoded, _ := json.Marshal(systemBlocks)
+			encoded, _ := json.Marshal(systemParts)
 			system = encoded
 		} else {
 			system = json.RawMessage(strconv.Quote(strings.Join(systemText, "\n")))
@@ -558,32 +675,72 @@ func translateToolChoice(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(map[string]string{"type": "tool", "name": choice.Function.Name})
 }
 
+func translateOpenAIToolChoice(raw json.RawMessage, parallel *bool) (json.RawMessage, error) {
+	var choice json.RawMessage
+	var err error
+	if len(raw) == 0 {
+		choice = json.RawMessage(`{"type":"auto"}`)
+	} else {
+		choice, err = translateToolChoice(raw)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if parallel == nil {
+		return choice, nil
+	}
+	var translated map[string]any
+	if LenientJSON(choice, &translated) != nil || translated == nil {
+		return nil, errors.New("tools")
+	}
+	translated["disable_parallel_tool_use"] = !*parallel
+	return json.Marshal(translated)
+}
+
+// TranslationError identifies a response field that cannot be represented in
+// the target protocol without changing its meaning.
+type TranslationError struct {
+	Code  string
+	Field string
+}
+
+func (e *TranslationError) Error() string { return e.Code }
+
 // TranslateResponse converts a provider response to the client wire format.
 func TranslateResponse(providerProtocol, clientProtocol string, data []byte, defaultModel string) ([]byte, error) {
+	translated, _, err := TranslateResponseWithWarnings(providerProtocol, clientProtocol, data, defaultModel)
+	return translated, err
+}
+
+// TranslateResponseWithWarnings converts a provider response and returns the
+// field paths of source data that has no safe representation in the client API.
+func TranslateResponseWithWarnings(providerProtocol, clientProtocol string, data []byte, defaultModel string) ([]byte, []string, error) {
 	if providerProtocol == clientProtocol {
-		return data, nil
+		return data, nil, nil
 	}
 	if providerProtocol == "openai" && clientProtocol == "anthropic" {
-		return translateOpenAIResponse(data, defaultModel)
+		return translateOpenAIResponseWithWarnings(data, defaultModel)
 	}
 	if providerProtocol != "anthropic" || clientProtocol != "openai" {
-		return nil, errors.New("unsupported_protocol_translation")
+		return nil, nil, errors.New("unsupported_protocol_translation")
 	}
+	var warnings []string
 	var in struct {
-		ID         string          `json:"id"`
-		Model      string          `json:"model"`
-		Role       string          `json:"role"`
-		Content    []contentBlock  `json:"content"`
-		StopReason *string         `json:"stop_reason"`
-		Usage      json.RawMessage `json:"usage"`
+		ID           string          `json:"id"`
+		Model        string          `json:"model"`
+		Role         string          `json:"role"`
+		Content      []contentBlock  `json:"content"`
+		StopReason   *string         `json:"stop_reason"`
+		StopSequence *string         `json:"stop_sequence"`
+		Usage        json.RawMessage `json:"usage"`
 	}
 	if json.Unmarshal(data, &in) != nil || in.Role != "assistant" || len(in.Content) == 0 {
-		return nil, errors.New("invalid_upstream_response")
+		return nil, nil, errors.New("invalid_upstream_response")
 	}
 	var text strings.Builder
 	var reasoning strings.Builder
 	var calls []map[string]any
-	for _, block := range in.Content {
+	for index, block := range in.Content {
 		switch block.Type {
 		case "text":
 			if block.Text != nil {
@@ -595,7 +752,7 @@ func TranslateResponse(providerProtocol, clientProtocol string, data []byte, def
 			}
 		case "tool_use":
 			if block.ID == "" || block.Name == "" || len(block.Input) == 0 {
-				return nil, errors.New("invalid_upstream_response")
+				return nil, nil, errors.New("invalid_upstream_response")
 			}
 			calls = append(calls, map[string]any{
 				"id":   block.ID,
@@ -605,7 +762,23 @@ func TranslateResponse(providerProtocol, clientProtocol string, data []byte, def
 					"arguments": string(block.Input),
 				},
 			})
+		default:
+			warnings = append(warnings, fmt.Sprintf("content[%d].type", index))
 		}
+	}
+	if text.Len() == 0 && reasoning.Len() == 0 && len(calls) == 0 {
+		if len(warnings) > 0 {
+			return nil, nil, &TranslationError{Code: "unrepresentable_response_content", Field: warnings[0]}
+		}
+		return nil, nil, errors.New("invalid_upstream_response")
+	}
+	finishReason, finishWarnings, err := translateAnthropicStopReason(in.StopReason)
+	if err != nil {
+		return nil, warnings, err
+	}
+	warnings = append(warnings, finishWarnings...)
+	if in.StopSequence != nil && *in.StopSequence != "" {
+		warnings = append(warnings, "stop_sequence")
 	}
 	message := map[string]any{"role": "assistant", "content": nil}
 	if text.Len() > 0 {
@@ -621,43 +794,65 @@ func TranslateResponse(providerProtocol, clientProtocol string, data []byte, def
 	if model == "" {
 		model = defaultModel
 	}
-	choice := map[string]any{"index": 0, "message": message, "finish_reason": translateStopReason(in.StopReason)}
+	choice := map[string]any{"index": 0, "message": message, "finish_reason": finishReason}
 	out := map[string]any{"id": in.ID, "object": "chat.completion", "model": model, "choices": []any{choice}}
 	if usage := translateAnthropicUsage(in.Usage, nil); usage != nil {
 		out["usage"] = usage
 	}
-	return json.Marshal(out)
+	encoded, err := json.Marshal(out)
+	sort.Strings(warnings)
+	return encoded, uniqueStrings(warnings), err
 }
 
 func translateOpenAIResponse(data []byte, defaultModel string) ([]byte, error) {
+	translated, _, err := translateOpenAIResponseWithWarnings(data, defaultModel)
+	return translated, err
+}
+
+func translateOpenAIResponseWithWarnings(data []byte, defaultModel string) ([]byte, []string, error) {
 	var in struct {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
-				Role      string          `json:"role"`
-				Content   json.RawMessage `json:"content"`
-				Refusal   string          `json:"refusal"`
-				ToolCalls []ToolCall      `json:"tool_calls"`
+				Role             string          `json:"role"`
+				Content          json.RawMessage `json:"content"`
+				Refusal          string          `json:"refusal"`
+				ReasoningContent string          `json:"reasoning_content"`
+				ToolCalls        []ToolCall      `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage json.RawMessage `json:"usage"`
 	}
 	if json.Unmarshal(data, &in) != nil || in.ID == "" || len(in.Choices) != 1 {
-		return nil, errors.New("invalid_upstream_response")
+		return nil, nil, errors.New("invalid_upstream_response")
 	}
 	choice := in.Choices[0]
 	if choice.Message.Role != "assistant" {
-		return nil, errors.New("invalid_upstream_response")
+		return nil, nil, errors.New("invalid_upstream_response")
+	}
+	var warnings []string
+	if choice.Message.ReasoningContent != "" {
+		if (len(choice.Message.Content) == 0 || string(choice.Message.Content) == "null" || string(choice.Message.Content) == `""`) && choice.Message.Refusal == "" && len(choice.Message.ToolCalls) == 0 {
+			return nil, nil, &TranslationError{Code: "unrepresentable_reasoning_only_response", Field: "choices[0].message.reasoning_content"}
+		}
+		warnings = append(warnings, "choices[0].message.reasoning_content")
+	}
+	if choice.Message.Refusal != "" {
+		warnings = append(warnings, "choices[0].message.refusal")
 	}
 	content, err := translateOpenAIResponseContent(choice.Message.Content, choice.Message.Refusal, choice.Message.ToolCalls)
 	if err != nil {
-		return nil, err
+		return nil, warnings, err
 	}
 	model := firstNonEmpty(in.Model, defaultModel)
 	if model == "" {
-		return nil, errors.New("invalid_upstream_response")
+		return nil, nil, errors.New("invalid_upstream_response")
+	}
+	finishReason, err := translateOpenAIStopReason(choice.FinishReason)
+	if err != nil {
+		return nil, warnings, err
 	}
 	out := map[string]any{
 		"id":            in.ID,
@@ -665,13 +860,15 @@ func translateOpenAIResponse(data []byte, defaultModel string) ([]byte, error) {
 		"role":          "assistant",
 		"model":         model,
 		"content":       content,
-		"stop_reason":   translateOpenAIStopReason(choice.FinishReason),
+		"stop_reason":   finishReason,
 		"stop_sequence": nil,
 	}
 	if usage := translateOpenAIUsage(in.Usage); usage != nil {
 		out["usage"] = usage
 	}
-	return json.Marshal(out)
+	encoded, err := json.Marshal(out)
+	sort.Strings(warnings)
+	return encoded, uniqueStrings(warnings), err
 }
 
 func translateOpenAIResponseContent(raw json.RawMessage, refusal string, calls []ToolCall) ([]any, error) {
@@ -717,17 +914,19 @@ func translateOpenAIResponseContent(raw json.RawMessage, refusal string, calls [
 	return out, nil
 }
 
-func translateOpenAIStopReason(reason *string) string {
+func translateOpenAIStopReason(reason *string) (string, error) {
 	if reason == nil || *reason == "" {
-		return "end_turn"
+		return "end_turn", nil
 	}
 	switch *reason {
+	case "stop":
+		return "end_turn", nil
 	case "length":
-		return "max_tokens"
+		return "max_tokens", nil
 	case "tool_calls":
-		return "tool_use"
+		return "tool_use", nil
 	default:
-		return "end_turn"
+		return "", &TranslationError{Code: "unrepresentable_finish_reason", Field: "choices[0].finish_reason"}
 	}
 }
 
@@ -755,17 +954,23 @@ func translateOpenAIUsage(raw json.RawMessage) map[string]any {
 	return out
 }
 
-func translateStopReason(reason *string) any {
+func translateAnthropicStopReason(reason *string) (string, []string, error) {
 	if reason == nil || *reason == "" {
-		return nil
+		return "stop", nil, nil
 	}
 	switch *reason {
+	case "end_turn":
+		return "stop", nil, nil
 	case "max_tokens":
-		return "length"
+		return "length", nil, nil
 	case "tool_use":
-		return "tool_calls"
+		return "tool_calls", nil, nil
+	case "stop_sequence":
+		return "stop", []string{"stop_sequence"}, nil
+	case "refusal":
+		return "stop", []string{"stop_reason"}, nil
 	default:
-		return "stop"
+		return "", nil, &TranslationError{Code: "unrepresentable_finish_reason", Field: "stop_reason"}
 	}
 }
 
@@ -828,17 +1033,22 @@ func translateAnthropicUsage(raw json.RawMessage, inputFallback *int64) map[stri
 }
 
 type anthropicStreamTranslator struct {
-	model       string
-	id          string
-	created     int64
-	inputTokens *int64
-	toolIndices map[int]int
-	nextTool    int
+	model        string
+	id           string
+	created      int64
+	inputTokens  *int64
+	toolIndices  map[int]int
+	nextTool     int
+	omitted      []string
+	sawVisible   bool
+	sawReasoning bool
+	sawDropped   bool
 }
 
 type streamTranslator interface {
 	frame([]byte) ([]byte, error)
 	terminal([]byte) ([]byte, error)
+	warnings() []string
 }
 
 func newStreamTranslator(providerProtocol, clientProtocol, model string) streamTranslator {
@@ -853,6 +1063,10 @@ func newStreamTranslator(providerProtocol, clientProtocol, model string) streamT
 
 func newAnthropicStreamTranslator(model string) *anthropicStreamTranslator {
 	return &anthropicStreamTranslator{model: model, created: time.Now().Unix(), toolIndices: map[int]int{}}
+}
+
+func (t *anthropicStreamTranslator) warnings() []string {
+	return sortedUniqueStrings(append([]string(nil), t.omitted...))
 }
 
 func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
@@ -888,8 +1102,13 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 			return nil, errors.New("invalid_upstream_stream")
 		}
 		if block.ContentBlock.Type != "tool_use" {
+			if block.ContentBlock.Type != "text" && block.ContentBlock.Type != "thinking" {
+				t.omitted = append(t.omitted, fmt.Sprintf("content[%d].type", block.Index))
+				t.sawDropped = true
+			}
 			return nil, nil
 		}
+		t.sawVisible = true
 		index := t.nextTool
 		t.nextTool++
 		t.toolIndices[block.Index] = index
@@ -917,8 +1136,14 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 		}
 		switch delta.Delta.Type {
 		case "text_delta":
+			if delta.Delta.Text != "" {
+				t.sawVisible = true
+			}
 			return t.chunk(map[string]any{"content": delta.Delta.Text}, nil, nil), nil
 		case "thinking_delta":
+			if delta.Delta.Thinking != "" {
+				t.sawReasoning = true
+			}
 			return t.chunk(map[string]any{"reasoning_content": delta.Delta.Thinking}, nil, nil), nil
 		case "input_json_delta":
 			index, ok := t.toolIndices[delta.Index]
@@ -930,20 +1155,31 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 				"function": map[string]string{"arguments": delta.Delta.PartialJSON},
 			}}}, nil, nil), nil
 		default:
+			t.omitted = append(t.omitted, "content_block_delta.delta.type")
+			t.sawDropped = true
 			return nil, nil
 		}
 	case "message_delta":
 		var delta struct {
 			Delta struct {
-				StopReason *string `json:"stop_reason"`
+				StopReason   *string `json:"stop_reason"`
+				StopSequence *string `json:"stop_sequence"`
 			} `json:"delta"`
 			Usage json.RawMessage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(data), &delta) != nil {
 			return nil, errors.New("invalid_upstream_stream")
 		}
+		finishReason, warnings, err := translateAnthropicStopReason(delta.Delta.StopReason)
+		if err != nil {
+			return nil, err
+		}
+		t.omitted = append(t.omitted, warnings...)
+		if delta.Delta.StopSequence != nil && *delta.Delta.StopSequence != "" {
+			t.omitted = append(t.omitted, "stop_sequence")
+		}
 		usage := translateAnthropicUsage(delta.Usage, t.inputTokens)
-		return t.chunk(map[string]any{}, translateStopReason(delta.Delta.StopReason), usage), nil
+		return t.chunk(map[string]any{}, finishReason, usage), nil
 	case "ping", "content_block_stop":
 		return nil, nil
 	default:
@@ -952,6 +1188,9 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 }
 
 func (t *anthropicStreamTranslator) terminal(_ []byte) ([]byte, error) {
+	if t.sawDropped && !t.sawVisible && !t.sawReasoning {
+		return nil, &TranslationError{Code: "unrepresentable_response_content", Field: t.omitted[0]}
+	}
 	return []byte("data: [DONE]\n\n"), nil
 }
 
@@ -977,10 +1216,17 @@ type openAIStreamTranslator struct {
 	activeType   string
 	activeIndex  int
 	toolIndices  map[int]int
+	omitted      []string
+	sawReasoning bool
+	sawVisible   bool
 }
 
 func newOpenAIStreamTranslator(model string) *openAIStreamTranslator {
 	return &openAIStreamTranslator{model: model, toolIndices: map[int]int{}}
+}
+
+func (t *openAIStreamTranslator) warnings() []string {
+	return sortedUniqueStrings(append([]string(nil), t.omitted...))
 }
 
 func (t *openAIStreamTranslator) frame(frame []byte) ([]byte, error) {
@@ -994,9 +1240,11 @@ func (t *openAIStreamTranslator) frame(frame []byte) ([]byte, error) {
 		Choices []struct {
 			Index int `json:"index"`
 			Delta struct {
-				Role      string          `json:"role"`
-				Content   json.RawMessage `json:"content"`
-				ToolCalls []struct {
+				Role             string          `json:"role"`
+				Content          json.RawMessage `json:"content"`
+				Refusal          string          `json:"refusal"`
+				ReasoningContent string          `json:"reasoning_content"`
+				ToolCalls        []struct {
 					Index    int    `json:"index"`
 					ID       string `json:"id"`
 					Type     string `json:"type"`
@@ -1045,6 +1293,10 @@ func (t *openAIStreamTranslator) frame(frame []byte) ([]byte, error) {
 		if choice.Index != 0 {
 			continue
 		}
+		if choice.Delta.ReasoningContent != "" {
+			t.sawReasoning = true
+			t.omitted = append(t.omitted, "choices[0].delta.reasoning_content")
+		}
 		if text, ok := streamText(choice.Delta.Content); ok && text != "" {
 			var err error
 			output, err = t.startBlock(output, "text", "", "")
@@ -1056,8 +1308,24 @@ func (t *openAIStreamTranslator) frame(frame []byte) ([]byte, error) {
 				"index": t.activeIndex,
 				"delta": map[string]any{"type": "text_delta", "text": text},
 			})...)
+			t.sawVisible = true
+		}
+		if choice.Delta.Refusal != "" {
+			var err error
+			output, err = t.startBlock(output, "text", "", "")
+			if err != nil {
+				return nil, err
+			}
+			output = append(output, anthropicEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": t.activeIndex,
+				"delta": map[string]any{"type": "text_delta", "text": choice.Delta.Refusal},
+			})...)
+			t.omitted = append(t.omitted, "choices[0].delta.refusal")
+			t.sawVisible = true
 		}
 		for _, call := range choice.Delta.ToolCalls {
+			t.sawVisible = true
 			index, ok := t.toolIndices[call.Index]
 			if !ok {
 				if call.ID == "" || call.Function.Name == "" {
@@ -1131,6 +1399,13 @@ func (t *openAIStreamTranslator) terminal(_ []byte) ([]byte, error) {
 	if !t.started || !t.finished {
 		return nil, errors.New("invalid_upstream_stream")
 	}
+	if t.sawReasoning && !t.sawVisible {
+		return nil, &TranslationError{Code: "unrepresentable_reasoning_only_response", Field: "choices[0].delta.reasoning_content"}
+	}
+	finishReason, err := translateOpenAIStopReason(t.finishReason)
+	if err != nil {
+		return nil, err
+	}
 	output := t.stopActiveBlock()
 	usage := map[string]any{}
 	if t.outputTokens != nil {
@@ -1139,7 +1414,7 @@ func (t *openAIStreamTranslator) terminal(_ []byte) ([]byte, error) {
 	messageDelta := map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{
-			"stop_reason":   translateOpenAIStopReason(t.finishReason),
+			"stop_reason":   finishReason,
 			"stop_sequence": nil,
 		},
 	}

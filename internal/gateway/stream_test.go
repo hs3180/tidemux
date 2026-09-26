@@ -182,6 +182,59 @@ func TestOpenAIClientStreamingFallsBackToNamedAnthropicProvider(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientStreamingWithLegacyAnthropicProvider(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/provider/v1/messages" || r.Header.Get("x-api-key") != "provider-secret" {
+			t.Fatalf("unexpected upstream request: %s %s", r.URL.Path, r.Header.Get("x-api-key"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"model\":\"custom-model\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":3}}}\n\n")
+		io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")
+		io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+		io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+	c.Protocol = "anthropic"
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := `{"model":"custom-model","messages":[{"role":"user","content":"hello"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != 200 || out.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(out.Body.String(), `"content":"hi"`) || !strings.Contains(out.Body.String(), `"finish_reason":"stop"`) || !strings.Contains(out.Body.String(), "data: [DONE]") || strings.Contains(out.Body.String(), "event:") {
+		t.Fatalf("status=%d headers=%v body=%s", out.Code, out.Header(), out.Body.String())
+	}
+}
+
+func TestStreamingTranslationErrorKeepsFieldPath(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"model\":\"custom-model\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":3}}}\n\n")
+		io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"pause_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+	}))
+	defer up.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/provider/v1")
+	c.Protocol = "anthropic"
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"custom-model","messages":[{"role":"user","content":"hello"}],"stream":true}`))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != 200 || !strings.Contains(out.Body.String(), "event: error") || !strings.Contains(out.Body.String(), `"message":"unrepresentable_finish_reason"`) || !strings.Contains(out.Body.String(), `"param":"stop_reason"`) || strings.Contains(out.Body.String(), "data: [DONE]") {
+		t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+	}
+}
+
 func TestStreamingCancellationRetainsConcurrencyUntilClose(t *testing.T) {
 	entered := make(chan struct{}, 2)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

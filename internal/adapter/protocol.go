@@ -122,6 +122,7 @@ type Input struct {
 	OutputConfig      *OutputConfig   `json:"output_config,omitempty"`
 	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"`
 	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	User              string          `json:"user,omitempty"`
 
 	Tools             []Tool          `json:"tools,omitempty"`
 	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
@@ -168,11 +169,17 @@ func Request(protocol string, data []byte, defaultModel string) ([]byte, string,
 // list contains client/provider fields that were accepted but intentionally
 // omitted from the normalized upstream request.
 func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]byte, string, []string, error) {
+	filtered, foreignFields, err := discardForeignProtocolFields(data, protocol)
+	if err != nil {
+		return nil, "", nil, validationErrorFromJSON(err)
+	}
 	var in Input
-	if err := LenientJSON(data, &in); err != nil {
+	if err := LenientJSON(filtered, &in); err != nil {
 		return nil, "", nil, validationErrorFromJSON(err)
 	}
 	warnings := ignoredRequestFields(data, in)
+	warnings = append(warnings, foreignFields...)
+	warnings = sortedUniqueStrings(warnings)
 	if in.Model == "" {
 		in.Model = defaultModel
 	}
@@ -199,25 +206,11 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 			return nil, "", warnings, validationError("thinking", "thinking.type")
 		}
 	}
-	if in.StreamOptions != nil && (protocol != "openai" || !in.Stream) {
+	if in.StreamOptions != nil && !in.Stream {
 		return nil, "", warnings, validationError("stream_options", "stream_options")
 	}
-	if in.ContextManagement != nil && (protocol != "anthropic" || !object(in.ContextManagement)) {
+	if in.ContextManagement != nil && !object(in.ContextManagement) {
 		return nil, "", warnings, validationError("context_management", "context_management")
-	}
-	if protocol == "openai" && (in.Metadata != nil || in.OutputConfig != nil) {
-		param := "metadata"
-		if in.OutputConfig != nil {
-			param = "output_config"
-		}
-		return nil, "", warnings, validationError("invalid_request", param)
-	}
-	if protocol == "anthropic" && (in.ResponseFormat != nil || in.ReasoningEffort != "") {
-		param := "response_format"
-		if in.ReasoningEffort != "" {
-			param = "reasoning_effort"
-		}
-		return nil, "", warnings, validationError("invalid_request", param)
 	}
 	if in.ResponseFormat != nil {
 		f := in.ResponseFormat
@@ -249,9 +242,6 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 	}
 	if !validChoice(protocol, in.ToolChoice) {
 		return nil, "", warnings, validationError("tools", "tool_choice")
-	}
-	if protocol == "anthropic" && in.ParallelToolCalls != nil {
-		return nil, "", warnings, validationError("parallel_tool_calls", "parallel_tool_calls")
 	}
 	for _, m := range in.Messages {
 		// System-role messages are a compatible-provider extension emitted by
@@ -307,6 +297,9 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 			}
 			return nil, "", warnings, validationError("invalid_request", param)
 		}
+		if in.Thinking != nil && in.Thinking.Type == "enabled" && in.Thinking.BudgetTokens != nil && *in.Thinking.BudgetTokens >= *in.MaxTokens {
+			return nil, "", warnings, validationError("thinking", "thinking.budget_tokens")
+		}
 		if len(in.System) > 0 && !messageContent("anthropic", "system", in.System) {
 			return nil, "", warnings, validationError("system", "system")
 		}
@@ -315,14 +308,8 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 		}
 	}
 	if protocol == "openai" {
-		if len(in.System) > 0 || in.StopSequences != nil || (in.MaxTokens != nil && in.MaxCompletionTokens != nil) {
-			param := "system"
-			if in.StopSequences != nil {
-				param = "stop_sequences"
-			} else if in.MaxTokens != nil && in.MaxCompletionTokens != nil {
-				param = "max_completion_tokens"
-			}
-			return nil, "", warnings, validationError("invalid_request", param)
+		if in.MaxTokens != nil && in.MaxCompletionTokens != nil {
+			return nil, "", warnings, validationError("invalid_request", "max_completion_tokens")
 		}
 		if len(in.Stop) > 0 {
 			var s string
@@ -497,10 +484,11 @@ func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
 	var r struct {
 		Choices []struct {
 			Message struct {
-				Role      string          `json:"role"`
-				Content   json.RawMessage `json:"content"`
-				Refusal   string          `json:"refusal"`
-				ToolCalls []ToolCall      `json:"tool_calls"`
+				Role             string          `json:"role"`
+				Content          json.RawMessage `json:"content"`
+				Refusal          string          `json:"refusal"`
+				ReasoningContent string          `json:"reasoning_content"`
+				ToolCalls        []ToolCall      `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -517,7 +505,7 @@ func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
 			return TokenUsage{}, errors.New("invalid_upstream_response")
 		}
 		for _, c := range r.Choices {
-			if c.Message.Role != "assistant" || (!textContent(c.Message.Content) && c.Message.Refusal == "" && len(c.Message.ToolCalls) == 0) || !validCalls(c.Message.ToolCalls) {
+			if c.Message.Role != "assistant" || (!textContent(c.Message.Content) && c.Message.Refusal == "" && c.Message.ReasoningContent == "" && len(c.Message.ToolCalls) == 0) || !validCalls(c.Message.ToolCalls) {
 				return TokenUsage{}, errors.New("invalid_upstream_response")
 			}
 		}
