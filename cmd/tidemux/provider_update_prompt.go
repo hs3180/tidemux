@@ -42,6 +42,7 @@ func promptProviderUpdate(in, out *os.File, current gateway.Provider) (providerU
 			return providerUpdateChanges{}, fmt.Errorf("invalid provider endpoint: %w", err)
 		}
 	}
+	endpointChanged := endpoint != "" && endpoint != current.BaseURL
 
 	protocolPrompt := "Protocol override (openai or anthropic; Enter keeps current): "
 	if endpoint != "" && endpoint != current.BaseURL {
@@ -57,14 +58,17 @@ func promptProviderUpdate(in, out *os.File, current gateway.Provider) (providerU
 		return providerUpdateChanges{}, errors.New("protocol override must be openai or anthropic")
 	}
 
-	fmt.Fprint(out, "Allowed models (comma-separated IDs, 'all' for every model; Enter keeps current): ")
+	modelPrompt := "Allowed models (comma-separated IDs, 'all' for every model; Enter keeps current): "
+	if endpointChanged {
+		modelPrompt = "Allowed models (comma-separated IDs, 'all' for every model; Enter allows all models): "
+	}
+	fmt.Fprint(out, modelPrompt)
 	modelInput, err := readTerminalLine(in)
 	if err != nil {
 		return providerUpdateChanges{}, errors.New("could not read provider model scope")
 	}
 	modelInput = strings.TrimSpace(modelInput)
 	changes := providerUpdateChanges{}
-	endpointChanged := endpoint != "" && endpoint != current.BaseURL
 	if endpointChanged {
 		changes.Endpoint = endpoint
 	}

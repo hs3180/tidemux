@@ -12,22 +12,25 @@ import (
 func TestPromptProviderUpdateIsLinearAndEditsOnlyEnteredFields(t *testing.T) {
 	current := gateway.Provider{BaseURL: "https://old.example/v1", Protocol: "openai", SupportedModels: []string{"model-a"}}
 	tests := []struct {
-		name       string
-		input      string
-		want       providerUpdateChanges
-		wantError  bool
-		wantPrompt string
+		name            string
+		input           string
+		want            providerUpdateChanges
+		wantError       bool
+		wantPrompt      string
+		wantModelPrompt string
 	}{
 		{
-			name:       "endpoint auto-detects protocol and clears scope by default",
-			input:      "https://new.example/v1\n\n\n",
-			want:       providerUpdateChanges{Endpoint: "https://new.example/v1", Changed: true},
-			wantPrompt: "Enter auto-detects",
+			name:            "endpoint auto-detects protocol and clears scope by default",
+			input:           "https://new.example/v1\n\n\n",
+			want:            providerUpdateChanges{Endpoint: "https://new.example/v1", Changed: true},
+			wantPrompt:      "Enter auto-detects",
+			wantModelPrompt: "Enter allows all models",
 		},
 		{
-			name:  "protocol override",
-			input: "\nanthropic\n\n",
-			want:  providerUpdateChanges{Protocol: "anthropic", Changed: true},
+			name:            "protocol override",
+			input:           "\nanthropic\n\n",
+			want:            providerUpdateChanges{Protocol: "anthropic", Changed: true},
+			wantModelPrompt: "Enter keeps current",
 		},
 		{
 			name:  "model allowlist",
@@ -78,6 +81,9 @@ func TestPromptProviderUpdateIsLinearAndEditsOnlyEnteredFields(t *testing.T) {
 			}
 			if test.wantPrompt != "" && !strings.Contains(readOutput(t, out), test.wantPrompt) {
 				t.Fatalf("output omitted %q: %s", test.wantPrompt, readOutput(t, out))
+			}
+			if test.wantModelPrompt != "" && !strings.Contains(readOutput(t, out), test.wantModelPrompt) {
+				t.Fatalf("output omitted %q: %s", test.wantModelPrompt, readOutput(t, out))
 			}
 		})
 	}
