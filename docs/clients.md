@@ -8,22 +8,22 @@ is historical and does not describe the current provider model.
 
 ## Add the provider routes
 
-Each provider has one API protocol, and each client is routed to the default
-provider for its protocol. To use Claude Code and OpenAI-compatible clients
-with DeepSeek, add both endpoint forms:
+Each provider has one upstream API protocol. Client protocol does not select a
+provider; the request's `model` does. Add one or more provider endpoints:
 
 ```sh
-tidemux provider add https://api.deepseek.com --model deepseek-flash
-tidemux provider add https://api.deepseek.com/anthropic/v1 --model deepseek-flash
+tidemux provider add https://api.deepseek.com
+tidemux provider add https://api.deepseek.com/anthropic/v1
 tidemux provider list
 ```
 
 Each command securely prompts for the upstream API key. TideMux infers the
-provider protocol from its endpoint; all models are allowed by default, while
-`--model` selects the fallback when a client omits a model. The first provider
-for each protocol becomes its default. To use only one client protocol, add
-only its provider. To change a route later, use
-`tidemux provider default PROTOCOL REF` with a reference from `provider list`.
+provider protocol from its endpoint. All models are allowed by default; use
+`tidemux provider models REF --only ...` to restrict a provider. Choose the
+provider reference shown by `provider list`, and always request the model as
+`REF/MODEL_ID` (for example, `openrouter/stealth/union-alpha`). The gateway
+strips the first `REF/` prefix before forwarding the upstream model ID. Its
+`/v1/models` endpoint lists selectable qualified IDs.
 
 Configure the shared gateway credential and listener, then start the gateway:
 
@@ -45,17 +45,19 @@ TideMux:
 
 ```sh
 # Anthropic API client
-tidemux claude
+tidemux claude --model REF/deepseek-flash
 
 # OpenAI API clients — choose one
-tidemux kilo -- run 'Explain this project'
-tidemux hermes -- -q 'Explain this project'
+tidemux kilo --model REF/deepseek-flash -- run 'Explain this project'
+tidemux hermes --model REF/deepseek-flash -- -q 'Explain this project'
 ```
 
-Claude Code uses the Anthropic provider default. Kilo and Hermes use the
-OpenAI provider default. TideMux does not translate between provider protocols
-in the current routing model; add a provider for each protocol you need. Install
-each client first. If its executable is not on `PATH`, pass
+`--model` is required by these TideMux launch commands. If you configure a
+client directly instead, set its model to the same `REF/MODEL_ID` form. Either
+OpenAI or Anthropic client can use any selected provider; TideMux converts
+between client and upstream protocols when necessary. A provider/model error
+does not trigger a retry on another provider. Install each client first. If
+its executable is not on `PATH`, pass
 `--executable /absolute/path/to/client` before `--`. Arguments after `--` go
 to the client.
 
@@ -68,14 +70,16 @@ For a non-default TideMux configuration, pass the same `--config PATH` to both
 
 ```sh
 tidemux serve --config "$HOME/.config/tidemux/work.json"
-tidemux claude --config "$HOME/.config/tidemux/work.json"
+tidemux claude --config "$HOME/.config/tidemux/work.json" --model REF/MODEL_ID
 ```
 
 ## Credentials and client state
 
 Upstream keys stay in macOS Keychain and are never passed to client processes.
 TideMux reads only the local gateway key from Keychain, checks authenticated
-model discovery, and passes that local key to the client. If Keychain needs to
+gateway access through `/v1/models`, and passes that local key to the client.
+The selected model need not appear in discovery when the provider does not
+expose a recognizable catalog. If Keychain needs to
 be unlocked, run the client command from Terminal. If the gateway key is
 missing, create or rotate it with `tidemux gateway configure --rotate-key`.
 
@@ -87,8 +91,8 @@ history remains with the client; TideMux's audit ledger does not store message
 bodies.
 
 The gateway must already be running with the same configuration. Connection
-errors distinguish an unreachable gateway, rejected local credentials,
-unavailable model discovery and a model mismatch. Claude Code requires an
+errors distinguish an unreachable gateway, rejected local credentials and an
+unavailable model-list endpoint. Claude Code requires an
 interactive terminal and a bidirectional streaming HTTP connection.
 
 ## Experimental implementation

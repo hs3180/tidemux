@@ -28,19 +28,22 @@ func namedProviderConfig(c Config, name string) Config {
 	if protocol == "openai" {
 		version = ""
 	}
-	provider := Provider{Protocol: protocol, BaseURL: c.BaseURL, UpstreamKeychain: c.UpstreamKeychain, APIVersion: version, Model: c.Model, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices, APIKey: c.APIKey}
+	provider := Provider{Protocol: protocol, BaseURL: c.BaseURL, UpstreamKeychain: c.UpstreamKeychain, APIVersion: version, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices, APIKey: c.APIKey}
 	c.Protocol, c.BaseURL, c.APIVersion = "", "", ""
 	c.UpstreamKeychain, c.Model, c.UpstreamID = KeychainReference{}, "", ""
 	c.ModelCapabilities, c.Prices, c.APIKey = ModelCapabilities{}, nil, ""
 	c.Providers = map[string]Provider{name: provider}
-	c.DefaultProviders = map[string]string{protocol: name}
 	return c
 }
 func requestBody(protocol string) string {
+	return requestBodyFor(protocol, "legacy", "custom-model")
+}
+
+func requestBodyFor(protocol, providerName, model string) string {
 	if protocol == "anthropic" {
-		return `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`
+		return `{"model":"` + providerName + "/" + model + `","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`
 	}
-	return `{"model":"custom-model","messages":[{"role":"user","content":"hello"}]}`
+	return `{"model":"` + providerName + "/" + model + `","messages":[{"role":"user","content":"hello"}]}`
 }
 func responseBody(protocol string) string {
 	if protocol == "anthropic" {
@@ -279,7 +282,7 @@ func TestProviderProtocolsShareAnthropicClientRoute(t *testing.T) {
 }
 
 func TestAnthropicToolHintIsAcceptedAndNotForwarded(t *testing.T) {
-	body := `{"model":"custom-model","max_tokens":16,"store":true,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"name":"read_file","input_schema":{"type":"object"},"eager_input_streaming":true}]}`
+	body := `{"model":"legacy/custom-model","max_tokens":16,"store":true,"messages":[{"role":"user","content":"use a tool"}],"tools":[{"name":"read_file","input_schema":{"type":"object"},"eager_input_streaming":true}]}`
 	for _, providerProtocol := range []string{"anthropic", "openai"} {
 		t.Run(providerProtocol, func(t *testing.T) {
 			var upstreamBody string
@@ -313,7 +316,7 @@ func TestAnthropicToolHintIsAcceptedAndNotForwarded(t *testing.T) {
 }
 
 func TestAnthropicForeignDialectFieldsDoNotRejectRequest(t *testing.T) {
-	body := `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"hi","tool_calls":"invalid","tool_call_id":false,"reasoning_content":4}],"reasoning_effort":123,"response_format":"invalid","stop":{"invalid":true},"stream_options":"invalid","parallel_tool_calls":{},"max_completion_tokens":"invalid","user":false,"dsh_plugin_packages":false}`
+	body := `{"model":"legacy/custom-model","max_tokens":16,"messages":[{"role":"user","content":"hi","tool_calls":"invalid","tool_call_id":false,"reasoning_content":4}],"reasoning_effort":123,"response_format":"invalid","stop":{"invalid":true},"stream_options":"invalid","parallel_tool_calls":{},"max_completion_tokens":"invalid","user":false,"dsh_plugin_packages":false}`
 	for _, providerProtocol := range []string{"anthropic", "openai"} {
 		t.Run(providerProtocol, func(t *testing.T) {
 			var upstreamBody string
@@ -359,13 +362,13 @@ func TestValidationErrorIdentifiesParameter(t *testing.T) {
 			name:     "openai",
 			protocol: "openai",
 			path:     "/v1/chat/completions",
-			body:     `{"model":"custom-model","messages":[{"role":"user","content":"hi"}],"temperature":"invalid"}`,
+			body:     `{"model":"legacy/custom-model","messages":[{"role":"user","content":"hi"}],"temperature":"invalid"}`,
 		},
 		{
 			name:     "anthropic",
 			protocol: "anthropic",
 			path:     "/v1/messages",
-			body:     `{"model":"custom-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"temperature":"invalid"}`,
+			body:     `{"model":"legacy/custom-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"temperature":"invalid"}`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -462,7 +465,7 @@ func TestCrossProtocolResponseErrorsIdentifyFinishReason(t *testing.T) {
 }
 
 func TestOpenAIUnknownFieldsAreAcceptedAndNotForwarded(t *testing.T) {
-	body := `{"model":"custom-model","store":true,"dsh_plugin_packages":{"packages":["demo"]},"messages":[{"role":"user","content":[{"type":"text","text":"use a tool","client_extension":{"trace":true}}]}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"},"eager_input_streaming":true}}]}`
+	body := `{"model":"legacy/custom-model","store":true,"dsh_plugin_packages":{"packages":["demo"]},"messages":[{"role":"user","content":[{"type":"text","text":"use a tool","client_extension":{"trace":true}}]}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"},"eager_input_streaming":true}}]}`
 	for _, providerProtocol := range []string{"openai", "anthropic"} {
 		t.Run(providerProtocol, func(t *testing.T) {
 			var upstreamBody string
@@ -506,7 +509,7 @@ func TestValidationNeverCallsUpstream(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer closeDB()
-			for _, body := range []string{`{}`, `{} {}`, `null`, `{"model":"m","model":"n"}`, `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":"invalid"}`, strings.Repeat("x", (1<<20)+1)} {
+			for _, body := range []string{`{}`, `{} {}`, `null`, `{"model":"legacy/m","model":"legacy/n"}`, `{"model":"legacy/m","messages":[{"role":"user","content":"hi"}],"stream":"invalid"}`, strings.Repeat("x", (1<<20)+1)} {
 				req := httptest.NewRequest("POST", endpoint(protocol), strings.NewReader(body))
 				req.Header.Set("Authorization", "Bearer local-secret")
 				out := httptest.NewRecorder()
@@ -545,7 +548,7 @@ func TestHardBudgetRejectsBeforeUpstream(t *testing.T) {
 	}
 	defer closeDB()
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBodyFor("openai", "openai-main", "custom-model")))
 		req.Header.Set("Authorization", "Bearer local-secret")
 		out := httptest.NewRecorder()
 		h.ServeHTTP(out, req)
@@ -591,21 +594,20 @@ func TestActiveBudgetsAreIsolatedBySelectedProvider(t *testing.T) {
 	}
 	defer closeDB()
 	handler := h.(*handler)
-	send := func() int {
-		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBody("openai")))
+	send := func(providerName string) int {
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(requestBodyFor("openai", providerName, "custom-model")))
 		req.Header.Set("Authorization", "Bearer local-secret")
 		out := httptest.NewRecorder()
 		handler.ServeHTTP(out, req)
 		return out.Code
 	}
-	if got := send(); got != 200 {
+	if got := send("provider-a"); got != 200 {
 		t.Fatalf("provider-a first request=%d", got)
 	}
-	if got := send(); got != 429 {
+	if got := send("provider-a"); got != 429 {
 		t.Fatalf("provider-a over-budget request=%d", got)
 	}
-	handler.providerRoutes["openai"] = "provider-b"
-	if got := send(); got != 200 {
+	if got := send("provider-b"); got != 200 {
 		t.Fatalf("provider-b request inherited provider-a budget: %d", got)
 	}
 	if callsA != 1 || callsB != 1 {
@@ -819,7 +821,7 @@ func TestBudgetRejectsUnpricedRequestedModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeDB()
-	body := `{"model":"other-model","messages":[{"role":"user","content":"hello"}]}`
+	body := `{"model":"openai-main/other-model","messages":[{"role":"user","content":"hello"}]}`
 	req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()

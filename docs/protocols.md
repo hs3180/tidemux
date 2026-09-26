@@ -1,23 +1,24 @@
 # Protocol support — 0.2.0 development
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
-`/v1/chat/completions`; Anthropic clients use `/v1/messages`. Named profiles
-are keyed by provider name and each has one inferred or explicitly selected
-`protocol`, its own `base_url`,
-Keychain reference, default model, billing identity, model limits and prices.
-`default_providers` maps each client protocol to the named provider that serves
-it. Multiple named providers may use the same protocol; only the selected
-default receives requests. In the target `provider add` flow, the first
-provider added for a protocol is recorded as its default, and adding another
-provider does not replace it. A hand-written configuration with multiple
-providers for one protocol and no default must specify one explicitly. Gateway
-authentication, active-session limits and the local ledger remain shared.
+`/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
+provider has one inferred or explicitly selected upstream `protocol`, its own
+`base_url`, Keychain reference, model limits and prices. There is no default
+provider or model. Every request selects a provider through its model ID:
+`REF/MODEL_ID`, where `REF` is the provider reference and `MODEL_ID` is the
+upstream model name. The gateway splits at the first slash, routes to that
+provider, and removes only the `REF/` prefix before forwarding.
 
-The 0.1.x single-provider configuration and its cross-protocol translation are
-historical compatibility behavior, not part of the 0.2.0 provider model. A 0.2.0
-provider serves only clients using its protocol; add one provider per protocol
-when both client APIs are needed. Do not rely on migration of a legacy
-single-provider configuration as a 0.2.0 compatibility guarantee.
+Provider selection is independent of the client's API protocol. Either OpenAI
+or Anthropic clients can select any provider; TideMux uses the provider's
+configured upstream protocol and converts request/response semantics only when
+the client and provider protocols differ. Model, authentication, budget, rate
+limit, upstream errors and timeouts never cause an implicit route change or
+retry. Gateway authentication, active-session limits and the local ledger
+remain shared.
+
+The 0.1.x single-provider configuration remains a migration/compatibility path;
+do not rely on it as a 0.2.0 configuration guarantee.
 
 For named providers, an explicitly configured `protocol` of `openai` or
 `anthropic` forces that upstream format and skips detection. Otherwise TideMux
@@ -38,30 +39,25 @@ detection behavior belongs to the 0.1.x compatibility path only.
 | Upstream credential | Bearer key | `x-api-key` |
 | Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
 | Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
-| Matching client protocol | OpenAI client passes through after validation | Anthropic client passes through after validation |
-| Non-matching client protocol | Not routed to this provider | Not routed to this provider |
+| OpenAI client | Selected explicitly by `model: "REF/MODEL_ID"`; native when provider is OpenAI | Selected explicitly by `model: "REF/MODEL_ID"`; conversion applies |
+| Anthropic client | Selected explicitly by `model: "REF/MODEL_ID"`; conversion applies | Selected explicitly by `model: "REF/MODEL_ID"`; native when provider is Anthropic |
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-The client endpoints are independent of provider registration, but routing is
-protocol-specific: each client goes only to the configured default with the
-same protocol, with no cross-provider retry or cross-protocol translation. Each
-named provider's `GET /models`
-response is used only on its client route when it is a complete, recognized model list.
-By default that catalogue is informational: any model ID is forwarded to the
-selected provider. Setting the provider's optional `supported_models` list
-restricts completion requests and the gateway's model listing to that subset.
-If a provider does not expose a complete recognizable list, its route returns
-an empty model catalogue unless an explicit allowlist is configured; direct
-requests are still sent to that provider. The current development build may
-accept existing 0.1.x single-provider configurations during transition; this is
-a compatibility bridge, not a 0.2.0 guarantee.
+The gateway's `GET /models` response combines available provider catalogs and
+returns qualified `REF/MODEL_ID` values in the requesting client's protocol
+shape. When a provider exposes a complete, recognized model list, those IDs
+appear with the provider reference prefixed. By default the catalog is
+informational: a qualified model ID is forwarded to the selected provider.
+Setting a provider's optional `supported_models` list restricts requests and
+the catalog to that provider's upstream model IDs (without the `REF/` prefix).
+If a provider does not expose a complete recognizable list, it contributes an
+empty catalog unless an explicit allowlist is configured; direct qualified
+requests are still sent to that provider.
 
-The adapter has a cross-protocol conversion path for a single-provider
-compatibility configuration. Named-provider routing remains same-protocol-only
-in this release; native-route preference and cross-protocol fallback are tracked
-separately in #33. A same-protocol request is not round-tripped through the
-converter.
+The adapter provides cross-protocol conversion for named providers and the
+single-provider compatibility configuration. A same-protocol request uses its
+native route and is not round-tripped through the converter.
 
 Cross-protocol conversion covers supported text/system messages, tools and
 tool results, token limits, stop conditions, JSON-schema output where an

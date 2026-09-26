@@ -53,14 +53,15 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
             config = root / (name + '.json')
             config.write_text(json.dumps({
                 'listen_addr': '127.0.0.1:' + str(server.server_port),
-                'base_url': 'https://unused.example/v1', 'model': 'test-model',
+                'base_url': 'https://unused.example/v1',
                 'upstream_id': 'test', 'anthropic_version': '2023-06-01',
                 'upstream_keychain': {'service': 'must-not-read', 'account': 'test'},
                 'access_token_keychain': {'service': 'test.gateway', 'account': 'test'},
                 'max_in_flight': 1, 'ledger_path': str(root / 'unused.db')}))
             env = dict(os.environ, PATH=str(mock) + ':' + os.environ['PATH'], KILO_CONFIG_CONTENT='{}')
             before = config.read_bytes()
-            result = subprocess.run([binary, name, '--config', str(config), '--executable', str(child),
+            result = subprocess.run([binary, name, '--config', str(config), '--model', 'legacy/test-model',
+                                     '--executable', str(child),
                                      '--', 'argument with spaces', '--client-option'],
                                     env=env, capture_output=True, text=True, timeout=15, check=True)
             record = json.loads(result.stdout)
@@ -70,12 +71,12 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
             if name == 'claude':
                 assert record['env']['ANTHROPIC_BASE_URL'] == url
                 assert record['env']['ANTHROPIC_API_KEY'] == 'synthetic-local-token'
-                assert record['env']['ANTHROPIC_MODEL'] == 'test-model'
+                assert record['env']['ANTHROPIC_MODEL'] == 'legacy/test-model'
                 assert record['env']['CLAUDE_CODE_SIMPLE'] == '1'
                 assert record['args'] == ['argument with spaces', '--client-option']
             elif name == 'kilo':
                 data = json.loads(record['env']['KILO_CONFIG_CONTENT'])
-                assert data['model'] == 'tidemux-local/test-model'
+                assert data['model'] == 'tidemux-local/legacy/test-model'
                 assert data['provider']['tidemux-local']['options']['baseURL'] == url + '/v1'
                 assert 'synthetic-local-token' not in record['env']['KILO_CONFIG_CONTENT']
             else:

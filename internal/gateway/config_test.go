@@ -97,10 +97,9 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 	c.Prices = nil
 	c.BaseURL = ""
 	c.Providers = map[string]Provider{
-		"openai-main":    {Protocol: "openai", BaseURL: "https://openai.example/v1", Model: "openai-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-		"anthropic-main": {Protocol: "anthropic", BaseURL: "https://anthropic.example/v1", Model: "anthropic-model", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+		"openai-main":    {Protocol: "openai", BaseURL: "https://openai.example/v1", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic-main": {Protocol: "anthropic", BaseURL: "https://anthropic.example/v1", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 	}
-	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -133,11 +132,9 @@ func TestIndependentProvidersResolveSeparateKeychainCredentials(t *testing.T) {
 		"anthropic-main": {
 			Protocol:         "anthropic",
 			BaseURL:          "https://anthropic.example/v1",
-			Model:            "anthropic-model",
 			UpstreamKeychain: c.Providers["openai-main"].UpstreamKeychain,
 		},
 	}
-	shared.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	sharedResolved, err := shared.ResolveCredentials(context.Background(), keyedTestSecrets{
 		"test.provider/openai": "shared-private",
 		"test.gateway/default": "gateway-private",
@@ -160,7 +157,7 @@ func TestSupportedModelsAreOptionalAllowlist(t *testing.T) {
 	c.Prices = nil
 	c.Providers = map[string]Provider{
 		"main": {
-			Protocol: "openai", BaseURL: "https://example.com/v1", Model: "model-a",
+			Protocol: "openai", BaseURL: "https://example.com/v1",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "main"},
 		},
 	}
@@ -177,17 +174,14 @@ func TestSupportedModelsAreOptionalAllowlist(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		models []string
-		model  string
 	}{
-		{name: "default model outside allowlist", models: []string{"model-b"}, model: "model-a"},
-		{name: "duplicate model", models: []string{"model-a", "model-a"}, model: "model-a"},
-		{name: "empty model", models: []string{"model-a", " "}, model: "model-a"},
+		{name: "duplicate model", models: []string{"model-a", "model-a"}},
+		{name: "empty model", models: []string{"model-a", " "}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			bad := c
 			badProvider := provider
 			badProvider.SupportedModels = test.models
-			badProvider.Model = test.model
 			bad.Providers = map[string]Provider{"main": badProvider}
 			if err := bad.Validate(); err == nil {
 				t.Fatal("invalid supported_models accepted")
@@ -211,11 +205,9 @@ func TestNamedProviderProtocolMayBeAutomaticallyDetected(t *testing.T) {
 		"auto-provider": {
 			Protocol:         "auto",
 			BaseURL:          "https://provider.example/v1",
-			Model:            "model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "auto"},
 		},
 	}
-	c.DefaultProviders = nil
 	if err := c.Validate(); err != nil {
 		t.Fatalf("automatic provider protocol was rejected: %v", err)
 	}
@@ -236,17 +228,14 @@ func TestNamedProviderConfigRoundTrips(t *testing.T) {
 			"openai": {
 				Protocol:         "openai",
 				BaseURL:          "https://openai.example/v1",
-				Model:            "openai-model",
 				UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 			},
 			"anthropic": {
 				Protocol:         "anthropic",
 				BaseURL:          "https://anthropic.example/v1",
-				Model:            "anthropic-model",
 				UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 			},
 		},
-		DefaultProviders:    map[string]string{"openai": "openai", "anthropic": "anthropic"},
 		AccessTokenKeychain: KeychainReference{Service: "test.gateway", Account: "default"},
 		MaxInFlight:         1,
 		LedgerPath:          filepath.Join(t.TempDir(), "ledger.db"),
@@ -263,12 +252,15 @@ func TestNamedProviderConfigRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Providers["openai"].Model != "openai-model" || loaded.Providers["anthropic"].Model != "anthropic-model" {
-		t.Fatalf("provider models did not round-trip independently: %#v", loaded.Providers)
+	if len(loaded.Providers) != 2 {
+		t.Fatalf("provider profiles did not round-trip: %+v", loaded.Providers)
+	}
+	if strings.Contains(string(data), "default_providers") || strings.Contains(string(data), "default_model") {
+		t.Fatalf("configuration serialized an implicit route or model: %s", data)
 	}
 }
 
-func TestNamedProvidersAllowSameProtocolAndValidateDefaults(t *testing.T) {
+func TestNamedProvidersAllowSameProtocolWithExplicitRequestRouting(t *testing.T) {
 	c := testConfig("l.db", "https://legacy.example/v1")
 	c.BaseURL = ""
 	c.Protocol = ""
@@ -280,38 +272,21 @@ func TestNamedProvidersAllowSameProtocolAndValidateDefaults(t *testing.T) {
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
 	c.Providers = map[string]Provider{
-		"openai-primary":   {Protocol: "openai", BaseURL: "https://primary.example/v1", Model: "primary", UpstreamKeychain: KeychainReference{Service: "test", Account: "primary"}},
-		"openai-secondary": {Protocol: "openai", BaseURL: "https://secondary.example/v1", Model: "secondary", UpstreamKeychain: KeychainReference{Service: "test", Account: "secondary"}},
+		"openai-primary":   {Protocol: "openai", BaseURL: "https://primary.example/v1", UpstreamKeychain: KeychainReference{Service: "test", Account: "primary"}},
+		"openai-secondary": {Protocol: "openai", BaseURL: "https://secondary.example/v1", UpstreamKeychain: KeychainReference{Service: "test", Account: "secondary"}},
 	}
-	c.DefaultProviders = map[string]string{"openai": "openai-secondary"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("same-protocol providers rejected: %v", err)
 	}
-
-	bad := c
-	bad.DefaultProviders = map[string]string{"openai": "missing"}
-	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "configured provider name") {
-		t.Fatalf("unknown default provider error=%v", err)
-	}
-	bad = c
-	bad.DefaultProviders = map[string]string{"openai": "openai-primary", "anthropic": "openai-secondary"}
-	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "same protocol") {
-		t.Fatalf("cross-protocol default error=%v", err)
-	}
-	bad = c
-	bad.DefaultProviders = nil
-	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "default_providers") {
-		t.Fatalf("missing default error=%v", err)
-	}
 }
 
-func TestBudgetRequiresConfiguredModelPricing(t *testing.T) {
+func TestBudgetPricingIsCheckedForEachRequestedModel(t *testing.T) {
 	c := namedProviderConfig(testConfig("l.db", "https://example.com/prefix/v1"), "openai-main")
 	provider := c.Providers["openai-main"]
 	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
 	c.Providers["openai-main"] = provider
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget requires pricing") {
-		t.Fatalf("missing pricing error=%v", err)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("provider budget should not require a default model price: %v", err)
 	}
 	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
 	c.Providers["openai-main"] = provider
@@ -328,7 +303,6 @@ func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 		"openai-main": {
 			Protocol:         "openai",
 			BaseURL:          "https://openai.example/v1",
-			Model:            "openai-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 			Prices:           map[string]adapter.Price{"openai-model": testPrice()},
 			Budget:           &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"},
@@ -336,19 +310,17 @@ func TestProviderBudgetUsesEachProvidersModelAndPrices(t *testing.T) {
 		"anthropic-main": {
 			Protocol:         "anthropic",
 			BaseURL:          "https://anthropic.example/v1",
-			Model:            "anthropic-model",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 		},
 	}
-	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("independent provider pricing rejected: %v", err)
 	}
 	openAI := c.Providers["openai-main"]
 	openAI.Prices = nil
 	c.Providers["openai-main"] = openAI
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "budget requires pricing for its default model") {
-		t.Fatalf("missing one provider's price accepted: %v", err)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("missing default-model pricing should not invalidate config: %v", err)
 	}
 }
 
@@ -358,11 +330,10 @@ func TestNamedProviderBudgetAcceptsMatchingBuiltInPrice(t *testing.T) {
 	c.Model, c.UpstreamID, c.BaseURL = "", "", ""
 	c.ModelCapabilities, c.Prices = ModelCapabilities{}, nil
 	c.Providers = map[string]Provider{"deepseek": {
-		Protocol: "openai", BaseURL: "https://api.deepseek.com/v1", Model: "deepseek-flash",
+		Protocol: "openai", BaseURL: "https://api.deepseek.com/v1",
 		UpstreamID: "deepseek", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "deepseek"},
 		Budget: &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"},
 	}}
-	c.DefaultProviders = map[string]string{"openai": "deepseek"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("built-in price should satisfy budget pricing: %v", err)
 	}
@@ -384,11 +355,10 @@ func TestGlobalBudgetMustBeAssignedToAProvider(t *testing.T) {
 	policy := ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 5, WeeklyLimit: 80, AlertThreshold: .8, Mode: "hard"}
 	c := namedProviderConfig(testConfig(path, "https://example.com/v1"), "test")
 	c.Providers["test"] = Provider{
-		Protocol: "openai", BaseURL: "https://example.com/v1", Model: "custom-model",
+		Protocol: "openai", BaseURL: "https://example.com/v1",
 		UpstreamID: "test", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "default"},
 		Prices: map[string]adapter.Price{"custom-model": testPrice()},
 	}
-	c.DefaultProviders = map[string]string{"openai": "test"}
 	c.LegacyBudget = &policy
 	data, err := json.Marshal(c)
 	if err != nil {

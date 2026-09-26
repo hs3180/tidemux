@@ -54,7 +54,7 @@ func TestServeProcessBothProtocols(t *testing.T) {
 				}
 			}))
 			defer upstream.Close()
-			config := map[string]any{"listen_addr": "127.0.0.1:0", "protocol": protocol, "base_url": upstream.URL + "/v1", "model": "test-model", "upstream_id": "mock", "anthropic_version": "2023-06-01", "upstream_keychain": map[string]string{"service": "test.provider", "account": "default"}, "access_token_keychain": map[string]string{"service": "test.gateway", "account": "default"}, "max_in_flight": 1, "ledger_path": filepath.Join(dir, protocol+".db"), "prices": map[string]any{"test-model": map[string]any{"currency": "USD", "source": "test-fixture", "version": "1", "input_cache_hit_per_million": 2, "input_cache_miss_per_million": 2, "output_per_million": 4}}}
+			config := map[string]any{"listen_addr": "127.0.0.1:0", "protocol": protocol, "base_url": upstream.URL + "/v1", "upstream_id": "mock", "anthropic_version": "2023-06-01", "upstream_keychain": map[string]string{"service": "test.provider", "account": "default"}, "access_token_keychain": map[string]string{"service": "test.gateway", "account": "default"}, "max_in_flight": 1, "ledger_path": filepath.Join(dir, protocol+".db"), "prices": map[string]any{"test-model": map[string]any{"currency": "USD", "source": "test-fixture", "version": "1", "input_cache_hit_per_million": 2, "input_cache_miss_per_million": 2, "output_per_million": 4}}}
 			data, _ := json.Marshal(config)
 			path := filepath.Join(configDirectory, "config.json")
 			if err := os.WriteFile(path, data, 0o600); err != nil {
@@ -87,7 +87,7 @@ func TestServeProcessBothProtocols(t *testing.T) {
 				t.Fatal("startup timeout")
 			}
 			route := "/v1/chat/completions"
-			body := `{"messages":[{"role":"user","content":"test"}]}`
+			body := `{"model":"legacy/test-model","messages":[{"role":"user","content":"test"}]}`
 			req, _ := http.NewRequest("POST", address+route, strings.NewReader(body))
 			req.Header.Set("Authorization", "Bearer local-secret")
 			client := http.Client{Timeout: 10 * time.Second}

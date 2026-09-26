@@ -19,7 +19,7 @@ import (
 
 func providerCommand(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux provider <add|list|show|update|remove|key|default|models|pricing|budget>")
+		return errors.New("usage: tidemux provider <add|list|show|update|remove|key|models|pricing|budget>")
 	}
 	switch args[0] {
 	case "add":
@@ -34,8 +34,6 @@ func providerCommand(args []string, stdout, stderr *os.File) error {
 		return providerRemove(args[1:], stdout, stderr)
 	case "key":
 		return providerKeyCommand(args[1:], stdout, stderr)
-	case "default":
-		return providerDefault(args[1:], stdout, stderr)
 	case "models":
 		return providerModels(args[1:], stdout, stderr)
 	case "pricing":
@@ -43,7 +41,7 @@ func providerCommand(args []string, stdout, stderr *os.File) error {
 	case "budget":
 		return providerBudgetCommand(args[1:], os.Stdin, stdout, stderr)
 	default:
-		return errors.New("usage: tidemux provider <add|list|show|update|remove|key|default|models|pricing|budget>")
+		return errors.New("usage: tidemux provider <add|list|show|update|remove|key|models|pricing|budget>")
 	}
 }
 
@@ -54,7 +52,6 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
 	name := flags.String("name", "", "optional provider label")
 	protocol := flags.String("protocol", "", "force endpoint protocol: openai or anthropic")
-	model := flags.String("model", "", "default model when clients omit one")
 	apiVersion := flags.String("anthropic-version", "2023-06-01", "Anthropic API version")
 	if err := flags.Parse(rest); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -63,7 +60,7 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*configPath) == "" {
-		return errors.New("usage: tidemux provider add [ENDPOINT] [--name LABEL] [--protocol openai|anthropic] [--model ID] [--config PATH]")
+		return errors.New("usage: tidemux provider add [ENDPOINT] [--name LABEL] [--protocol openai|anthropic] [--config PATH]")
 	}
 	if *protocol != "" && *protocol != "openai" && *protocol != "anthropic" {
 		return errors.New("--protocol must be openai or anthropic")
@@ -82,7 +79,7 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 
 	var setup interactiveProviderSetup
 	if endpoint == "" {
-		setup, err = promptNewProvider(tty, tty, *apiVersion, nil, *protocol, *model, *name)
+		setup, err = promptNewProvider(tty, tty, *apiVersion, nil, *protocol, *name)
 		if err != nil {
 			return err
 		}
@@ -100,7 +97,7 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 		if !validSecret(key) {
 			return errors.New("a valid provider API key is required")
 		}
-		setup, err = inspectAndCompleteProvider(tty, endpoint, string(key), *protocol, *model, *apiVersion, nil)
+		setup, err = inspectAndCompleteProvider(tty, endpoint, string(key), *protocol, *apiVersion, nil)
 		if err != nil {
 			return err
 		}
@@ -146,10 +143,6 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 	if c.Providers == nil {
 		c.Providers = map[string]gateway.Provider{}
 	}
-	if c.DefaultProviders == nil {
-		c.DefaultProviders = map[string]string{}
-	}
-	selectInitialProviderDefault(c.Providers, c.DefaultProviders, setup.Provider.Protocol, providerName)
 	c.Providers[providerName] = setup.Provider
 	store := gateway.MacOSKeychain{}
 	if err := persistProviderAddition(path, c, before, providerName, string(setup.APIKey), store); err != nil {
@@ -160,11 +153,9 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 			return fmt.Errorf("provider added, but daily notification setup failed: %w", err)
 		}
 	}
-	fmt.Fprintf(stdout, "Added provider %s (%s) at %s; default model %s.\n", providerName, setup.Provider.Protocol, setup.Provider.BaseURL, setup.Provider.Model)
-	if c.DefaultProviders[setup.Provider.Protocol] == providerName {
-		fmt.Fprintf(stdout, "Default %s provider: %s\n", setup.Provider.Protocol, providerName)
-	}
+	fmt.Fprintf(stdout, "Added provider %s (%s) at %s.\n", providerName, setup.Provider.Protocol, setup.Provider.BaseURL)
 	fmt.Fprintln(stdout, "All models are allowed. Restrict them with `tidemux provider models` if needed.")
+	fmt.Fprintf(stdout, "Select a model as %s/MODEL in client requests; list upstream model IDs with `tidemux provider models %s`.\n", providerName, providerName)
 	return nil
 }
 
@@ -197,14 +188,12 @@ func validSecret(value []byte) bool {
 	return strings.TrimSpace(string(value)) != "" && !strings.ContainsAny(string(value), "\r\n\x00")
 }
 
-func inspectAndCompleteProvider(tty *os.File, endpoint, key, forcedProtocol, model, apiVersion string, client *http.Client) (interactiveProviderSetup, error) {
+func inspectAndCompleteProvider(tty *os.File, endpoint, key, forcedProtocol, apiVersion string, client *http.Client) (interactiveProviderSetup, error) {
 	protocol := forcedProtocol
-	var models []string
-	var known bool
 	if protocol == "" {
 		info, err := gateway.InspectProviderEndpoint(context.Background(), endpoint, key, apiVersion, client)
 		if err == nil {
-			protocol, models, known = info.Protocol, info.Models, info.ModelsKnown
+			protocol = info.Protocol
 			fmt.Fprintf(tty, "Detected upstream protocol: %s\n", protocol)
 		} else {
 			fmt.Fprintf(tty, "Automatic protocol detection was unavailable: %v\n", err)
@@ -216,26 +205,12 @@ func inspectAndCompleteProvider(tty *os.File, endpoint, key, forcedProtocol, mod
 	} else {
 		fmt.Fprintf(tty, "Using upstream protocol: %s\n", protocol)
 	}
-	if len(models) == 0 && !known {
-		models, known = gateway.DiscoverProviderModels(endpoint, key, apiVersion, protocol, client)
-		if !known {
-			fmt.Fprintln(tty, "Model discovery is unavailable; the model ID will be entered manually.")
-		}
-	}
-	selectedModel := strings.TrimSpace(model)
-	if selectedModel == "" {
-		var err error
-		selectedModel, err = chooseProviderModel(tty, tty, models, known)
-		if err != nil {
-			return interactiveProviderSetup{}, err
-		}
-	}
 	version := ""
 	if protocol == "anthropic" {
 		version = apiVersion
 	}
 	name := providerNameFromBaseURL(endpoint)
-	return interactiveProviderSetup{Name: name, Provider: gateway.Provider{Protocol: protocol, BaseURL: endpoint, APIVersion: version, Model: selectedModel, UpstreamID: name}}, nil
+	return interactiveProviderSetup{Name: name, Provider: gateway.Provider{Protocol: protocol, BaseURL: endpoint, APIVersion: version, UpstreamID: name}}, nil
 }
 
 func uniqueProviderName(providers map[string]gateway.Provider, candidate string) string {
@@ -274,24 +249,6 @@ func validProviderLabel(value string) bool {
 	return true
 }
 
-func selectInitialProviderDefault(providers map[string]gateway.Provider, defaults map[string]string, protocol, added string) {
-	if defaults[protocol] != "" {
-		return
-	}
-	var existing []string
-	for name, provider := range providers {
-		if provider.Protocol == protocol {
-			existing = append(existing, name)
-		}
-	}
-	if len(existing) == 0 {
-		defaults[protocol] = added
-		return
-	}
-	sort.Strings(existing)
-	defaults[protocol] = existing[0]
-}
-
 func migrateLegacyProvider(c gateway.Config, secrets gateway.SecretLookup) (gateway.Config, error) {
 	if c.BaseURL == "" || len(c.Providers) != 0 {
 		return c, nil
@@ -309,12 +266,8 @@ func migrateLegacyProvider(c gateway.Config, secrets gateway.SecretLookup) (gate
 			}
 		}
 	}
-	provider := gateway.Provider{Protocol: protocol, BaseURL: c.BaseURL, UpstreamKeychain: c.UpstreamKeychain, APIVersion: c.APIVersion, Model: c.Model, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices}
+	provider := gateway.Provider{Protocol: protocol, BaseURL: c.BaseURL, UpstreamKeychain: c.UpstreamKeychain, APIVersion: c.APIVersion, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices}
 	c.Providers = map[string]gateway.Provider{name: provider}
-	c.DefaultProviders = map[string]string{}
-	if protocol == "openai" || protocol == "anthropic" {
-		c.DefaultProviders[protocol] = name
-	}
 	c.Protocol, c.BaseURL, c.APIVersion, c.UpstreamKeychain = "", "", "", gateway.KeychainReference{}
 	c.Model, c.UpstreamID = "", ""
 	c.ModelCapabilities, c.Prices = gateway.ModelCapabilities{}, nil
@@ -413,7 +366,7 @@ func providerList(args []string, stdout, stderr *os.File) error {
 			if p.Budget != nil {
 				budget = p.Budget
 			}
-			items = append(items, map[string]any{"ref": name, "endpoint": p.BaseURL, "protocol": p.Protocol, "default_model": p.Model, "supported_models": p.SupportedModels, "key_count": configuredProviderKeyCount(p), "budget": budget, "default": c.DefaultProviders[p.Protocol] == name})
+			items = append(items, map[string]any{"ref": name, "endpoint": p.BaseURL, "protocol": p.Protocol, "supported_models": p.SupportedModels, "key_count": configuredProviderKeyCount(p), "budget": budget})
 		}
 		return json.NewEncoder(stdout).Encode(items)
 	}
@@ -427,15 +380,11 @@ func providerList(args []string, stdout, stderr *os.File) error {
 		if len(p.SupportedModels) > 0 {
 			scope = strings.Join(p.SupportedModels, ",")
 		}
-		marker := ""
-		if c.DefaultProviders[p.Protocol] == name {
-			marker = " (default)"
-		}
 		budget := "budget=off"
 		if p.Budget != nil {
 			budget = fmt.Sprintf("budget=%s 5h=%g 7d=%g %s", p.Budget.Currency, p.Budget.FiveHourLimit, p.Budget.WeeklyLimit, p.Budget.Mode)
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\tmodel=%s\tkeys=%d\t%s\t%s%s\n", name, p.Protocol, p.BaseURL, p.Model, configuredProviderKeyCount(p), scope, budget, marker)
+		fmt.Fprintf(stdout, "%s\t%s\t%s\tkeys=%d\t%s\t%s\n", name, p.Protocol, p.BaseURL, configuredProviderKeyCount(p), scope, budget)
 	}
 	return nil
 }
@@ -482,54 +431,7 @@ func providerShow(args []string, stdout, stderr *os.File) error {
 	if p.Budget != nil {
 		budget = fmt.Sprintf("%s; 5h=%g; 7d=%g; threshold=%g; mode=%s", p.Budget.Currency, p.Budget.FiveHourLimit, p.Budget.WeeklyLimit, p.Budget.AlertThreshold, p.Budget.Mode)
 	}
-	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nDefault model: %s\nAPI keys: %d\nModel scope: %s\nProtocol default: %t\nBudget: %s\n", ref, p.Protocol, p.BaseURL, p.Model, configuredProviderKeyCount(p), scope, c.DefaultProviders[p.Protocol] == ref, budget)
-	return nil
-}
-
-func providerDefault(args []string, stdout, stderr *os.File) error {
-	protocol, rest := leadingEndpoint(args)
-	ref, rest := leadingEndpoint(rest)
-	if protocol != "openai" && protocol != "anthropic" || ref == "" {
-		return errors.New("usage: tidemux provider default openai|anthropic REF [--config PATH]")
-	}
-	flags := flag.NewFlagSet("provider default", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	path := flags.String("config", defaultConfigPath(), "configuration path")
-	if err := flags.Parse(rest); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	if flags.NArg() != 0 {
-		return errors.New("unexpected provider default argument")
-	}
-	c, abs, before, err := loadCommandConfig(*path)
-	if err != nil {
-		return err
-	}
-	c, err = migrateLegacyProvider(c, gateway.MacOSKeychain{})
-	if err != nil {
-		return err
-	}
-	p, ok := c.Providers[ref]
-	if !ok {
-		return fmt.Errorf("provider %q not found", ref)
-	}
-	if p.Protocol == "" || p.Protocol == "auto" {
-		return errors.New("provider protocol is unresolved; use `tidemux provider update REF --protocol openai|anthropic` first")
-	}
-	if p.Protocol != protocol {
-		return fmt.Errorf("provider %q uses %s, not %s", ref, p.Protocol, protocol)
-	}
-	if c.DefaultProviders == nil {
-		c.DefaultProviders = map[string]string{}
-	}
-	c.DefaultProviders[protocol] = ref
-	if err := writeCommandConfig(abs, c, before); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "Default %s provider: %s\n", protocol, ref)
+	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nAPI keys: %d\nModel scope: %s\nBudget: %s\n", ref, p.Protocol, p.BaseURL, configuredProviderKeyCount(p), scope, budget)
 	return nil
 }
 
@@ -570,9 +472,6 @@ func providerModels(args []string, stdout, stderr *os.File) error {
 			}
 		} else {
 			p.SupportedModels = nil
-		}
-		if len(p.SupportedModels) > 0 && !containsConfiguredModel(p.SupportedModels, p.Model) {
-			return fmt.Errorf("model allowlist must include default model %q", p.Model)
 		}
 		c.Providers[ref] = p
 		if err := writeCommandConfig(abs, c, before); err != nil {

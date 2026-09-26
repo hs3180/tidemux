@@ -20,7 +20,7 @@ func providerBudgetTestPrice() adapter.Price {
 func providerBudgetTestConfig(path string) gateway.Config {
 	provider := func(name, protocol, model string) gateway.Provider {
 		return gateway.Provider{
-			Protocol: protocol, BaseURL: "https://" + name + ".example/v1", Model: model, UpstreamID: name,
+			Protocol: protocol, BaseURL: "https://" + name + ".example/v1", UpstreamID: name,
 			UpstreamKeychain: gateway.KeychainReference{Service: "test.provider", Account: name},
 			Prices:           map[string]adapter.Price{model: providerBudgetTestPrice()},
 		}
@@ -32,7 +32,6 @@ func providerBudgetTestConfig(path string) gateway.Config {
 			"p1": provider("p1", "openai", "model-one"),
 			"p2": provider("p2", "anthropic", "model-two"),
 		},
-		DefaultProviders: map[string]string{"openai": "p1", "anthropic": "p2"},
 	}
 }
 

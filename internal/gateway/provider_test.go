@@ -116,7 +116,7 @@ func TestDiscoverProviderModelsCanUseAnExplicitProtocol(t *testing.T) {
 	}
 }
 
-func TestResolveNamedProviderAutomaticallyDetectsProtocolAndDefaultRoute(t *testing.T) {
+func TestResolveNamedProviderAutomaticallyDetectsProtocol(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -134,9 +134,9 @@ func TestResolveNamedProviderAutomaticallyDetectsProtocolAndDefaultRoute(t *test
 	}))
 	defer server.Close()
 
-	providers, routes, err := resolveProviders(Config{
+	providers, err := resolveProviders(Config{
 		Providers: map[string]Provider{
-			"auto-provider": {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "provider-secret", Model: "model"},
+			"auto-provider": {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "provider-secret"},
 		},
 	}, server.Client())
 	if err != nil {
@@ -144,9 +144,6 @@ func TestResolveNamedProviderAutomaticallyDetectsProtocolAndDefaultRoute(t *test
 	}
 	if providers["auto-provider"].Protocol != "anthropic" || providers["auto-provider"].APIVersion != defaultAnthropicAPIVersion {
 		t.Fatalf("resolved provider = %+v", providers["auto-provider"])
-	}
-	if routes["anthropic"] != "auto-provider" || len(routes) != 1 {
-		t.Fatalf("inferred routes = %#v", routes)
 	}
 	if calls != 2 {
 		t.Fatalf("probe calls = %d, want OpenAI and Anthropic auth attempts", calls)
@@ -161,33 +158,33 @@ func TestResolveNamedProviderProtocolOverrideSkipsDetection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	providers, routes, err := resolveProviders(Config{
+	providers, err := resolveProviders(Config{
 		Providers: map[string]Provider{
-			"forced-openai": {Protocol: "openai", BaseURL: server.URL + "/v1", APIKey: "provider-secret", Model: "model"},
+			"forced-openai": {Protocol: "openai", BaseURL: server.URL + "/v1", APIKey: "provider-secret"},
 		},
 	}, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if providers["forced-openai"].Protocol != "openai" || routes["openai"] != "forced-openai" || calls != 0 {
-		t.Fatalf("providers=%+v routes=%v probe calls=%d", providers, routes, calls)
+	if providers["forced-openai"].Protocol != "openai" || calls != 0 {
+		t.Fatalf("providers=%+v probe calls=%d", providers, calls)
 	}
 }
 
-func TestResolveNamedProvidersRequiresDefaultForProtocolWithMultipleProfiles(t *testing.T) {
+func TestResolveNamedProvidersAcceptMultipleProfilesForOneProtocol(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"model","object":"model"}]}`))
 	}))
 	defer server.Close()
 
-	_, _, err := resolveProviders(Config{
+	providers, err := resolveProviders(Config{
 		Providers: map[string]Provider{
-			"first":  {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "key-1", Model: "model"},
-			"second": {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "key-2", Model: "model"},
+			"first":  {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "key-1"},
+			"second": {Protocol: "auto", BaseURL: server.URL + "/v1", APIKey: "key-2"},
 		},
 	}, server.Client())
-	if err == nil || !strings.Contains(err.Error(), "default_providers.openai") {
-		t.Fatalf("error=%v, want missing OpenAI default route", err)
+	if err != nil || len(providers) != 2 {
+		t.Fatalf("providers=%v error=%v", providers, err)
 	}
 }
 

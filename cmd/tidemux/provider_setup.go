@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/hs3180/tidemux/internal/gateway"
@@ -57,61 +56,6 @@ func providerNameFromBaseURL(baseURL string) string {
 	return name
 }
 
-const visibleProviderModels = 20
-
-func chooseProviderModel(in, out *os.File, models []string, modelsKnown bool) (string, error) {
-	if modelsKnown {
-		if len(models) == 1 {
-			fmt.Fprintf(out, "Only one model was discovered; selecting %s.\n", models[0])
-			return models[0], nil
-		}
-		if len(models) == 0 {
-			return "", errors.New("the provider returned an empty model list")
-		}
-		fmt.Fprintln(out, "Available models:")
-		for i, model := range models {
-			if i == visibleProviderModels {
-				fmt.Fprintf(out, "  ... and %d more (enter a model ID to use it)\n", len(models)-visibleProviderModels)
-				break
-			}
-			fmt.Fprintf(out, "  %2d. %s\n", i+1, model)
-		}
-		for {
-			fmt.Fprint(out, "Default model (number or exact ID): ")
-			value, err := readTerminalLine(in)
-			if err != nil {
-				return "", errors.New("could not read default model")
-			}
-			value = strings.TrimSpace(value)
-			for _, model := range models {
-				if value == model {
-					return model, nil
-				}
-			}
-			if index, parseErr := strconv.Atoi(value); parseErr == nil && index > 0 && index <= visibleProviderModels && index <= len(models) {
-				return models[index-1], nil
-			}
-			fmt.Fprintln(out, "Choose a listed model number or exact model ID.")
-		}
-	}
-
-	fmt.Fprint(out, "Default model ID (not available from endpoint): ")
-	model, err := readTerminalLine(in)
-	if err != nil || strings.TrimSpace(model) == "" {
-		return "", errors.New("a default model ID is required")
-	}
-	return strings.TrimSpace(model), nil
-}
-
-func containsConfiguredModel(models []string, model string) bool {
-	for _, candidate := range models {
-		if candidate == model {
-			return true
-		}
-	}
-	return false
-}
-
 func promptProviderProtocol(in, out *os.File) (string, error) {
 	for {
 		fmt.Fprint(out, "Provider protocol could not be inferred. Enter openai or anthropic: ")
@@ -127,7 +71,7 @@ func promptProviderProtocol(in, out *os.File) (string, error) {
 	}
 }
 
-func promptNewProvider(in, out *os.File, anthropicVersion string, httpClient *http.Client, forcedProtocol, selectedModel, preferredName string) (interactiveProviderSetup, error) {
+func promptNewProvider(in, out *os.File, anthropicVersion string, httpClient *http.Client, forcedProtocol, preferredName string) (interactiveProviderSetup, error) {
 	var baseURL string
 	for {
 		fmt.Fprint(out, "Provider API Base URL: ")
@@ -169,7 +113,7 @@ func promptNewProvider(in, out *os.File, anthropicVersion string, httpClient *ht
 		fmt.Fprintln(out, "A valid provider API key is required.")
 	}
 
-	setup, err := inspectAndCompleteProvider(in, baseURL, string(apiKey), forcedProtocol, selectedModel, anthropicVersion, httpClient)
+	setup, err := inspectAndCompleteProvider(in, baseURL, string(apiKey), forcedProtocol, anthropicVersion, httpClient)
 	if err != nil {
 		zeroBytes(apiKey)
 		return interactiveProviderSetup{}, err
