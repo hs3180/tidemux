@@ -53,10 +53,11 @@ tidemux provider list
 
 Each command prompts for its API key without echo. Provider references and
 readable labels are generated from the endpoint; no provider name is required.
-All models are allowed by default. Use `tidemux provider models REF --only
-MODEL[,MODEL...]` only when you want to restrict a provider's model list. The
-gateway's `/v1/models` response lists selectable IDs as `REF/MODEL`; use one
-of those IDs as the model on every client request.
+All models are allowed by default. During guided setup, choose model IDs only
+if you want to restrict a provider; the selection can also be supplied as
+`--model MODEL[,MODEL...]`. Client requests must always specify a model as
+`REF/MODEL`; `/v1/models` lists those qualified IDs. To configure just one
+protocol, add only its endpoint.
 
 ### 2. Start the gateway
 
@@ -133,10 +134,10 @@ published older binaries may expose a different command set.
 
 | Command | Semantics |
 | --- | --- |
-| `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL]` | Add exactly one provider without replacing others. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol and prompt only for missing choices. |
+| `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model MODELS]` | Add exactly one provider without replacing others. `--model` is a comma-separated allowlist. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol and allow all models unless `--model` is supplied. |
 | `tidemux provider list [--json]` | List provider references, endpoint, protocol, key count, model scope and budget status. Never reveal credentials. |
 | `tidemux provider show REF` | Show one provider's effective settings, including its budget, but not its API key. |
-| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--anthropic-version DATE] [--rotate-key]` | Change only the supplied fields. Updating a key uses hidden input; omitted fields and other providers remain unchanged. |
+| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model MODELS] [--anthropic-version DATE] [--rotate-key]` | Change only the supplied fields. `--model` replaces the allowlist; omitted fields and other providers remain unchanged. |
 | `tidemux provider key add REF` | Add another hidden-input API key to the selected provider profile. All keys share that profile's endpoint, protocol and model scope. |
 | `tidemux provider key list REF` | List redacted key slots only; never reveal credentials or Keychain account details. |
 | `tidemux provider key remove REF INDEX [--yes]` | Remove one key from the profile. A provider must retain at least one key; the Keychain item is deleted only when no remaining provider references it. |
@@ -170,14 +171,18 @@ with `tidemux report schedule --time HH:MM`; disable it with
 system language; English is the fallback, and English, Simplified Chinese, and
 Traditional Chinese are currently supported.
 
-All model IDs are allowed by default. Provider setup does not select a default
-model or provider. Every client request must set `model` to `REF/MODEL`, using
-the reference printed by `provider list`; TideMux routes by the part before the
-first slash and forwards only the remainder as the upstream model ID. The
-gateway model catalog uses the same qualified IDs. `supported_models`, when
-configured, contains upstream model IDs without the provider prefix.
-Configuration writes are validated and atomic; credentials created for a
-provider addition are rolled back if its config write fails.
+All model IDs are allowed by default. During guided setup, leave the model
+selection blank to allow all, or select IDs to create an allowlist. The same
+allowlist can be supplied with `provider add --model MODELS` or changed later
+with `provider update --model MODELS` or `provider models REF --only ...`;
+`provider models REF --all` removes it. Provider setup does not select a
+default model or provider. Every client request must set `model` to
+`REF/MODEL`, using the reference printed by `provider list`; TideMux routes by
+the part before the first slash and forwards only the remainder as the upstream
+model ID. The gateway model catalog uses the same qualified IDs.
+`supported_models`, when configured, contains upstream model IDs without the
+provider prefix. Configuration writes are validated and atomic; credentials
+created for a provider addition are rolled back if its config write fails.
 
 Provider-specific values (endpoint, credentials, protocol, model scope, prices
 and spending budget) stay with the provider. Budget limits and accrued usage are

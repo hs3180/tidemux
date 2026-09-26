@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -299,6 +300,67 @@ func TestProviderModelScopeAndPricingCommands(t *testing.T) {
 	}
 	if len(loaded.Providers["p"].Prices) != 0 {
 		t.Fatal("price was not removed")
+	}
+}
+
+func TestProviderUpdateModelFlagReplacesAllowlist(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("provider configuration is supported only on macOS")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := gateway.Config{
+		ListenAddr:          defaultListenAddr,
+		MaxInFlight:         1,
+		LedgerPath:          filepath.Join(dir, "ledger.db"),
+		AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"},
+		Providers:           map[string]gateway.Provider{"p": {Protocol: "openai", BaseURL: "https://provider.example/v1", SupportedModels: []string{"old-model"}, UpstreamID: "p", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "p"}}},
+	}
+	if err := writeCommandConfig(path, c, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := os.CreateTemp(dir, "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	stderr, err := os.CreateTemp(dir, "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+
+	if err := providerUpdate([]string{"p", "--model", "model-a,model-b", "--config", path}, stdout, stderr); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(loaded.Providers["p"].SupportedModels, ",") != "model-a,model-b" {
+		t.Fatalf("model allowlist update = %v", loaded.Providers["p"].SupportedModels)
+	}
+
+	if err := providerUpdate([]string{"p", "--model", "model-c", "--config", path}, stdout, stderr); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(loaded.Providers["p"].SupportedModels, ",") != "model-c" {
+		t.Fatalf("model-list replacement = %v", loaded.Providers["p"].SupportedModels)
+	}
+
+	if err := providerUpdate([]string{"p", "--model", "model-c,,model-d", "--config", path}, stdout, stderr); err == nil {
+		t.Fatal("invalid model list was accepted")
+	}
+	loaded, err = gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(loaded.Providers["p"].SupportedModels, ",") != "model-c" {
+		t.Fatalf("failed update changed allowlist: %v", loaded.Providers["p"].SupportedModels)
 	}
 }
 

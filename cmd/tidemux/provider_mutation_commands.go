@@ -71,13 +71,14 @@ func deleteUnreferencedProviderKeys(c gateway.Config, references []gateway.Keych
 func providerUpdate(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
-		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--rotate-key] [--config PATH]")
+		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID[,ID...]] [--rotate-key] [--config PATH]")
 	}
 	flags := flag.NewFlagSet("provider update", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
 	endpoint := flags.String("endpoint", "", "replace API endpoint")
 	protocol := flags.String("protocol", "", "force API protocol: openai or anthropic")
+	model := flags.String("model", "", "replace the comma-separated model allowlist")
 	rotateKey := flags.Bool("rotate-key", false, "replace the API key using hidden terminal input")
 	version := flags.String("anthropic-version", "2023-06-01", "Anthropic API version")
 	if err := flags.Parse(rest); err != nil {
@@ -92,8 +93,16 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	if *protocol != "" && *protocol != "openai" && *protocol != "anthropic" {
 		return errors.New("--protocol must be openai or anthropic")
 	}
+	allowedModels, err := parseProviderModelList(*model)
+	if err != nil {
+		return fmt.Errorf("invalid --model allowlist: %w", err)
+	}
+	modelRequested := flagWasSet(flags, "model")
+	if modelRequested && len(allowedModels) == 0 {
+		return errors.New("--model requires at least one allowed model ID")
+	}
 	versionRequested := flagWasSet(flags, "anthropic-version")
-	if *endpoint == "" && *protocol == "" && !*rotateKey && !versionRequested {
+	if *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested {
 		return errors.New("provider update requires at least one changed field")
 	}
 	if runtime.GOOS != "darwin" {
@@ -180,6 +189,9 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		if *endpoint != "" {
 			p.SupportedModels = nil
 		}
+	}
+	if modelRequested {
+		p.SupportedModels = append([]string(nil), allowedModels...)
 	}
 	if versionRequested && p.Protocol != "anthropic" {
 		return errors.New("--anthropic-version is valid only for an Anthropic provider")

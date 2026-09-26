@@ -16,9 +16,12 @@ tidemux provider add
 
 TideMux reads the API key through hidden terminal input and infers the upstream
 protocol from the endpoint or authenticated `GET /models`. Model discovery is
-informational; setup never chooses a default model and never sends a completion
-request. Every request must identify its provider and model explicitly. The
-first guided setup also asks whether to schedule a daily usage-report
+informational and never sends a completion request. In guided setup, choose
+model IDs to create an allowlist or leave the selection blank to allow all
+models. If discovery is unavailable, enter IDs to restrict access or leave it
+blank to allow all. Every client request must identify its provider and model
+explicitly as `REF/MODEL_ID`; setup never chooses a default provider or model.
+The first guided setup also asks whether to schedule a daily usage-report
 notification in local time; leave it blank to skip.
 
 For direct setup, supply the endpoint and any known choices:
@@ -30,10 +33,10 @@ tidemux provider add https://api.deepseek.com
 The API key is still prompted securely. The provider reference is inferred from
 the endpoint; use `--name LABEL` only when you want a different reference. If
 the endpoint does not identify the protocol, `--protocol openai` or
-`--protocol anthropic` forces it. All models are allowed unless an allowlist is
-set separately; provider add does not configure a default model. Use
-`tidemux provider list` to get the provider reference, then select a model with
-`REF/MODEL_ID` in the client or with the launcher's required `--model` option.
+`--protocol anthropic` forces it. `--model MODEL[,MODEL...]` restricts the
+provider to those IDs; omit it to allow all models. Use `tidemux provider list`
+to get the provider reference, then select a model with `REF/MODEL_ID` in the
+client or with the launcher's required `--model` option.
 
 Provider credentials are stored in macOS Keychain, never in command arguments
 or configuration JSON. Existing 0.1.x single-provider configurations are
@@ -73,6 +76,7 @@ multi-key group.
 ```sh
 tidemux provider list
 tidemux provider show REF
+tidemux provider update REF --model model-a,model-b
 tidemux provider models REF
 tidemux provider models REF --only model-a,model-b
 tidemux provider models REF --all
@@ -81,8 +85,9 @@ tidemux provider remove REF
 
 `list` and `show` never display credentials. `update` changes only the named
 fields: `--endpoint URL`, `--protocol openai|anthropic`,
-`--anthropic-version DATE` (Anthropic only), and `--rotate-key`. Updating
-credentials requires hidden terminal input. Changing
+`--anthropic-version DATE` (Anthropic only), `--rotate-key`, and
+`--model ID[,ID...]` (replace the allowlist). Updating credentials requires
+hidden terminal input. Changing
 an endpoint re-evaluates its protocol by default using the stored key; combine
 `--rotate-key` when the new endpoint requires a different key. Use `--protocol`
 to force a wire format. Changing an endpoint clears any model allowlist,
