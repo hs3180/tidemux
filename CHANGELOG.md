@@ -18,7 +18,8 @@
   affinity.
 - Send bounded, localized plain-text daily report summaries to generic,
   Telegram, Discord and Lark webhooks; keep webhook endpoints in Keychain and
-  do not upload the HTML report.
+  do not upload the HTML report. Record delivery attempts per report and
+  channel, expose delivery history, and allow retries only for failed attempts.
 
 ## 0.1.1 — 2026-09-21
 
