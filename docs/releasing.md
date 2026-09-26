@@ -18,7 +18,7 @@ version's assets.
    emits a tarball, SHA256SUMS and matching `tidemux.rb` formula.
 5. Verify `shasum -a 256 -c SHA256SUMS` in the output directory, extract into a
    fresh directory, and run the packaged binary's version / doctor / serve /
-   ledger checks. Preserve source commit and test results in private evidence.
+   billing checks. Preserve source commit and test results in private evidence.
 
 `dist/<version>/` is immutable. Use a distinct build ID only for an unpublished
 same-version candidate; BUILD.txt records its source commit and build ID. An
