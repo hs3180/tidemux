@@ -71,6 +71,43 @@ older `provider update --rotate-key`
 continues to rotate a single-key profile; use the `provider key` commands for a
 multi-key group.
 
+## Edit a provider
+
+Use the explicit CRUD commands to inspect and change provider profiles:
+
+```sh
+tidemux provider list
+tidemux provider show REF
+tidemux provider update REF
+tidemux provider remove REF
+```
+
+`provider update REF` opens a short, line-by-line form. Press Enter to keep a
+field; enter a new endpoint or protocol override to change it, and enter
+comma-separated model IDs to restrict the group or `all` to allow every model.
+Changing an endpoint clears the old model allowlist unless a new list is
+entered. API keys remain a separate CRUD resource:
+
+```sh
+tidemux provider key add REF
+tidemux provider key list REF
+tidemux provider key remove REF INDEX
+```
+
+These commands never display key material or Keychain account details. Model
+scope can also be changed directly with `provider models REF --only`, `--all`,
+or the single-prompt `--select` option.
+
+The equivalent local validation command is:
+
+```sh
+tidemux provider validate REF
+```
+
+It checks that the provider's configured Keychain entries are readable and
+valid, distinct from the gateway credential and unique within the group. It
+makes no upstream request and never prints credential values.
+
 ## Inspect and manage providers
 
 ```sh
@@ -78,17 +115,20 @@ tidemux provider list
 tidemux provider show REF
 tidemux provider update REF --model model-a,model-b
 tidemux provider models REF
+tidemux provider models REF --select
 tidemux provider models REF --only model-a,model-b
 tidemux provider models REF --all
+tidemux provider validate REF
 tidemux provider remove REF
 ```
 
 `list` and `show` never display credentials. `update` changes only the named
 fields: `--endpoint URL`, `--protocol openai|anthropic`,
 `--anthropic-version DATE` (Anthropic only), `--rotate-key`, and
-`--model ID[,ID...]` (replace the allowlist). Updating credentials requires
-hidden terminal input. Changing
-an endpoint re-evaluates its protocol by default using the stored key; combine
+`--model ID[,ID...]` (replace the allowlist) or `--model all` (allow all).
+Without field options it opens the short form described above. Updating
+credentials requires hidden terminal input. Changing an endpoint re-evaluates
+its protocol by default using the stored key; combine
 `--rotate-key` when the new endpoint requires a different key. Use `--protocol`
 to force a wire format. Changing an endpoint clears any model allowlist,
 restoring the default all-models scope.
@@ -109,6 +149,9 @@ those upstream model IDs as the suffix in `REF/MODEL_ID`; `/v1/models` exposes
 the same IDs with the provider reference included. `--only` sets an allowlist
 of upstream model IDs; `--all` clears the allowlist. An unavailable model
 catalog does not restrict requests unless an explicit allowlist is configured.
+`--select` interactively chooses catalog entries by number or exact ID; when
+discovery is unavailable, model IDs can still be entered manually. Enter `all`
+to clear the allowlist or press Enter to leave the current scope unchanged.
 
 ## Provider pricing
 
