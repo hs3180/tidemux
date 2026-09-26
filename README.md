@@ -9,7 +9,7 @@ TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatibl
 - **Concurrency control** — limit active requests and queue the rest.
 - **Local usage ledger** — track outcomes, tokens and cost estimates without storing message bodies.
 - **Automatic reconciliation** — match locally supplied statement CSVs while the gateway runs; query statistics or download billing details with `tidemux billing`.
-- **Daily reports** — generate private HTML reports and schedule macOS notifications from the local usage ledger.
+- **Daily reports** — generate private HTML reports, schedule macOS notifications, or send concise plain-text webhook summaries to IM platforms.
 
 ## Install
 
@@ -170,6 +170,33 @@ with `tidemux report schedule --time HH:MM`; disable it with
 `tidemux report schedule --disable`. Report text follows the user's preferred
 system language; English is the fallback, and English, Simplified Chinese, and
 Traditional Chinese are currently supported.
+
+### Plain-text webhook reports
+
+Configure a webhook endpoint with hidden terminal input; its URL is stored in
+macOS Keychain, not in the profile or command history:
+
+```sh
+tidemux report webhook --provider lark
+tidemux report schedule --time 09:00 --channel webhook
+```
+
+The supported adapters are `generic`, `telegram`, `discord` and `lark`; all
+send a JSON-wrapped plain-text summary (up to 10 KB), never the HTML report or
+request and response content. Generic and Telegram use a `text` field, Discord
+uses `content`, and Lark uses `msg_type: text` with `content.text`. For Telegram
+Bot API, include the bot `sendMessage` endpoint and `chat_id` in the hidden URL.
+Run `tidemux report notify` to send the configured channel
+immediately, or `tidemux report notify --channel webhook` to select it
+explicitly. A webhook schedule can be disabled while retaining its endpoint
+with `report schedule --disable`; `report webhook --disable` removes the
+endpoint and disables a webhook schedule.
+
+For a saved report, `report deliver --id N --channel webhook` sends it and
+`report retry --id N --channel webhook` retries only a recorded failure.
+`report deliveries --id N` shows each channel's latest status and attempt count.
+Each retry updates the same report/channel ledger entry rather than creating a
+second report record.
 
 All model IDs are allowed by default. During guided setup, leave the model
 selection blank to allow all, or select IDs to create an allowlist. The same
