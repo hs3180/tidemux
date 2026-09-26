@@ -51,7 +51,8 @@ stored in Keychain. Provider protocol is detected from its endpoint unless
 explicitly forced.
 Set each client's model to PROVIDER/MODEL (or use the client's required
 --model option); TideMux strips PROVIDER/ before forwarding upstream. Provider
-selection is explicit, and upstream failures do not trigger retries.
+selection is explicit. Key failover is limited to safe failures within that
+provider group before response content is sent; TideMux never switches providers.
 `
 )
 

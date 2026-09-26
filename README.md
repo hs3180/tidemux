@@ -111,8 +111,11 @@ Messages client APIs simultaneously. Each request selects a named provider with
 and strips `REF/` before forwarding the model to it. Provider selection is
 independent of the client's protocol, so either client API can reach any
 provider, with conversion only when required. There is no default provider or
-model. Model, authentication and upstream errors do not trigger retries or
-route changes. Gateway auth, session limits and ledger accounting remain shared.
+model. When a provider has multiple keys, TideMux may fail over within that key
+group on 401/403 or 429, or on a transport failure before request headers are
+written. It never switches providers, and stops retrying once response content
+may have reached the client. Gateway auth, session limits and ledger accounting
+remain shared.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
 not certify the 0.2.0 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.
