@@ -53,6 +53,9 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, m
 	if len(c.Providers) != 0 {
 		resolved := make(map[string]Provider, len(c.Providers))
 		for name, provider := range c.Providers {
+			if keys := provider.ResolvedAPIKeys(); len(keys) > 0 {
+				provider.APIKey = keys[0]
+			}
 			protocol := normalizeProviderProtocol(provider.Protocol)
 			if protocol == "" || protocol == "auto" {
 				var err error

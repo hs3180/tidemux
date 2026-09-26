@@ -42,8 +42,9 @@ common examples:
   tidemux gateway configure --listen loopback
   tidemux serve --config /path/to/config.json
 
-Each provider uses one API protocol, endpoint and Keychain credential. Provider
-protocol is detected from its endpoint unless explicitly forced.
+Each provider uses one API protocol and endpoint, with one or more API keys
+stored in Keychain. Provider protocol is detected from its endpoint unless
+explicitly forced.
 `
 )
 

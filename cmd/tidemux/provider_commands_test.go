@@ -12,8 +12,10 @@ import (
 )
 
 type memorySecrets struct {
-	values map[string]string
-	fail   bool
+	values        map[string]string
+	fail          bool
+	failDelete    bool
+	failDeleteFor string
 }
 
 func (m *memorySecrets) StoreNew(_ context.Context, ref gateway.KeychainReference, value string) error {
@@ -38,8 +40,113 @@ func (m *memorySecrets) Lookup(_ context.Context, ref gateway.KeychainReference)
 	return value, nil
 }
 func (m *memorySecrets) Delete(_ context.Context, ref gateway.KeychainReference) error {
-	delete(m.values, ref.Service+"/"+ref.Account)
+	key := ref.Service + "/" + ref.Account
+	if m.failDelete || m.failDeleteFor == key {
+		return errors.New("simulated Keychain deletion failure")
+	}
+	delete(m.values, key)
 	return nil
+}
+
+func TestDeleteUnreferencedProviderKeys(t *testing.T) {
+	target := gateway.KeychainReference{Service: "provider", Account: "old"}
+	other := gateway.KeychainReference{Service: "provider", Account: "other"}
+	secret := "sensitive-provider-secret"
+
+	t.Run("preserves references used by another provider", func(t *testing.T) {
+		store := &memorySecrets{values: map[string]string{"provider/old": secret}}
+		c := gateway.Config{Providers: map[string]gateway.Provider{
+			"still-using-it": {UpstreamKeychain: target},
+		}}
+		if err := deleteUnreferencedProviderKeys(c, []gateway.KeychainReference{target}, store); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Lookup(context.Background(), target); err != nil {
+			t.Fatal("shared Keychain item was deleted")
+		}
+	})
+
+	t.Run("deletes references no longer used", func(t *testing.T) {
+		store := &memorySecrets{values: map[string]string{"provider/old": secret}}
+		c := gateway.Config{Providers: map[string]gateway.Provider{
+			"different-key": {UpstreamKeychain: other},
+		}}
+		if err := deleteUnreferencedProviderKeys(c, []gateway.KeychainReference{target}, store); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Lookup(context.Background(), target); err == nil {
+			t.Fatal("unreferenced Keychain item was not deleted")
+		}
+	})
+
+	for _, test := range []struct {
+		name   string
+		config gateway.Config
+	}{
+		{
+			name:   "gateway access credential",
+			config: gateway.Config{AccessTokenKeychain: target},
+		},
+		{
+			name:   "legacy top-level provider credential",
+			config: gateway.Config{UpstreamKeychain: target},
+		},
+	} {
+		t.Run("preserves "+test.name, func(t *testing.T) {
+			store := &memorySecrets{values: map[string]string{"provider/old": secret}}
+			if err := deleteUnreferencedProviderKeys(test.config, []gateway.KeychainReference{target}, store); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Lookup(context.Background(), target); err != nil {
+				t.Fatalf("still-configured %s was deleted", test.name)
+			}
+		})
+	}
+
+	t.Run("reports deletion failures without exposing the key", func(t *testing.T) {
+		store := &memorySecrets{values: map[string]string{"provider/old": secret}, failDelete: true}
+		err := deleteUnreferencedProviderKeys(gateway.Config{}, []gateway.KeychainReference{target}, store)
+		if err == nil || !strings.Contains(err.Error(), "could not be deleted from Keychain") {
+			t.Fatalf("expected explicit cleanup error, got %v", err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatal("cleanup error exposed the API key")
+		}
+		if _, lookupErr := store.Lookup(context.Background(), target); lookupErr != nil {
+			t.Fatal("failed deletion unexpectedly removed the Keychain item")
+		}
+	})
+
+	t.Run("attempts all deletions when one Keychain operation fails", func(t *testing.T) {
+		store := &memorySecrets{
+			values:        map[string]string{"provider/old": secret, "provider/other": "another-secret"},
+			failDeleteFor: "provider/old",
+		}
+		err := deleteUnreferencedProviderKeys(gateway.Config{}, []gateway.KeychainReference{target, other}, store)
+		if err == nil {
+			t.Fatal("expected an explicit cleanup error")
+		}
+		if _, lookupErr := store.Lookup(context.Background(), target); lookupErr != nil {
+			t.Fatal("failed Keychain deletion unexpectedly removed the item")
+		}
+		if _, lookupErr := store.Lookup(context.Background(), other); lookupErr == nil {
+			t.Fatal("later Keychain deletions were skipped after the first failure")
+		}
+	})
+
+	t.Run("does not delete when another provider reference is invalid", func(t *testing.T) {
+		store := &memorySecrets{values: map[string]string{"provider/old": secret}}
+		c := gateway.Config{Providers: map[string]gateway.Provider{
+			"uncertain-reference": {UpstreamKeychain: gateway.KeychainReference{Service: "provider"}},
+		}}
+		err := deleteUnreferencedProviderKeys(c, []gateway.KeychainReference{target}, store)
+		if err == nil || !strings.Contains(err.Error(), "references are invalid") {
+			t.Fatalf("expected invalid-reference error, got %v", err)
+		}
+		if _, lookupErr := store.Lookup(context.Background(), target); lookupErr != nil {
+			t.Fatal("Keychain item was deleted despite an uncertain reference")
+		}
+	})
 }
 
 func TestProviderAdditionWritesReferencesAndRollsBack(t *testing.T) {

@@ -133,9 +133,12 @@ published older binaries may expose a different command set.
 | Command | Semantics |
 | --- | --- |
 | `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model ID]` | Add exactly one provider without replacing others. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol and discover models, prompting only for missing choices. |
-| `tidemux provider list [--json]` | List provider references, endpoint, protocol, default model, model scope, budget status and protocol defaults. Never reveal credentials. |
+| `tidemux provider list [--json]` | List provider references, endpoint, protocol, default model, key count, model scope, budget status and protocol defaults. Never reveal credentials. |
 | `tidemux provider show REF` | Show one provider's effective settings, including its budget, but not its API key. |
 | `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID] [--anthropic-version DATE] [--rotate-key]` | Change only the supplied fields. Updating a key uses hidden input; omitted fields and other providers remain unchanged. |
+| `tidemux provider key add REF` | Add another hidden-input API key to the selected provider profile. All keys share that profile's endpoint, protocol and model scope. |
+| `tidemux provider key list REF` | List redacted key slots only; never reveal credentials or Keychain account details. |
+| `tidemux provider key remove REF INDEX [--yes]` | Remove one key from the profile. A provider must retain at least one key; the Keychain item is deleted only when no remaining provider references it. |
 | `tidemux provider remove REF [--default REF] [--yes]` | Remove only that provider. Confirm interactively; without a terminal require `--yes`. If it is a protocol default and alternatives remain, prompt for a replacement or require `--default`; if none remain, clear the route. Delete a Keychain item only when no remaining provider references it. |
 | `tidemux provider default PROTOCOL REF` | Select the provider used by default for OpenAI or Anthropic clients. The provider must serve that protocol. Adding another provider never silently changes an existing default. |
 | `tidemux provider models REF [--only MODELS] [--all]` | With no scope option, query and display the provider's models when available. `--only` restricts allowed IDs; `--all` removes that restriction. The options are mutually exclusive. This is not a separate top-level `models` command. |
@@ -149,11 +152,14 @@ Provider identity does not depend on a user-chosen name. TideMux creates and
 prints a stable reference derived from the endpoint; `--name` optionally
 overrides that reference. Multiple profiles may use the same endpoint (for
 example, separate accounts); each `add` creates a distinct reference and never
-silently updates or replaces an existing provider. The endpoint determines the protocol by default, with
-`--protocol openai|anthropic` available only to override inference. API keys
-are always collected through hidden input, never command-line arguments or
-configuration JSON; they are stored in macOS Keychain. Without a terminal for
-that prompt, setup fails before changing configuration. Model discovery uses
+silently updates or replaces an existing provider. Use `tidemux provider key
+add REF` to attach additional credentials to one profile; they share that
+profile's endpoint and model scope. The endpoint determines the protocol by
+default, with `--protocol openai|anthropic` available only to override
+inference. API keys are always collected through hidden input, never
+command-line arguments or configuration JSON; they are stored in macOS
+Keychain. Without a terminal for that prompt, setup fails before changing
+configuration. Model discovery uses
 the authenticated model-list endpoint only; setup never sends a completion
 request to select a model.
 

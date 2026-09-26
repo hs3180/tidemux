@@ -24,7 +24,8 @@ type KeychainReference struct {
 type Provider struct {
 	Protocol          string                   `json:"protocol"`
 	BaseURL           string                   `json:"base_url"`
-	UpstreamKeychain  KeychainReference        `json:"upstream_keychain"`
+	UpstreamKeychain  KeychainReference        `json:"upstream_keychain,omitempty,omitzero"` // legacy one-key form
+	UpstreamKeychains []KeychainReference      `json:"upstream_keychains,omitempty"`
 	APIVersion        string                   `json:"anthropic_version,omitempty"`
 	Model             string                   `json:"model"`
 	SupportedModels   []string                 `json:"supported_models,omitempty"`
@@ -33,6 +34,44 @@ type Provider struct {
 	Prices            map[string]adapter.Price `json:"prices,omitempty"`
 	Budget            *ledger.BudgetPolicy     `json:"budget,omitempty"`
 	APIKey            string                   `json:"-"`
+	APIKeys           []string                 `json:"-"`
+}
+
+// KeychainReferences returns the configured keys for this provider profile.
+// The singular field remains readable for existing configurations.
+func (p Provider) KeychainReferences() ([]KeychainReference, error) {
+	legacy := !credentialReferenceEmpty(p.UpstreamKeychain)
+	if legacy && len(p.UpstreamKeychains) > 0 {
+		return nil, errors.New("use either upstream_keychain or upstream_keychains, not both")
+	}
+	refs := p.UpstreamKeychains
+	if legacy {
+		refs = []KeychainReference{p.UpstreamKeychain}
+	}
+	if len(refs) == 0 || len(refs) > 128 {
+		return nil, errors.New("provider must have between 1 and 128 upstream Keychain references")
+	}
+	seen := make(map[KeychainReference]struct{}, len(refs))
+	for _, ref := range refs {
+		if err := ref.Validate("upstream_keychains"); err != nil {
+			return nil, err
+		}
+		if _, exists := seen[ref]; exists {
+			return nil, errors.New("upstream_keychains must not contain duplicate references")
+		}
+		seen[ref] = struct{}{}
+	}
+	return append([]KeychainReference(nil), refs...), nil
+}
+
+func (p Provider) ResolvedAPIKeys() []string {
+	if len(p.APIKeys) > 0 {
+		return append([]string(nil), p.APIKeys...)
+	}
+	if p.APIKey != "" {
+		return []string{p.APIKey}
+	}
+	return nil
 }
 
 func (r KeychainReference) Validate(name string) error {
@@ -264,8 +303,8 @@ func (c Config) Validate() error {
 			if err := validateBaseURL(provider.BaseURL, "providers."+name+".base_url"); err != nil {
 				return err
 			}
-			if err := provider.UpstreamKeychain.Validate("providers." + name + ".upstream_keychain"); err != nil {
-				return err
+			if _, err := provider.KeychainReferences(); err != nil {
+				return errors.New("providers." + name + "." + err.Error())
 			}
 			if strings.TrimSpace(provider.Model) == "" {
 				return errors.New("providers." + name + ".model is required")
@@ -431,11 +470,21 @@ func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Co
 		providerKeys = append(providerKeys, c.APIKey)
 	} else if len(c.Providers) > 0 {
 		for name, provider := range c.Providers {
-			provider.APIKey, err = lookup.Lookup(ctx, provider.UpstreamKeychain)
-			if err != nil {
-				return Config{}, errors.New("upstream Keychain item unavailable")
+			refs, referenceErr := provider.KeychainReferences()
+			if referenceErr != nil {
+				return Config{}, errors.New("providers." + name + "." + referenceErr.Error())
 			}
-			providerKeys = append(providerKeys, provider.APIKey)
+			keys := make([]string, 0, len(refs))
+			for _, ref := range refs {
+				key, lookupErr := lookup.Lookup(ctx, ref)
+				if lookupErr != nil {
+					return Config{}, errors.New("upstream Keychain item unavailable")
+				}
+				keys = append(keys, key)
+			}
+			provider.APIKeys = keys
+			provider.APIKey = keys[0]
+			providerKeys = append(providerKeys, keys...)
 			c.Providers[name] = provider
 		}
 	}
@@ -448,6 +497,15 @@ func (c Config) ResolveCredentials(ctx context.Context, lookup SecretLookup) (Co
 		}
 		if key == c.AccessToken {
 			return Config{}, errors.New("use separate upstream and gateway credentials")
+		}
+	}
+	for _, provider := range c.Providers {
+		seen := make(map[string]struct{}, len(provider.APIKeys))
+		for _, key := range provider.APIKeys {
+			if _, exists := seen[key]; exists {
+				return Config{}, errors.New("provider API keys must be unique within a key group")
+			}
+			seen[key] = struct{}{}
 		}
 	}
 	return c, nil
