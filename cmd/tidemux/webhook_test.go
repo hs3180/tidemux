@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hs3180/tidemux/internal/gateway"
 	"github.com/hs3180/tidemux/internal/ledger"
@@ -337,6 +339,146 @@ func TestDeliverReportWebhookSendsSummaryWithoutHTMLExport(t *testing.T) {
 	if strings.Contains(message, privateHTML) || strings.Contains(message, htmlPath) || strings.Contains(strings.ToLower(message), "<html") {
 		t.Fatalf("webhook included local HTML report data: %q", message)
 	}
+}
+
+func TestReportWebhookDeliverRetryAndAttemptHistory(t *testing.T) {
+	dir := t.TempDir()
+	ledgerPath := filepath.Join(dir, "ledger.db")
+	store, err := ledger.Open(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.GenerateDailyReport(context.Background(), time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC), "UTC", ledger.ReportBudget{})
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	endpointRef := gateway.KeychainReference{Service: "com.tidemux.report-webhook", Account: "test-endpoint"}
+	configPath := filepath.Join(dir, "config.json")
+	config := gateway.Config{
+		ListenAddr:          defaultListenAddr,
+		MaxInFlight:         1,
+		LedgerPath:          ledgerPath,
+		AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"},
+		ReportWebhook:       gateway.ReportWebhookConfig{Provider: "generic", Keychain: endpointRef},
+	}
+	if err := writeCommandConfig(configPath, config, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		var payload map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode report payload: %v", err)
+		}
+		if !strings.Contains(payload["text"], "2026-09-24") || strings.Contains(strings.ToLower(payload["text"]), "<html") {
+			t.Errorf("unexpected webhook text: %q", payload["text"])
+		}
+		if attempts == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	keychain := &webhookTestKeychain{values: map[string]string{endpointRef.Service + "/" + endpointRef.Account: server.URL}}
+	baseArgs := []string{"--config", configPath, "--id", strconv.FormatInt(report.ID, 10), "--channel", "webhook"}
+
+	if output, err := runReportWithKeychainTest(t, keychain, append([]string{"deliver"}, baseArgs...)...); err == nil || !strings.Contains(err.Error(), "HTTP 502") {
+		t.Fatalf("first webhook delivery output=%s err=%v", output, err)
+	}
+	if output, err := runReportWithKeychainTest(t, keychain, append([]string{"retry"}, baseArgs...)...); err != nil {
+		t.Fatalf("webhook retry output=%s err=%v", output, err)
+	} else if !strings.Contains(string(output), `"status":"sent"`) {
+		t.Fatalf("retry result did not report success: %s", output)
+	}
+	if attempts != 2 {
+		t.Fatalf("webhook request attempts=%d, want 2", attempts)
+	}
+
+	output, err := runReportWithKeychainTest(t, keychain, "deliveries", "--config", configPath, "--id", strconv.FormatInt(report.ID, 10))
+	if err != nil {
+		t.Fatalf("list delivery attempts output=%s err=%v", output, err)
+	}
+	var deliveries []ledger.ReportDelivery
+	if err := json.Unmarshal(output, &deliveries); err != nil {
+		t.Fatalf("invalid delivery history %q: %v", output, err)
+	}
+	if len(deliveries) != 1 || deliveries[0].Channel != "webhook" || deliveries[0].Status != "sent" || deliveries[0].Attempts != 2 || deliveries[0].ErrorCode != "" {
+		t.Fatalf("unexpected delivery history: %+v", deliveries)
+	}
+
+	if output, err := runReportWithKeychainTest(t, keychain, append([]string{"retry"}, baseArgs...)...); err == nil || !strings.Contains(err.Error(), "no failed delivery") {
+		t.Fatalf("retry without a failed attempt output=%s err=%v", output, err)
+	}
+	if attempts != 2 {
+		t.Fatalf("retry without failure sent another webhook; request attempts=%d", attempts)
+	}
+}
+
+func TestReportNotifyRecordsWebhookKeychainFailure(t *testing.T) {
+	dir := t.TempDir()
+	ledgerPath := filepath.Join(dir, "ledger.db")
+	endpointRef := gateway.KeychainReference{Service: "com.tidemux.report-webhook", Account: "missing"}
+	configPath := filepath.Join(dir, "config.json")
+	config := gateway.Config{
+		ListenAddr:          defaultListenAddr,
+		MaxInFlight:         1,
+		LedgerPath:          ledgerPath,
+		AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"},
+		ReportWebhook:       gateway.ReportWebhookConfig{Provider: "generic", Keychain: endpointRef},
+	}
+	if err := writeCommandConfig(configPath, config, nil); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runReportWithKeychainTest(t, &webhookTestKeychain{values: map[string]string{}}, "notify", "--config", configPath, "--channel", "webhook"); err == nil || !strings.Contains(err.Error(), "Keychain item unavailable") {
+		t.Fatalf("notify output=%s err=%v", output, err)
+	}
+	store, err := ledger.Open(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reports, err := store.ListDailyReports(context.Background(), 1)
+	if err != nil || len(reports) != 1 {
+		t.Fatalf("reports=%+v err=%v", reports, err)
+	}
+	deliveries, err := store.ReportDeliveries(context.Background(), reports[0].ID)
+	if err != nil || len(deliveries) != 1 || deliveries[0].Status != "failed" || deliveries[0].Attempts != 1 || deliveries[0].ErrorCode != "delivery_failed" {
+		t.Fatalf("deliveries=%+v err=%v", deliveries, err)
+	}
+}
+
+func runReportWithKeychainTest(t *testing.T, keychain gateway.SecretLookup, args ...string) ([]byte, error) {
+	t.Helper()
+	stdout, err := os.CreateTemp(t.TempDir(), "stdout-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		stdout.Close()
+		t.Fatal(err)
+	}
+	runErr := reportWithKeychain(args, stdout, stderr, keychain)
+	if err := stdout.Close(); err != nil {
+		stderr.Close()
+		t.Fatal(err)
+	}
+	if err := stderr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(stdout.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data, runErr
 }
 
 func TestReportTextIsReadableAndOmitsUnavailableChecks(t *testing.T) {

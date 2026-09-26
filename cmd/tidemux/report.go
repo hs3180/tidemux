@@ -23,6 +23,10 @@ import (
 const macOSNotificationSettingsURL = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
 
 func report(args []string, stdout, stderr *os.File) error {
+	return reportWithKeychain(args, stdout, stderr, gateway.MacOSKeychain{})
+}
+
+func reportWithKeychain(args []string, stdout, stderr *os.File, keychain gateway.SecretLookup) error {
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
@@ -33,22 +37,48 @@ func report(args []string, stdout, stderr *os.File) error {
 	if command == "webhook" {
 		return configureReportWebhook(args[1:], stdout, stderr)
 	}
-	if command != "generate" && command != "list" && command != "export" && command != "open" && command != "deliver" && command != "retry" && command != "notify" {
+	if command != "generate" && command != "list" && command != "export" && command != "open" && command != "deliver" && command != "retry" && command != "deliveries" && command != "notify" {
 		return errors.New(usage)
 	}
 	flags := flag.NewFlagSet("report "+command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")
-	day := flags.String("date", "", "report date (YYYY-MM-DD)")
-	id := flags.Int64("id", 0, "report ID")
-	channel := flags.String("channel", "macos", "macos")
-	timezone := flags.String("timezone", "UTC", "IANA report timezone")
-	budgetCurrency := flags.String("budget-currency", "", "currency of optional daily reporting limit")
-	dailyBudget := flags.Float64("daily-budget", 0, "optional daily reporting limit; does not enforce requests")
-	limit := flags.Int("limit", 30, "history rows")
-	days := flags.Int("days", 30, "number of days in an HTML export")
-	output := flags.String("output", "", "HTML export path (default: ledger directory/reports/latest.html)")
-	openReport := flags.Bool("open", false, "open an HTML export in the default browser")
+	var day, timezone, output *string
+	var id *int64
+	var channel, budgetCurrency *string
+	var dailyBudget *float64
+	var limit, days *int
+	var openReport *bool
+	switch command {
+	case "generate":
+		day = flags.String("date", "", "report date (YYYY-MM-DD)")
+		timezone = flags.String("timezone", "UTC", "IANA report timezone")
+		budgetCurrency = flags.String("budget-currency", "", "currency of optional daily reporting limit")
+		dailyBudget = flags.Float64("daily-budget", 0, "optional daily reporting limit; does not enforce requests")
+	case "list":
+		limit = flags.Int("limit", 30, "history rows")
+	case "export":
+		day = flags.String("date", "", "report date (YYYY-MM-DD)")
+		timezone = flags.String("timezone", "UTC", "IANA report timezone")
+		budgetCurrency = flags.String("budget-currency", "", "currency of optional daily reporting limit")
+		dailyBudget = flags.Float64("daily-budget", 0, "optional daily reporting limit; does not enforce requests")
+		days = flags.Int("days", 30, "number of days in the HTML export")
+		output = flags.String("output", "", "HTML export path (default: ledger directory/reports/latest.html)")
+		openReport = flags.Bool("open", false, "open an HTML export in the default browser")
+	case "open":
+		output = flags.String("output", "", "HTML report path (default: ledger directory/reports/latest.html)")
+	case "deliver", "retry":
+		id = flags.Int64("id", 0, "report ID")
+		channel = flags.String("channel", "macos", "delivery channel: macos or webhook")
+		budgetCurrency = flags.String("budget-currency", "", "currency of optional daily reporting limit")
+		dailyBudget = flags.Float64("daily-budget", 0, "optional daily reporting limit; does not enforce requests")
+		days = flags.Int("days", 30, "number of days in a refreshed HTML report")
+	case "deliveries":
+		id = flags.Int64("id", 0, "report ID")
+	case "notify":
+		channel = flags.String("channel", "macos", "delivery channel: macos or webhook")
+		timezone = flags.String("timezone", "UTC", "IANA report timezone")
+	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -80,6 +110,19 @@ func report(args []string, stdout, stderr *os.File) error {
 			return e
 		}
 		return json.NewEncoder(stdout).Encode(rows)
+	}
+	if command == "deliveries" {
+		if *id < 1 {
+			return errors.New("report deliveries requires --id N")
+		}
+		deliveries, err := l.ReportDeliveries(context.Background(), *id)
+		if err != nil {
+			return err
+		}
+		if len(deliveries) == 0 {
+			return errors.New("no delivery records found for report")
+		}
+		return json.NewEncoder(stdout).Encode(deliveries)
 	}
 	if command == "generate" {
 		loc, err := reportLocation(*timezone)
@@ -139,9 +182,9 @@ func report(args []string, stdout, stderr *os.File) error {
 		if flagWasSet(flags, "timezone") {
 			notifyTimezone = *timezone
 		}
-		return notifyReport(stdout, l, c, selectedChannel, notifyTimezone)
+		return notifyReportWithKeychain(stdout, l, c, selectedChannel, notifyTimezone, keychain)
 	}
-	if *id < 1 || *channel != "macos" {
+	if *id < 1 || (*channel != "macos" && *channel != "webhook") {
 		return errors.New(usage)
 	}
 	reports, err := l.ListDailyReports(context.Background(), 3660)
@@ -171,37 +214,41 @@ func report(args []string, stdout, stderr *os.File) error {
 			return errors.New("no failed delivery for channel")
 		}
 	}
+	var deliveryErr error
+	if *channel == "webhook" {
+		c, deliveryErr = resolveReportWebhook(c, keychain)
+	}
 	var reportPath string
-	if *channel == "macos" {
+	if deliveryErr == nil && *channel == "macos" {
 		loc, e := reportLocation(selected.Timezone)
 		if e != nil {
-			err = errors.New("invalid persisted report timezone")
+			deliveryErr = errors.New("invalid persisted report timezone")
 		} else {
 			through, parseErr := time.ParseInLocation("2006-01-02", selected.Day, loc)
 			if parseErr != nil {
-				err = errors.New("invalid persisted report date")
+				deliveryErr = errors.New("invalid persisted report date")
 			} else {
 				result, exportErr := exportHTMLReport(context.Background(), l, defaultReportPath(c.LedgerPath), selected.Timezone, through, *days, ledger.ReportBudget{Currency: *budgetCurrency, DailyLimit: *dailyBudget}, false)
 				if exportErr != nil {
-					err = exportErr
+					deliveryErr = exportErr
 				} else {
 					reportPath = result.Path
 				}
 			}
 		}
 	}
-	if err == nil {
-		err = deliverReport(*channel, *selected, reportPath, c.ReportWebhookURL, c.ReportWebhook.Provider)
+	if deliveryErr == nil {
+		deliveryErr = deliverReport(*channel, *selected, reportPath, c.ReportWebhookURL, c.ReportWebhook.Provider)
 	}
 	status, code := "sent", ""
-	if err != nil {
+	if deliveryErr != nil {
 		status, code = "failed", "delivery_failed"
 	}
 	if e := l.RecordDelivery(context.Background(), selected.ID, *channel, status, code); e != nil {
 		return e
 	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", code, err)
+	if deliveryErr != nil {
+		return fmt.Errorf("%s: %w", code, deliveryErr)
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{"report_id": selected.ID, "channel": *channel, "status": status})
 }
@@ -214,33 +261,38 @@ func reportLocation(timezone string) (*time.Location, error) {
 }
 
 func notifyReport(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, timezone string) error {
-	if channel == "webhook" {
-		resolved, err := resolveReportWebhook(c, gateway.MacOSKeychain{})
-		if err != nil {
-			return err
-		}
-		c = resolved
-	}
+	return notifyReportWithKeychain(stdout, l, c, channel, timezone, gateway.MacOSKeychain{})
+}
+
+func notifyReportWithKeychain(stdout *os.File, l *ledger.Ledger, c gateway.Config, channel, timezone string, keychain gateway.SecretLookup) error {
 	through := time.Now()
 	report, err := l.GenerateDailyReport(context.Background(), through, timezone, ledger.ReportBudget{})
 	if err != nil {
 		return err
 	}
+	var deliveryErr error
+	if channel == "webhook" {
+		c, deliveryErr = resolveReportWebhook(c, keychain)
+	}
 	reportPath := ""
-	if channel == "macos" {
+	if deliveryErr == nil && channel == "macos" {
 		export, err := exportHTMLReport(context.Background(), l, defaultReportPath(c.LedgerPath), timezone, through, 30, ledger.ReportBudget{}, false)
 		if err != nil {
-			return err
+			deliveryErr = err
+		} else {
+			reportPath = export.Path
 		}
-		reportPath = export.Path
 	}
 	status, code := "sent", ""
-	if err := deliverReport(channel, report, reportPath, c.ReportWebhookURL, c.ReportWebhook.Provider); err != nil {
+	if deliveryErr == nil {
+		deliveryErr = deliverReport(channel, report, reportPath, c.ReportWebhookURL, c.ReportWebhook.Provider)
+	}
+	if deliveryErr != nil {
 		status, code = "failed", "delivery_failed"
 		if recordErr := l.RecordDelivery(context.Background(), report.ID, channel, status, code); recordErr != nil {
 			return recordErr
 		}
-		return fmt.Errorf("%s: %w", code, err)
+		return fmt.Errorf("%s: %w", code, deliveryErr)
 	}
 	if err := l.RecordDelivery(context.Background(), report.ID, channel, status, code); err != nil {
 		return err

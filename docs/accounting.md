@@ -342,12 +342,31 @@ includes `tidemux report open` as the short fallback. `report retry` retries a
 recorded failed delivery. On the first clickable delivery, TideMux lets
 macOS ask for notification permission; if macOS reports that notifications
 are blocked, it opens the notification settings page automatically. SMTP
-delivery is intentionally deferred; this release supports macOS
-Notification Center only.
+delivery is intentionally deferred; webhook delivery is also available.
 
-The 0.1.1 `tidemux configure` wizard asks for an optional daily notification
-time in local time. This is a release-specific onboarding detail; scheduling is
-managed separately with the report command in both the current and target CLI:
+Configure an IM webhook and schedule it as the report channel:
+
+```sh
+tidemux report webhook --provider lark
+tidemux report schedule --time 09:00 --channel webhook
+```
+
+The endpoint is requested through hidden terminal input and stored in macOS
+Keychain. Supported adapters are `generic`, `telegram`, `discord` and `lark`.
+They wrap a plain-text summary (up to 10 KB) in JSON: generic and Telegram use
+`text`, Discord uses `content`, and Lark uses `msg_type: text` with
+`content.text`. Telegram Bot API endpoints must include the bot `sendMessage`
+path and `chat_id`. TideMux does not upload the HTML report or request/response
+content. `report notify --channel webhook` sends the
+current-day summary immediately. To send a previously generated report, use
+`report deliver --id N --channel webhook`; `report retry --id N --channel
+webhook` only runs when that report has a recorded failed webhook delivery.
+Check delivery status and attempt count with `report deliveries --id N`. A retry
+updates the existing report/channel ledger record. `report schedule --disable`
+stops scheduled notifications but retains webhook configuration;
+`report webhook --disable` removes the endpoint and any webhook schedule.
+
+Scheduling is managed separately with the report command:
 
 ```sh
 tidemux report schedule --time 09:00
@@ -356,8 +375,8 @@ tidemux report schedule --disable
 
 TideMux stores the schedule in `report_schedule` and installs a private,
 per-profile user `launchd` agent. The agent runs `tidemux report notify`, which
-generates the current local-day report, exports the clickable HTML report and
-delivers the configured notification. If the Mac is asleep or offline,
+generates the current local-day report and delivers the configured channel
+(exporting clickable HTML only for macOS notifications). If the Mac is asleep or offline,
 `launchd` runs the job at its next opportunity; TideMux records only the actual
 generated report and does not fabricate a missed balance snapshot.
 

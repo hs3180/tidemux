@@ -194,5 +194,26 @@ tidemux report schedule --time 09:00
 tidemux report schedule --disable
 ```
 
+For IM delivery, configure the destination first and select the webhook channel
+when scheduling:
+
+```sh
+tidemux report webhook --provider lark
+tidemux report schedule --time 09:00 --channel webhook
+tidemux report notify
+```
+
+The endpoint is entered through hidden input and stored in Keychain. Supported
+adapters are `generic`, `telegram`, `discord` and `lark`; messages are JSON
+wrappers around a bounded plain-text summary, not the HTML export. Generic and
+Telegram use a `text` field, Discord uses `content`, and Lark uses
+`msg_type: text` with `content.text`. For Telegram Bot API, include the bot
+`sendMessage` endpoint and `chat_id` in the hidden URL. To manually deliver or retry a
+saved report, use `report deliver --id N --channel webhook` or
+`report retry --id N --channel webhook`. Retry requires a recorded failed
+attempt. Inspect the status and attempt count with `report deliveries --id N`.
+`report webhook --disable` removes the endpoint and disables a webhook schedule;
+`report schedule --disable` only disables scheduling.
+
 Pass `--config PATH` to any command to manage a non-default profile. To inspect
 the effective configuration and Keychain readiness, use `tidemux doctor`.
