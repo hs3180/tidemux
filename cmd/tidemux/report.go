@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -268,7 +267,12 @@ func resolveReportWebhook(c gateway.Config, lookup gateway.SecretLookup) (gatewa
 }
 
 func deliverReport(channel string, r ledger.DailyReport, reportPath, webhookURL, webhookProvider string) error {
-	subject, body := fmt.Sprintf("TideMux %s usage report", r.Day), reportText(r)
+	return deliverReportWithLocale(channel, r, reportPath, webhookURL, webhookProvider, detectReportLocale())
+}
+
+func deliverReportWithLocale(channel string, r ledger.DailyReport, reportPath, webhookURL, webhookProvider string, locale reportLocale) error {
+	messages := reportMessagesFor(locale)
+	subject, body := fmt.Sprintf(messages.subjectFormat, r.Day), reportTextForLocale(r, locale)
 	if channel == "macos" {
 		return notifyMacOS(subject, body, reportPath)
 	}
@@ -463,69 +467,6 @@ func findTerminalNotifier() (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func reportText(r ledger.DailyReport) string {
-	cost := reportCostText(r)
-	if cost == "unknown" {
-		cost = "未知"
-	}
-	date := "日期：" + r.Day
-	if timezone := strings.TrimSpace(r.Timezone); timezone != "" {
-		date += " · 时区：" + timezone
-	}
-	lines := []string{
-		"📊 TideMux 每日用量",
-		date,
-		"",
-		fmt.Sprintf("请求：%s 次（失败 %s 次）", reportCountText(r.RequestCount), reportCountText(r.FailureCount)),
-		fmt.Sprintf("Token：输入 %s · 输出 %s", reportCountText(r.InputTokens), reportCountText(r.OutputTokens)),
-		fmt.Sprintf("本地估算费用：%s", cost),
-		fmt.Sprintf("未知费用请求：%s 次", reportCountText(r.UnknownCostRequests)),
-	}
-	checks := make([]string, 0, 2)
-	if r.TokenizerMismatches != nil {
-		checks = append(checks, fmt.Sprintf("Token 统计差异：%s", reportCountText(*r.TokenizerMismatches)))
-	}
-	if r.UnmatchedStatements != nil {
-		checks = append(checks, fmt.Sprintf("未匹配账单行：%s", reportCountText(*r.UnmatchedStatements)))
-	}
-	if len(checks) > 0 {
-		lines = append(lines, "", "数据校验")
-		lines = append(lines, checks...)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func reportCountText(value int64) string {
-	digits := strconv.FormatInt(value, 10)
-	sign := 0
-	if strings.HasPrefix(digits, "-") {
-		sign = 1
-	}
-	var formatted strings.Builder
-	formatted.Grow(len(digits) + (len(digits)-sign-1)/3)
-	for i := range len(digits) {
-		if i > sign && (len(digits)-i)%3 == 0 {
-			formatted.WriteByte(',')
-		}
-		formatted.WriteByte(digits[i])
-	}
-	return formatted.String()
-}
-
-func reportCostText(r ledger.DailyReport) string {
-	if r.RequestCount == 0 {
-		return "0"
-	}
-	if r.EstimatedCost == nil {
-		return "unknown"
-	}
-	cost := fmt.Sprintf("%.6f", *r.EstimatedCost)
-	if r.Currency != "" {
-		cost += " " + r.Currency
-	}
-	return cost
 }
 
 func appleQuote(s string) string { return "\"" + strings.ReplaceAll(s, "\"", "\\\"") + "\"" }

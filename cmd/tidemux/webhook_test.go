@@ -326,7 +326,7 @@ func TestDeliverReportWebhookSendsSummaryWithoutHTMLExport(t *testing.T) {
 	defer server.Close()
 
 	report := ledger.DailyReport{Day: "2026-09-24", RequestCount: 3, InputTokens: 12, OutputTokens: 7}
-	if err := deliverReport("webhook", report, htmlPath, server.URL, "generic"); err != nil {
+	if err := deliverReportWithLocale("webhook", report, htmlPath, server.URL, "generic", reportLocaleSimplifiedChinese); err != nil {
 		t.Fatal(err)
 	}
 	message := payload["text"]
@@ -358,12 +358,78 @@ func TestReportTextIsReadableAndOmitsUnavailableChecks(t *testing.T) {
 	}
 
 	want := "📊 TideMux 每日用量\n日期：2026-09-24 · 时区：Asia/Shanghai\n\n请求：12,345 次（失败 2 次）\nToken：输入 1,234,567 · 输出 234,567\n本地估算费用：1.234567 USD\n未知费用请求：3 次\n\n数据校验\nToken 统计差异：0"
-	if got := reportText(report); got != want {
+	if got := reportTextForLocale(report, reportLocaleSimplifiedChinese); got != want {
 		t.Fatalf("report text =\n%s\nwant =\n%s", got, want)
 	}
-	if strings.Contains(reportText(ledger.DailyReport{Day: "2026-09-24"}), "数据校验") {
+	if strings.Contains(reportTextForLocale(ledger.DailyReport{Day: "2026-09-24"}, reportLocaleSimplifiedChinese), "数据校验") {
 		t.Fatal("unavailable optional checks should be omitted rather than shown as unknown")
 	}
+}
+
+func TestReportTextSupportsEnglishAndTraditionalChinese(t *testing.T) {
+	report := ledger.DailyReport{Day: "2026-09-24", Timezone: "Asia/Taipei", RequestCount: 12, FailureCount: 1, InputTokens: 1000, OutputTokens: 500}
+	english := reportTextForLocale(report, reportLocaleEnglish)
+	if !strings.Contains(english, "📊 TideMux Daily Usage") || !strings.Contains(english, "Date: 2026-09-24 · Timezone: Asia/Taipei") || !strings.Contains(english, "Requests: 12 total · Failures: 1") {
+		t.Fatalf("English report = %q", english)
+	}
+	traditional := reportTextForLocale(report, reportLocaleTraditionalChinese)
+	if !strings.Contains(traditional, "📊 TideMux 每日用量") || !strings.Contains(traditional, "日期：2026-09-24 · 時區：Asia/Taipei") || !strings.Contains(traditional, "請求：12 次（失敗 1 次）") {
+		t.Fatalf("Traditional Chinese report = %q", traditional)
+	}
+	if got := reportMessagesFor("fr").title; got != reportCatalog[reportLocaleEnglish].title {
+		t.Fatalf("unsupported locale fell back to %q, want English", got)
+	}
+}
+
+func TestReportLocaleDetection(t *testing.T) {
+	t.Run("uses the first supported Apple preferred language", func(t *testing.T) {
+		output := "(\n    \"fr-FR\",\n    \"zh-Hant-TW\",\n    \"en-US\"\n)"
+		got, ok := reportLocaleFromAppleLanguages(output)
+		if !ok || got != reportLocaleTraditionalChinese {
+			t.Fatalf("locale = %q, ok=%t", got, ok)
+		}
+	})
+
+	t.Run("parses locale environment values", func(t *testing.T) {
+		environment := map[string]string{"LANG": "zh_CN.UTF-8"}
+		got, ok := reportLocaleFromEnvironment(func(key string) string { return environment[key] })
+		if !ok || got != reportLocaleSimplifiedChinese {
+			t.Fatalf("locale = %q, ok=%t", got, ok)
+		}
+	})
+
+	t.Run("respects explicit locale override and English fallback", func(t *testing.T) {
+		environment := map[string]string{"LC_ALL": "fr_FR.UTF-8", "LANG": "zh_CN.UTF-8"}
+		got, ok := reportLocaleFromEnvironment(func(key string) string { return environment[key] })
+		if !ok || got != reportLocaleEnglish {
+			t.Fatalf("locale = %q, ok=%t", got, ok)
+		}
+	})
+
+	t.Run("defaults to English when no system locale is available", func(t *testing.T) {
+		got, ok := reportLocaleFromEnvironment(func(string) string { return "" })
+		if ok {
+			t.Fatalf("empty environment unexpectedly selected %q", got)
+		}
+		if fallback := reportMessagesFor("").title; fallback != reportCatalog[reportLocaleEnglish].title {
+			t.Fatalf("default title = %q, want English", fallback)
+		}
+	})
+
+	t.Run("selects simplified or traditional Chinese by script and region", func(t *testing.T) {
+		for value, want := range map[string]reportLocale{
+			"zh-Hans-CN": reportLocaleSimplifiedChinese,
+			"zh_CN":      reportLocaleSimplifiedChinese,
+			"zh-Hant-TW": reportLocaleTraditionalChinese,
+			"zh_HK":      reportLocaleTraditionalChinese,
+			"en_US":      reportLocaleEnglish,
+		} {
+			got, ok := reportLocaleForTag(value)
+			if !ok || got != want {
+				t.Errorf("locale for %q = %q, ok=%t; want %q", value, got, ok, want)
+			}
+		}
+	})
 }
 
 func TestReportCountTextGroupsThousands(t *testing.T) {
