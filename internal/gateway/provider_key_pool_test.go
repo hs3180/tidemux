@@ -239,7 +239,7 @@ func TestGatewayFailsOverWithinProviderKeyGroup(t *testing.T) {
 	}
 	defer closeGateway()
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBody("openai")))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "main", "custom-model")))
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
 	h.ServeHTTP(out, req)
@@ -303,7 +303,7 @@ func TestConcurrentFailoverSkipsKeyCooledAfterCandidateSnapshot(t *testing.T) {
 		body   string
 	}
 	request := func(session string) result {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBody("openai")))
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "main", "custom-model")))
 		req.Header.Set("Authorization", "Bearer local-secret")
 		req.Header.Set(adapter.SessionIDHeader, session)
 		out := httptest.NewRecorder()
@@ -391,7 +391,7 @@ func TestGatewayRejectsRequestsWhileSingleKeyIsCoolingDown(t *testing.T) {
 	defer closeGateway()
 
 	for i, wantStatus := range []int{http.StatusBadGateway, http.StatusServiceUnavailable} {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBody("openai")))
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "main", "custom-model")))
 		req.Header.Set("Authorization", "Bearer local-secret")
 		out := httptest.NewRecorder()
 		h.ServeHTTP(out, req)
@@ -404,5 +404,41 @@ func TestGatewayRejectsRequestsWhileSingleKeyIsCoolingDown(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("upstream was called %d times; cooling key should not be reused", calls)
+	}
+}
+
+func TestGatewayReturnsCooldownWhenRemainingKeyIsAlreadyCoolingDown(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		calls++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "main")
+	provider := c.Providers["main"]
+	provider.APIKeys = []string{"key-a", "key-b"}
+	provider.APIKey = "key-a"
+	c.Providers["main"] = provider
+	h, closeGateway, err := NewHandler(c, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGateway()
+
+	h.(*handler).keyPools["main"].Cooldown(1, 2*time.Minute)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "main", "custom-model")))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != http.StatusServiceUnavailable || !strings.Contains(out.Body.String(), "provider_keys_cooling_down") {
+		t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+	}
+	if out.Header().Get("Retry-After") == "" || calls != 1 {
+		t.Fatalf("Retry-After=%q upstream calls=%d", out.Header().Get("Retry-After"), calls)
 	}
 }

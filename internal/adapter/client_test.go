@@ -3,8 +3,6 @@ package adapter
 import (
 	"context"
 	"errors"
-	"github.com/hs3180/tidemux/internal/ledger"
-	"github.com/hs3180/tidemux/internal/limiter"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hs3180/tidemux/internal/ledger"
+	"github.com/hs3180/tidemux/internal/limiter"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

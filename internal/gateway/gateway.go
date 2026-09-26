@@ -323,24 +323,23 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return false, 0
 				}
 				pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown)
-				if candidateIndex+1 >= len(candidates) {
+				if !pool.hasMultipleKeys() {
 					return false, 0
 				}
 				now := time.Now()
 				hasReadyCandidate := false
-				var earliestCooldown time.Duration
 				for index := candidateIndex + 1; index < len(candidates); index++ {
-					ready, wait := pool.CandidateReadyAt(candidates[index].index, now)
+					ready, _ := pool.CandidateReadyAt(candidates[index].index, now)
 					if ready {
 						hasReadyCandidate = true
 						continue
 					}
 					keys[index] = ""
-					if wait > 0 && (earliestCooldown == 0 || wait < earliestCooldown) {
-						earliestCooldown = wait
-					}
 				}
-				return hasReadyCandidate, earliestCooldown
+				if hasReadyCandidate {
+					return true, 0
+				}
+				return false, pool.CooldownWaitAt(now)
 			},
 		}
 		return providerClient.CallFromKeyCandidates(protocol, r.Context(), body, model, sink, options, keys, callbacks)

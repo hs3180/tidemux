@@ -28,6 +28,10 @@ func newProviderKeyPool(keys []string) *providerKeyPool {
 	return &providerKeyPool{keys: append([]string(nil), keys...), cooldowns: make([]time.Time, len(keys))}
 }
 
+func (p *providerKeyPool) hasMultipleKeys() bool {
+	return p != nil && len(p.keys) > 1
+}
+
 func (p *providerKeyPool) Next() string {
 	candidates, _ := p.Candidates()
 	if len(candidates) == 0 {
@@ -109,4 +113,27 @@ func (p *providerKeyPool) CandidateReadyAt(index int, now time.Time) (bool, time
 	}
 	p.cooldowns[index] = time.Time{}
 	return true, 0
+}
+
+// CooldownWaitAt reports the shortest remaining cooldown across the pool, or
+// zero when at least one key is currently eligible.
+func (p *providerKeyPool) CooldownWaitAt(now time.Time) time.Duration {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var earliest time.Time
+	for _, until := range p.cooldowns {
+		if !until.After(now) {
+			return 0
+		}
+		if earliest.IsZero() || until.Before(earliest) {
+			earliest = until
+		}
+	}
+	if earliest.IsZero() {
+		return 0
+	}
+	return earliest.Sub(now)
 }
