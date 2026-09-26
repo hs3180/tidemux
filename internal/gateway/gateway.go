@@ -393,12 +393,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	retainSession = persistentSession && !mode.Stream
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
-	if n, _ := w.Write(response); n > 0 {
-		lease.TouchOutput()
+	n, writeErr := w.Write(response)
+	if writeErr != nil || n != len(response) {
+		return
 	}
+	if flushErr := http.NewResponseController(w).Flush(); flushErr != nil && !errors.Is(flushErr, http.ErrNotSupported) {
+		return
+	}
+	if r.Context().Err() != nil {
+		return
+	}
+	lease.TouchOutput()
+	retainSession = persistentSession && !mode.Stream
 }
 
 func newRequestID() (string, error) {

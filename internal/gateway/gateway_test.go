@@ -768,6 +768,128 @@ func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
 	}
 }
 
+func TestActiveSessionDisconnectDoesNotRetainSession(t *testing.T) {
+	for _, failOnWrite := range []bool{true, false} {
+		name := "flush-error"
+		if failOnWrite {
+			name = "write-error"
+		}
+		t.Run(name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, responseBody("openai"))
+			}))
+			defer up.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
+			c.MaxActiveSessions = 1
+			h, closeDB, err := NewHandler(c, up.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+
+			first := httptest.NewRequest(http.MethodPost, endpoint("openai"), strings.NewReader(requestBody("openai")))
+			first.Header.Set("Authorization", "Bearer local-secret")
+			first.Header.Set(adapter.SessionIDHeader, "session-a")
+			w := &disconnectedResponseWriter{header: make(http.Header), failOnWrite: failOnWrite}
+			h.ServeHTTP(w, first)
+			if w.status != http.StatusOK {
+				t.Fatalf("first response status = %d", w.status)
+			}
+
+			second := httptest.NewRequest(http.MethodPost, endpoint("openai"), strings.NewReader(requestBody("openai")))
+			second.Header.Set("Authorization", "Bearer local-secret")
+			second.Header.Set(adapter.SessionIDHeader, "session-b")
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, second)
+			if out.Code != http.StatusOK {
+				t.Fatalf("new session after downstream disconnect = %d: %s", out.Code, out.Body.String())
+			}
+		})
+	}
+}
+
+func TestActiveSessionCancellationReleasesSession(t *testing.T) {
+	upstreamStarted := make(chan struct{})
+	upstreamCanceled := make(chan struct{})
+	transport := gatewayRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get(adapter.SessionIDHeader) == "session-a" {
+			close(upstreamStarted)
+			<-r.Context().Done()
+			close(upstreamCanceled)
+			return nil, r.Context().Err()
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(responseBody("openai"))),
+			Request:    r,
+		}, nil
+	})
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://upstream.invalid/v1")
+	c.MaxActiveSessions = 1
+	h, closeDB, err := NewHandler(c, &http.Client{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	first := httptest.NewRequest(http.MethodPost, endpoint("openai"), strings.NewReader(requestBody("openai"))).WithContext(ctx)
+	first.Header.Set("Authorization", "Bearer local-secret")
+	first.Header.Set(adapter.SessionIDHeader, "session-a")
+	firstDone := make(chan struct{})
+	go func() {
+		h.ServeHTTP(httptest.NewRecorder(), first)
+		close(firstDone)
+	}()
+	select {
+	case <-upstreamStarted:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("canceled request did not reach upstream")
+	}
+	cancel()
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream request did not observe cancellation")
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway handler did not finish after cancellation")
+	}
+
+	second := httptest.NewRequest(http.MethodPost, endpoint("openai"), strings.NewReader(requestBody("openai")))
+	second.Header.Set("Authorization", "Bearer local-secret")
+	second.Header.Set(adapter.SessionIDHeader, "session-b")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, second)
+	if out.Code != http.StatusOK {
+		t.Fatalf("new session after cancellation = %d: %s", out.Code, out.Body.String())
+	}
+}
+
+type disconnectedResponseWriter struct {
+	header      http.Header
+	status      int
+	failOnWrite bool
+}
+
+type gatewayRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f gatewayRoundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func (w *disconnectedResponseWriter) Header() http.Header    { return w.header }
+func (w *disconnectedResponseWriter) WriteHeader(status int) { w.status = status }
+func (w *disconnectedResponseWriter) Write(data []byte) (int, error) {
+	if w.failOnWrite {
+		return 0, io.ErrClosedPipe
+	}
+	return len(data), nil
+}
+func (w *disconnectedResponseWriter) FlushError() error { return io.ErrClosedPipe }
+
 func TestSessionIDIsForwardedToProvider(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		t.Run(protocol, func(t *testing.T) {
