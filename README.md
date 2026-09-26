@@ -135,16 +135,15 @@ published older binaries may expose a different command set.
 | Command | Semantics |
 | --- | --- |
 | `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model MODELS]` | Add exactly one provider without replacing others. `--model` is a comma-separated allowlist. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol and allow all models unless `--model` is supplied. |
-| `tidemux provider manage [--config PATH]` | Open the interactive manager to inspect or edit provider settings, API keys and model scope, or add/remove providers. Secrets and Keychain account details stay hidden. |
 | `tidemux provider list [--json]` | List provider references, endpoint, protocol, key count, model scope and budget status. Never reveal credentials. |
 | `tidemux provider show REF` | Show one provider's effective settings, including its budget, but not its API key. |
 | `tidemux provider validate REF` | Check a provider's configuration and Keychain credentials locally without an upstream request or displaying key material. |
-| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model MODELS] [--anthropic-version DATE] [--rotate-key]` | Change only the supplied fields. `--model` replaces the allowlist; omitted fields and other providers remain unchanged. |
+| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model MODELS|all] [--anthropic-version DATE] [--rotate-key]` | With no field options, open a short line-by-line form; otherwise change only the supplied fields. `--model` replaces the allowlist and `--model all` allows every model. |
 | `tidemux provider key add REF` | Add another hidden-input API key to the selected provider profile. All keys share that profile's endpoint, protocol and model scope. |
 | `tidemux provider key list REF` | List redacted key slots only; never reveal credentials or Keychain account details. |
 | `tidemux provider key remove REF INDEX [--yes]` | Remove one key from the profile. A provider must retain at least one key; the Keychain item is deleted only when no remaining provider references it. |
 | `tidemux provider remove REF [--yes]` | Remove only that provider. Confirm interactively; without a terminal require `--yes`. Delete a Keychain item only when no remaining provider references it. |
-| `tidemux provider models REF [--only MODELS] [--all] [--select]` | With no scope option, query and display the provider's models when available. `--only` restricts allowed IDs; `--all` removes that restriction; `--select` interactively builds an allowlist from discovered or manually entered IDs. The options are mutually exclusive. This is not a separate top-level `models` command. |
+| `tidemux provider models REF [--only MODELS] [--all] [--select]` | With no scope option, query and display the provider's models when available. `--only` restricts allowed IDs; `--all` removes that restriction; `--select` uses a simple prompt to enter discovered or manual model IDs. The options are mutually exclusive. This is not a separate top-level `models` command. |
 | `tidemux provider pricing list REF` | Show that provider's per-model rates and their source/version. |
 | `tidemux provider pricing set REF MODEL --input-cache-hit RATE --input-cache-miss RATE --output RATE [other options]` | Set or replace all required per-million-token rates for one model; incomplete rate sets are rejected. |
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
@@ -204,8 +203,8 @@ All model IDs are allowed by default. During guided setup, leave the model
 selection blank to allow all, or select IDs to create an allowlist. The same
 allowlist can be supplied with `provider add --model MODELS` or changed later
 with `provider update --model MODELS` or `provider models REF --only ...`;
-`provider models REF --all` removes it. Provider setup does not select a
-default model or provider. Every client request must set `model` to
+`provider update --model all` or `provider models REF --all` removes it.
+Provider setup does not select a default model or provider. Every client request must set `model` to
 `REF/MODEL`, using the reference printed by `provider list`; TideMux routes by
 the part before the first slash and forwards only the remainder as the upstream
 model ID. The gateway model catalog uses the same qualified IDs.

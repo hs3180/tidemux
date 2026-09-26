@@ -71,23 +71,32 @@ older `provider update --rotate-key`
 continues to rotate a single-key profile; use the `provider key` commands for a
 multi-key group.
 
-## Interactive provider manager
+## Edit a provider
 
-Run the provider-scoped terminal manager to perform these operations without
-assembling subcommands manually:
+Use the explicit CRUD commands to inspect and change provider profiles:
 
 ```sh
-tidemux provider manage
+tidemux provider list
+tidemux provider show REF
+tidemux provider update REF
+tidemux provider remove REF
 ```
 
-It lists stable provider references, protocol, key count and model scope, then
-offers provider inspection/editing, key add/list/remove, model-scope editing,
-local validation and provider removal. It never displays API keys or
-Keychain service/account details. Editing an endpoint re-detects its protocol
-unless an override is entered and clears the model allowlist because the new
-endpoint may expose a different catalog. Model scope can then be narrowed from
-the discovered catalog or by entering model IDs; `all` restores unrestricted
-access and a blank selection cancels without changing it.
+`provider update REF` opens a short, line-by-line form. Press Enter to keep a
+field; enter a new endpoint or protocol override to change it, and enter
+comma-separated model IDs to restrict the group or `all` to allow every model.
+Changing an endpoint clears the old model allowlist unless a new list is
+entered. API keys remain a separate CRUD resource:
+
+```sh
+tidemux provider key add REF
+tidemux provider key list REF
+tidemux provider key remove REF INDEX
+```
+
+These commands never display key material or Keychain account details. Model
+scope can also be changed directly with `provider models REF --only`, `--all`,
+or the single-prompt `--select` option.
 
 The equivalent local validation command is:
 
@@ -116,9 +125,10 @@ tidemux provider remove REF
 `list` and `show` never display credentials. `update` changes only the named
 fields: `--endpoint URL`, `--protocol openai|anthropic`,
 `--anthropic-version DATE` (Anthropic only), `--rotate-key`, and
-`--model ID[,ID...]` (replace the allowlist). Updating credentials requires
-hidden terminal input. Changing
-an endpoint re-evaluates its protocol by default using the stored key; combine
+`--model ID[,ID...]` (replace the allowlist) or `--model all` (allow all).
+Without field options it opens the short form described above. Updating
+credentials requires hidden terminal input. Changing an endpoint re-evaluates
+its protocol by default using the stored key; combine
 `--rotate-key` when the new endpoint requires a different key. Use `--protocol`
 to force a wire format. Changing an endpoint clears any model allowlist,
 restoring the default all-models scope.

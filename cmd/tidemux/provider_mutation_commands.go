@@ -71,14 +71,14 @@ func deleteUnreferencedProviderKeys(c gateway.Config, references []gateway.Keych
 func providerUpdate(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
-		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID[,ID...]] [--rotate-key] [--config PATH]")
+		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID[,ID...]|all] [--rotate-key] [--config PATH]")
 	}
 	flags := flag.NewFlagSet("provider update", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
 	endpoint := flags.String("endpoint", "", "replace API endpoint")
 	protocol := flags.String("protocol", "", "force API protocol: openai or anthropic")
-	model := flags.String("model", "", "replace the comma-separated model allowlist")
+	model := flags.String("model", "", "replace the comma-separated model allowlist, or 'all'")
 	rotateKey := flags.Bool("rotate-key", false, "replace the API key using hidden terminal input")
 	version := flags.String("anthropic-version", "2023-06-01", "Anthropic API version")
 	if err := flags.Parse(rest); err != nil {
@@ -90,21 +90,9 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected provider update argument")
 	}
-	if *protocol != "" && *protocol != "openai" && *protocol != "anthropic" {
-		return errors.New("--protocol must be openai or anthropic")
-	}
-	allowedModels, err := parseProviderModelList(*model)
-	if err != nil {
-		return fmt.Errorf("invalid --model allowlist: %w", err)
-	}
 	modelRequested := flagWasSet(flags, "model")
-	if modelRequested && len(allowedModels) == 0 {
-		return errors.New("--model requires at least one allowed model ID")
-	}
 	versionRequested := flagWasSet(flags, "anthropic-version")
-	if *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested {
-		return errors.New("provider update requires at least one changed field")
-	}
+	formRequested := *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested
 	if runtime.GOOS != "darwin" {
 		return errors.New("provider credentials require macOS Keychain")
 	}
@@ -119,6 +107,49 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	p, ok := c.Providers[ref]
 	if !ok {
 		return fmt.Errorf("provider %q not found", ref)
+	}
+	var allowedModels []string
+	if formRequested {
+		formTTY, openErr := openControlTTY("provider update requires an interactive terminal; supply fields with flags for non-interactive use")
+		if openErr != nil {
+			return openErr
+		}
+		changes, promptErr := promptProviderUpdate(formTTY, formTTY, p)
+		closeErr := formTTY.Close()
+		if promptErr != nil {
+			return promptErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if !changes.Changed {
+			fmt.Fprintln(stdout, "Provider unchanged.")
+			return nil
+		}
+		*endpoint, *protocol = changes.Endpoint, changes.Protocol
+		if changes.ModelRequested {
+			*model = changes.Model
+			modelRequested = true
+		}
+	}
+	if *protocol != "" && *protocol != "openai" && *protocol != "anthropic" {
+		return errors.New("--protocol must be openai or anthropic")
+	}
+	if modelRequested {
+		if isAllProviderModels(*model) {
+			allowedModels = nil
+		} else {
+			allowedModels, err = parseProviderModelList(*model)
+			if err != nil {
+				return fmt.Errorf("invalid --model allowlist: %w", err)
+			}
+			if len(allowedModels) == 0 {
+				return errors.New("--model requires model IDs or 'all'")
+			}
+		}
+	}
+	if !formRequested && *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested {
+		return errors.New("provider update requires at least one changed field")
 	}
 	var previousKeyRefs []gateway.KeychainReference
 	if *rotateKey && len(p.UpstreamKeychains) > 1 {

@@ -26,7 +26,7 @@ const (
 commands:
   serve       start the local gateway
   doctor      check the configuration, Keychain and local state directory
-  provider    add and manage upstream providers
+  provider    add, inspect and edit upstream providers
   gateway     configure gateway-wide settings
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
