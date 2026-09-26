@@ -22,9 +22,8 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-Homebrew currently installs the published 0.1.1 binary, which predates the
-0.2.0 commands below. The quick start assumes a current source build; see
-[build from source](docs/install.md#build-from-source).
+Homebrew installs the current published release. The quick start below uses
+the 0.2.0 provider and gateway commands.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -32,9 +31,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **target 0.2.0 CLI**. The published 0.1.1
-binary predates the provider commands below; build the current source version
-using [the installation guide](docs/install.md#build-from-source) first.
+This walkthrough describes the **0.2.0 CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -105,7 +102,7 @@ documented separately in [client compatibility](docs/client-compatibility.md).
 
 ## Compatibility
 
-The 0.2.0 development line exposes OpenAI Chat Completions and Anthropic
+TideMux 0.2.0 exposes OpenAI Chat Completions and Anthropic
 Messages client APIs simultaneously. Each request selects a named provider with
 `model: "REF/MODEL"`; TideMux uses that provider's configured upstream protocol
 and strips `REF/` before forwarding the model to it. Provider selection is
@@ -113,9 +110,11 @@ independent of the client's protocol, so either client API can reach any
 provider, with conversion only when required. There is no default provider or
 model. When a provider has multiple keys, TideMux may fail over within that key
 group on 401/403 or 429, or on a transport failure before request headers are
-written. It never switches providers, and stops retrying once response content
-may have reached the client. Gateway auth, session limits and ledger accounting
-remain shared.
+written. A 429 indicates rate limiting (and may also reflect an exhausted
+provider quota); TideMux honors `Retry-After` for that key's cooldown. It never
+switches to a different named provider, and stops retrying once response
+content may have reached the client. Gateway auth, session limits and ledger
+accounting remain shared.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
 not certify the 0.2.0 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.
@@ -132,8 +131,8 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.2.0 development CLI;
-published older binaries may expose a different command set.
+`tidemux gateway`. The commands below describe the 0.2.0 CLI; older binaries
+may expose a different command set.
 
 | Command | Semantics |
 | --- | --- |

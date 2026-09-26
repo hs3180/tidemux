@@ -10,7 +10,7 @@ vulnerability details in public issues.
 
 ## Supported versions
 
-Security fixes target the latest published release. Version 0.1.1 supports
+Security fixes target the latest published release. Version 0.2.0 supports
 macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 
 ## Current boundary

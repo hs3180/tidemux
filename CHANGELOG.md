@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 development
+## 0.2.0 — 2026-09-26
 
 - Require clients to select providers explicitly with `REF/MODEL`. Provider
   model selection is an allowlist; when no IDs are selected, all models remain
@@ -14,8 +14,8 @@
   client and provider protocols, preferring a native-protocol route when one is
   available.
 - Add a gateway-wide active-session cap with configurable idle release, plus
-  Keychain-backed provider key groups with round-robin selection and request
-  affinity.
+  Keychain-backed provider key groups with round-robin selection, request
+  affinity and safe pre-stream failover within the selected provider only.
 - Send bounded, localized plain-text daily report summaries to generic,
   Telegram, Discord and Lark webhooks; keep webhook endpoints in Keychain and
   do not upload the HTML report. Record delivery attempts per report and

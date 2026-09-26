@@ -16,7 +16,7 @@ the price snapshot used when they were written.
 
 ## Set a provider price
 
-The 0.2.0 development CLI keeps rates with a provider and model. After adding a
+The 0.2.0 CLI keeps rates with a provider and model. After adding a
 provider and obtaining its reference from `provider list`, set or override its
 price with:
 
@@ -31,9 +31,8 @@ tidemux provider pricing set REF deepseek-flash \
 ```
 
 All three rates are required and are per million tokens. Prices are stored in
-the local provider profile, separately from its budget policy. The published
-0.1.1 CLI predates provider-scoped pricing; these commands describe the current
-source CLI.
+the local provider profile, separately from its budget policy. The 0.1.1 CLI
+predates provider-scoped pricing.
 
 DeepSeek may change prices; update TideMux or use explicit custom rates if the
 official schedule changes. See [accounting](accounting.md) for unknown costs,

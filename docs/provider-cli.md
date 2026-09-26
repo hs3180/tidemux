@@ -1,10 +1,9 @@
 # Provider and gateway setup
 
-The 0.2.0 development CLI uses resource-oriented commands. Provider setup and
+The 0.2.0 CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
-retained. The published 0.1.1 binary predates this command structure; this guide
-describes the current source CLI.
+retained. This guide describes the current release CLI.
 
 ## Add a provider
 
