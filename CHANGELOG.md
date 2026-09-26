@@ -2,17 +2,23 @@
 
 ## 0.2.0 development
 
-- Treat model IDs selected during provider setup or supplied with `--model` as
-  the provider's allowed-model list; use `--default-model` only to set the
-  fallback when a client omits its model.
+- Require clients to select providers explicitly with `REF/MODEL`. Provider
+  model selection is an allowlist; when no IDs are selected, all models remain
+  allowed. There is no default provider or default model.
 - Remove the DeepSeek `--preset` shortcut; use the general `--base-url` and
   `--model` options, which still select verified built-in rates for known models.
-- Expose OpenAI Chat Completions and Anthropic Messages APIs simultaneously to
-  clients and automatically detect the provider protocol from the configured
-  API root/model discovery.
-- Translate requests, responses, tool calls and streaming events in both
-  directions through the single configured `base_url`; remove the separate
-  Anthropic base URL and native `protocol: both` configuration mode.
+- Expose OpenAI Chat Completions and Anthropic Messages APIs simultaneously.
+  Each named provider has one endpoint and protocol; TideMux infers the protocol
+  by default and routes requests using the explicit provider/model reference.
+- Translate supported request, response, tool and streaming fields between the
+  client and provider protocols, preferring a native-protocol route when one is
+  available.
+- Add a gateway-wide active-session cap with configurable idle release, plus
+  Keychain-backed provider key groups with round-robin selection and request
+  affinity.
+- Send bounded, localized plain-text daily report summaries to generic,
+  Telegram, Discord and Lark webhooks; keep webhook endpoints in Keychain and
+  do not upload the HTML report.
 
 ## 0.1.1 — 2026-09-21
 
