@@ -1,4 +1,4 @@
-# Protocol support — 0.2.0 development
+# Protocol support — 0.2.0
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
@@ -12,10 +12,13 @@ provider, and removes only the `REF/` prefix before forwarding.
 Provider selection is independent of the client's API protocol. Either OpenAI
 or Anthropic clients can select any provider; TideMux uses the provider's
 configured upstream protocol and converts request/response semantics only when
-the client and provider protocols differ. Model, authentication, budget, rate
-limit, upstream errors and timeouts never cause an implicit route change or
-retry. Gateway authentication, active-session limits and the local ledger
-remain shared.
+the client and provider protocols differ. Model, budget and timeout failures
+never cause an implicit route change. Authentication failures, rate limits and
+safe pre-header transport failures may retry another key only within the
+explicitly selected provider's key group; 429 cooldowns honor `Retry-After`.
+TideMux never switches to another named provider, and no key retry occurs after
+response bytes may have reached the client. Gateway authentication,
+active-session limits and the local ledger remain shared.
 
 The 0.1.x single-provider configuration remains a migration/compatibility path;
 do not rely on it as a 0.2.0 configuration guarantee.
