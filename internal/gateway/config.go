@@ -50,6 +50,7 @@ type Config struct {
 	LegacyBudget                    *ledger.BudgetPolicy     `json:"budget,omitempty"` // accepted only by the provider-budget migration command
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
+	ReportWebhook                   ReportWebhookConfig      `json:"report_webhook,omitempty"`
 	ModelCapabilities               ModelCapabilities        `json:"model_capabilities,omitempty"`
 	Limits                          adapter.Limits           `json:"limits,omitempty"`
 	ListenAddr                      string                   `json:"listen_addr"`
@@ -69,6 +70,7 @@ type Config struct {
 	Prices                          map[string]adapter.Price `json:"prices,omitempty"`
 	APIKey                          string                   `json:"-"`
 	AccessToken                     string                   `json:"-"`
+	ReportWebhookURL                string                   `json:"-"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -185,6 +187,12 @@ func (c Config) Validate() error {
 	}
 	if err := c.ReportSchedule.Validate(); err != nil {
 		return err
+	}
+	if err := c.ReportWebhook.Validate(); err != nil {
+		return err
+	}
+	if c.ReportSchedule.Channel == "webhook" && c.ReportWebhook == (ReportWebhookConfig{}) {
+		return errors.New("webhook report schedule requires report_webhook configuration")
 	}
 	if err := c.Limits.Validate(); err != nil {
 		return err

@@ -430,4 +430,25 @@ func TestReportScheduleValidation(t *testing.T) {
 	if got := (ReportSchedule{Time: "09:00"}).EffectiveChannel(); got != "macos" {
 		t.Fatalf("default channel=%q", got)
 	}
+	if got := (ReportSchedule{Time: "09:00", Channel: "webhook"}).EffectiveChannel(); got != "webhook" {
+		t.Fatalf("webhook channel=%q", got)
+	}
+	webhook := testConfig("l.db", "https://example.com/v1")
+	webhook.ReportWebhook = ReportWebhookConfig{Provider: "discord", Keychain: KeychainReference{Service: "webhook", Account: "default"}}
+	webhook.ReportSchedule = ReportSchedule{Time: "09:00", Channel: "webhook"}
+	if err := webhook.Validate(); err != nil {
+		t.Fatalf("valid webhook config rejected: %v", err)
+	}
+	without := webhook
+	without.ReportWebhook = ReportWebhookConfig{}
+	if err := without.Validate(); err == nil || !strings.Contains(err.Error(), "requires report_webhook") {
+		t.Fatalf("missing webhook config error=%v", err)
+	}
+	resolved, err := webhook.ResolveCredentials(context.Background(), testSecrets{"test.provider": "provider-private", "test.gateway": "local-private"})
+	if err != nil {
+		t.Fatalf("gateway credentials should not depend on the optional report webhook: %v", err)
+	}
+	if resolved.ReportWebhookURL != "" {
+		t.Fatal("gateway credential resolution loaded the report webhook endpoint")
+	}
 }

@@ -160,7 +160,9 @@ request to select a model.
 On a first guided setup, TideMux also asks whether to schedule a daily local-time
 notification for usage reports. Leave it blank to skip. Set or change this later
 with `tidemux report schedule --time HH:MM`; disable it with
-`tidemux report schedule --disable`.
+`tidemux report schedule --disable`. Report text follows the user's preferred
+system language; English is the fallback, and English, Simplified Chinese, and
+Traditional Chinese are currently supported.
 
 All model IDs are allowed by default. A provider's default model is only the
 fallback for clients that omit a model; it is separate from the optional model
