@@ -42,7 +42,6 @@ common examples:
   tidemux provider list
   tidemux report webhook --provider lark
   tidemux report schedule --time 09:00 --channel webhook
-  tidemux provider manage
   tidemux gateway configure --listen loopback
   tidemux claude --model PROVIDER/deepseek-flash
   tidemux serve --config /path/to/config.json
