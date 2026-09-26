@@ -12,7 +12,7 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
-func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T) {
+func TestIndependentProvidersRouteByQualifiedModelAndDiscoverModels(t *testing.T) {
 	openAICalls, anthropicCalls := 0, 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -63,18 +63,17 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 	c.Providers = map[string]Provider{
 		"openai-main": {
 			Protocol: "openai", BaseURL: providerURL,
-			APIKey: "openai-provider-key",
-			Model:  "openai-only", UpstreamID: "openai-provider",
+			APIKey:           "openai-provider-key",
+			UpstreamID:       "openai-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"},
 		},
 		"anthropic-main": {
 			Protocol: "anthropic", BaseURL: providerURL,
-			APIKey: "anthropic-provider-key",
-			Model:  "anthropic-only", UpstreamID: "anthropic-provider",
+			APIKey:           "anthropic-provider-key",
+			UpstreamID:       "anthropic-provider",
 			UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"},
 		},
 	}
-	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -83,10 +82,9 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 
 	for _, test := range []struct {
 		protocol string
-		want     string
 	}{
-		{protocol: "openai", want: "openai-only"},
-		{protocol: "anthropic", want: "anthropic-only"},
+		{protocol: "openai"},
+		{protocol: "anthropic"},
 	} {
 		t.Run(test.protocol+" model list", func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -98,27 +96,21 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 			}
 			out := httptest.NewRecorder()
 			h.ServeHTTP(out, req)
-			if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), test.want) {
+			if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), "openai-main/openai-only") || !strings.Contains(out.Body.String(), "anthropic-main/anthropic-only") {
 				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
-			}
-			other := "anthropic-only"
-			if test.protocol == "anthropic" {
-				other = "openai-only"
-			}
-			if strings.Contains(out.Body.String(), other) {
-				t.Fatalf("model from other endpoint was advertised: %s", out.Body.String())
 			}
 		})
 	}
 
 	for _, test := range []struct {
 		protocol string
+		provider string
 		model    string
 	}{
-		{protocol: "openai", model: "openai-only"},
-		{protocol: "anthropic", model: "anthropic-only"},
+		{protocol: "openai", provider: "openai-main", model: "openai-only"},
+		{protocol: "anthropic", provider: "anthropic-main", model: "anthropic-only"},
 	} {
-		body := strings.Replace(requestBody(test.protocol), "custom-model", test.model, 1)
+		body := requestBodyFor(test.protocol, test.provider, test.model)
 		path := "/v1/chat/completions"
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer local-secret")
@@ -134,37 +126,27 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 			t.Fatalf("%s request status=%d body=%s", test.protocol, out.Code, out.Body.String())
 		}
 	}
-	for _, protocol := range []string{"openai", "anthropic"} {
-		t.Run(protocol+" provider-specific default model", func(t *testing.T) {
-			body := strings.Replace(requestBody(protocol), `"model":"custom-model",`, "", 1)
-			path := "/v1/chat/completions"
-			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-			req.Header.Set("Authorization", "Bearer local-secret")
-			if protocol == "anthropic" {
-				req = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
-				req.Header.Set("x-api-key", "local-secret")
-				req.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
-			}
-			out := httptest.NewRecorder()
-			h.ServeHTTP(out, req)
-			if out.Code != http.StatusOK {
-				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
-			}
-		})
-	}
-	if openAICalls != 2 || anthropicCalls != 2 {
+	t.Run("unqualified model is rejected", func(t *testing.T) {
+		body := strings.Replace(requestBody("openai"), "legacy/custom-model", "custom-model", 1)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		if out.Code != http.StatusBadRequest || !strings.Contains(out.Body.String(), "model_must_include_provider") {
+			t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+		}
+	})
+	if openAICalls != 1 || anthropicCalls != 1 {
 		t.Fatalf("requests routed openai=%d anthropic=%d", openAICalls, anthropicCalls)
 	}
 
-	// A discovered model catalogue is informational by default. Without an
-	// explicit supported_models allowlist, requests continue to be forwarded to
-	// this protocol's configured provider even when a model is absent from GET /models.
-	wrongModel := strings.Replace(requestBody("openai"), "custom-model", "anthropic-only", 1)
+	// A discovered catalogue is informational unless supported_models is set.
+	wrongModel := requestBodyFor("openai", "openai-main", "not-listed")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(wrongModel))
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
 	h.ServeHTTP(out, req)
-	if out.Code != http.StatusOK || openAICalls != 3 || anthropicCalls != 2 {
+	if out.Code != http.StatusOK || openAICalls != 2 || anthropicCalls != 1 {
 		t.Fatalf("unlisted model status=%d calls=%d/%d body=%s", out.Code, openAICalls, anthropicCalls, out.Body.String())
 	}
 
@@ -184,12 +166,13 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 		modelReq.Header.Set("Authorization", "Bearer local-secret")
 		modelOut := httptest.NewRecorder()
 		scopedHandler.ServeHTTP(modelOut, modelReq)
-		if modelOut.Code != http.StatusOK || !strings.Contains(modelOut.Body.String(), "openai-only") || strings.Contains(modelOut.Body.String(), "anthropic-only") {
+		if modelOut.Code != http.StatusOK || !strings.Contains(modelOut.Body.String(), "openai-main/openai-only") || strings.Contains(modelOut.Body.String(), "openai-main/anthropic-only") || !strings.Contains(modelOut.Body.String(), "anthropic-main/anthropic-only") {
 			t.Fatalf("scoped model list status=%d body=%s", modelOut.Code, modelOut.Body.String())
 		}
 
 		callsBefore := openAICalls
-		denied := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(wrongModel))
+		deniedBody := requestBodyFor("openai", "openai-main", "anthropic-only")
+		denied := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(deniedBody))
 		denied.Header.Set("Authorization", "Bearer local-secret")
 		deniedOut := httptest.NewRecorder()
 		scopedHandler.ServeHTTP(deniedOut, denied)
@@ -199,7 +182,7 @@ func TestIndependentProvidersRouteByClientProtocolAndDiscoverModels(t *testing.T
 	})
 }
 
-func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
+func TestMultipleSameProtocolProvidersRequireExplicitModelRouting(t *testing.T) {
 	providerCalls := map[string]int{"primary": 0, "secondary": 0}
 	providerDiscoveries := map[string]int{"primary": 0, "secondary": 0}
 	newProvider := func(name string) *httptest.Server {
@@ -235,10 +218,9 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 			c.ModelCapabilities = ModelCapabilities{}
 			c.Prices = nil
 			c.Providers = map[string]Provider{
-				"primary":   {Protocol: "openai", BaseURL: primary.URL + "/v1", APIKey: "primary-key", Model: "primary-model", SupportedModels: []string{"primary-model"}, UpstreamID: "primary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "primary"}},
-				"secondary": {Protocol: "openai", BaseURL: secondary.URL + "/v1", APIKey: "secondary-key", Model: "secondary-model", SupportedModels: []string{"secondary-model"}, UpstreamID: "secondary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "secondary"}},
+				"primary":   {Protocol: "openai", BaseURL: primary.URL + "/v1", APIKey: "primary-key", SupportedModels: []string{"primary-model"}, UpstreamID: "primary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "primary"}},
+				"secondary": {Protocol: "openai", BaseURL: secondary.URL + "/v1", APIKey: "secondary-key", SupportedModels: []string{"secondary-model"}, UpstreamID: "secondary", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "secondary"}},
 			}
-			c.DefaultProviders = map[string]string{"openai": selected}
 			h, closeGateway, err := NewHandler(c, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -249,11 +231,11 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 			modelReq.Header.Set("Authorization", "Bearer local-secret")
 			modelOut := httptest.NewRecorder()
 			h.ServeHTTP(modelOut, modelReq)
-			if modelOut.Code != http.StatusOK || !strings.Contains(modelOut.Body.String(), selected+"-model") || strings.Contains(modelOut.Body.String(), otherProviderName(selected)+"-model") {
+			if modelOut.Code != http.StatusOK || !strings.Contains(modelOut.Body.String(), "primary/primary-model") || !strings.Contains(modelOut.Body.String(), "secondary/secondary-model") {
 				t.Fatalf("model route status=%d body=%s", modelOut.Code, modelOut.Body.String())
 			}
 
-			body := strings.Replace(requestBody("openai"), "custom-model", selected+"-model", 1)
+			body := requestBodyFor("openai", selected, selected+"-model")
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 			req.Header.Set("Authorization", "Bearer local-secret")
 			out := httptest.NewRecorder()
@@ -267,11 +249,11 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 			anthropicModels.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
 			anthropicModelsOut := httptest.NewRecorder()
 			h.ServeHTTP(anthropicModelsOut, anthropicModels)
-			if anthropicModelsOut.Code != http.StatusOK || !strings.Contains(anthropicModelsOut.Body.String(), `"type":"model"`) || !strings.Contains(anthropicModelsOut.Body.String(), selected+"-model") || strings.Contains(anthropicModelsOut.Body.String(), otherProviderName(selected)+"-model") {
-				t.Fatalf("fallback model list status=%d body=%s", anthropicModelsOut.Code, anthropicModelsOut.Body.String())
+			if anthropicModelsOut.Code != http.StatusOK || !strings.Contains(anthropicModelsOut.Body.String(), `"type":"model"`) || !strings.Contains(anthropicModelsOut.Body.String(), "primary/primary-model") || !strings.Contains(anthropicModelsOut.Body.String(), "secondary/secondary-model") {
+				t.Fatalf("model list status=%d body=%s", anthropicModelsOut.Code, anthropicModelsOut.Body.String())
 			}
 
-			anthropicBody := strings.Replace(requestBody("anthropic"), "custom-model", selected+"-model", 1)
+			anthropicBody := requestBodyFor("anthropic", selected, selected+"-model")
 			fallback := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(anthropicBody))
 			fallback.Header.Set("x-api-key", "local-secret")
 			fallback.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
@@ -281,7 +263,7 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 				t.Fatalf("cross-protocol fallback status=%d body=%s", fallbackOut.Code, fallbackOut.Body.String())
 			}
 
-			wrongModel := strings.Replace(requestBody("anthropic"), "custom-model", otherProviderName(selected)+"-model", 1)
+			wrongModel := requestBodyFor("anthropic", selected, otherProviderName(selected)+"-model")
 			denied := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(wrongModel))
 			denied.Header.Set("x-api-key", "local-secret")
 			denied.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
@@ -293,7 +275,7 @@ func TestMultipleSameProtocolProvidersUseConfiguredDefault(t *testing.T) {
 			}
 		})
 	}
-	if providerCalls["primary"] != 2 || providerCalls["secondary"] != 2 || providerDiscoveries["primary"] != 1 || providerDiscoveries["secondary"] != 1 {
+	if providerCalls["primary"] != 2 || providerCalls["secondary"] != 2 || providerDiscoveries["primary"] != 2 || providerDiscoveries["secondary"] != 2 {
 		t.Fatalf("selected provider calls=%v discoveries=%v", providerCalls, providerDiscoveries)
 	}
 }
@@ -305,7 +287,7 @@ func otherProviderName(name string) string {
 	return "primary"
 }
 
-func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
+func TestSingleLegacyProviderRequiresQualifiedModelAcrossClientProtocols(t *testing.T) {
 	var providerPath, providerAuth, providerBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -345,7 +327,7 @@ func TestSingleProviderFallsBackAcrossClientProtocols(t *testing.T) {
 	}
 }
 
-func TestNamedProviderCrossProtocolFallbackUsesClientProtocolAndProviderIdentity(t *testing.T) {
+func TestNamedProviderQualifiedModelRoutesAcrossClientProtocols(t *testing.T) {
 	for _, test := range []struct {
 		providerProtocol string
 		clientProtocol   string
@@ -356,7 +338,7 @@ func TestNamedProviderCrossProtocolFallbackUsesClientProtocolAndProviderIdentity
 		{providerProtocol: "anthropic", clientProtocol: "openai", providerPath: "/shared/v1/messages", providerID: "named-anthropic"},
 	} {
 		t.Run(test.providerProtocol+"-provider/"+test.clientProtocol+"-client", func(t *testing.T) {
-			const model = "provider-model"
+			const model = "stealth/union-alpha"
 			const providerKey = "provider-key"
 			const sessionID = "client-session"
 			calls := 0
@@ -366,12 +348,12 @@ func TestNamedProviderCrossProtocolFallbackUsesClientProtocolAndProviderIdentity
 						if r.Header.Get("Authorization") != "Bearer "+providerKey {
 							t.Errorf("OpenAI discovery auth=%q", r.Header.Get("Authorization"))
 						}
-						_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"provider-model","object":"model"}]}`)
+						_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"stealth/union-alpha","object":"model"}]}`)
 					} else {
 						if r.Header.Get("x-api-key") != providerKey {
 							t.Errorf("Anthropic discovery key=%q", r.Header.Get("x-api-key"))
 						}
-						_, _ = io.WriteString(w, `{"data":[{"id":"provider-model","type":"model"}],"has_more":false}`)
+						_, _ = io.WriteString(w, `{"data":[{"id":"stealth/union-alpha","type":"model"}],"has_more":false}`)
 					}
 					return
 				}
@@ -385,7 +367,10 @@ func TestNamedProviderCrossProtocolFallbackUsesClientProtocolAndProviderIdentity
 				if test.providerProtocol == "anthropic" && (r.Header.Get("x-api-key") != providerKey || r.Header.Get("anthropic-version") != defaultAnthropicAPIVersion) {
 					t.Errorf("Anthropic completion auth key=%q version=%q", r.Header.Get("x-api-key"), r.Header.Get("anthropic-version"))
 				}
-				_, _ = io.Copy(io.Discard, r.Body)
+				providerBody, _ := io.ReadAll(r.Body)
+				if !strings.Contains(string(providerBody), `"model":"stealth/union-alpha"`) || strings.Contains(string(providerBody), "openrouter/stealth/union-alpha") {
+					t.Errorf("provider model was not stripped from qualified ID: %s", providerBody)
+				}
 				_, _ = io.WriteString(w, responseBody(test.providerProtocol))
 			}))
 			defer upstream.Close()
@@ -393,12 +378,11 @@ func TestNamedProviderCrossProtocolFallbackUsesClientProtocolAndProviderIdentity
 			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/shared/v1")
 			c.Protocol = test.providerProtocol
 			c.APIKey = providerKey
-			c.Model = model
 			c.UpstreamID = test.providerID
-			c = namedProviderConfig(c, "chosen")
-			provider := c.Providers["chosen"]
+			c = namedProviderConfig(c, "openrouter")
+			provider := c.Providers["openrouter"]
 			provider.SupportedModels = []string{model}
-			c.Providers["chosen"] = provider
+			c.Providers["openrouter"] = provider
 			h, closeGateway, err := NewHandler(c, upstream.Client())
 			if err != nil {
 				t.Fatal(err)
@@ -421,7 +405,7 @@ func TestNamedProviderCrossProtocolFallbackUsesClientProtocolAndProviderIdentity
 				t.Fatalf("model list did not use client shape: %s", modelsOut.Body.String())
 			}
 
-			body := strings.Replace(requestBody(test.clientProtocol), "custom-model", model, 1)
+			body := requestBodyFor(test.clientProtocol, "openrouter", model)
 			path := "/v1/chat/completions"
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 			if test.clientProtocol == "openai" {
@@ -500,10 +484,9 @@ func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
 	c.ModelCapabilities = ModelCapabilities{}
 	c.Prices = nil
 	c.Providers = map[string]Provider{
-		"openai-main":    {Protocol: "openai", BaseURL: providerURL, APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-		"anthropic-main": {Protocol: "anthropic", BaseURL: providerURL, APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+		"openai-main":    {Protocol: "openai", BaseURL: providerURL, APIKey: "openai-provider-key", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic-main": {Protocol: "anthropic", BaseURL: providerURL, APIKey: "anthropic-provider-key", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 	}
-	c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -518,7 +501,11 @@ func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
 		{protocol: "anthropic", want: anthropicStream},
 	} {
 		t.Run(test.protocol, func(t *testing.T) {
-			body := strings.TrimSuffix(requestBody(test.protocol), "}") + `,"stream":true}`
+			providerName := "openai-main"
+			if test.protocol == "anthropic" {
+				providerName = "anthropic-main"
+			}
+			body := strings.TrimSuffix(requestBodyFor(test.protocol, providerName, "custom-model"), "}") + `,"stream":true}`
 			path := "/v1/chat/completions"
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 			req.Header.Set("Authorization", "Bearer local-secret")
@@ -581,21 +568,25 @@ func TestIndependentProviderFailureDoesNotRetryOtherProvider(t *testing.T) {
 			c.ModelCapabilities = ModelCapabilities{}
 			c.Prices = nil
 			c.Providers = map[string]Provider{
-				"openai-main":    {Protocol: "openai", BaseURL: providerURL, APIKey: "openai-provider-key", Model: "custom-model", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
-				"anthropic-main": {Protocol: "anthropic", BaseURL: providerURL, APIKey: "anthropic-provider-key", Model: "custom-model", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+				"openai-main":    {Protocol: "openai", BaseURL: providerURL, APIKey: "openai-provider-key", UpstreamID: "openai-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+				"anthropic-main": {Protocol: "anthropic", BaseURL: providerURL, APIKey: "anthropic-provider-key", UpstreamID: "anthropic-provider", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
 			}
-			c.DefaultProviders = map[string]string{"openai": "openai-main", "anthropic": "anthropic-main"}
 			h, closeGateway, err := NewHandler(c, upstream.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer closeGateway()
 
+			providerName := "openai-main"
+			if failedProtocol == "anthropic" {
+				providerName = "anthropic-main"
+			}
 			path := "/v1/chat/completions"
-			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(requestBody(failedProtocol)))
+			body := requestBodyFor(failedProtocol, providerName, "custom-model")
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 			req.Header.Set("Authorization", "Bearer local-secret")
 			if failedProtocol == "anthropic" {
-				req = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody(failedProtocol)))
+				req = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 				req.Header.Set("x-api-key", "local-secret")
 				req.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
 			}

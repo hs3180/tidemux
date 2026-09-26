@@ -24,11 +24,10 @@ func TestAppendProviderKeyMigratesSingleReferenceAndKeepsSecretsOutOfConfig(t *t
 		AccessTokenKeychain: accessRef,
 		Providers: map[string]gateway.Provider{
 			"main": {
-				Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "main",
+				Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamID: "main",
 				UpstreamKeychain: providerRef,
 			},
 		},
-		DefaultProviders: map[string]string{"openai": "main"},
 	}
 	if err := writeCommandConfig(path, c, nil); err != nil {
 		t.Fatal(err)
@@ -84,14 +83,13 @@ func TestProviderKeyListRedactsKeychainDetails(t *testing.T) {
 		AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"},
 		Providers: map[string]gateway.Provider{
 			"main": {
-				Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "main",
+				Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamID: "main",
 				UpstreamKeychains: []gateway.KeychainReference{
 					{Service: "private-service", Account: "private-account-one"},
 					{Service: "private-service", Account: "private-account-two"},
 				},
 			},
 		},
-		DefaultProviders: map[string]string{"openai": "main"},
 	}
 	if err := writeCommandConfig(path, c, nil); err != nil {
 		t.Fatal(err)
@@ -136,11 +134,10 @@ func TestRemoveProviderKeyPreservesOneKeyAndDeletesOnlyItsReference(t *testing.T
 		AccessTokenKeychain: access,
 		Providers: map[string]gateway.Provider{
 			"main": {
-				Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "main",
+				Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamID: "main",
 				UpstreamKeychains: []gateway.KeychainReference{first, second},
 			},
 		},
-		DefaultProviders: map[string]string{"openai": "main"},
 	}
 	if err := writeCommandConfig(path, c, nil); err != nil {
 		t.Fatal(err)

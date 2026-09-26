@@ -27,7 +27,6 @@ type Provider struct {
 	UpstreamKeychain  KeychainReference        `json:"upstream_keychain,omitempty,omitzero"` // legacy one-key form
 	UpstreamKeychains []KeychainReference      `json:"upstream_keychains,omitempty"`
 	APIVersion        string                   `json:"anthropic_version,omitempty"`
-	Model             string                   `json:"model"`
 	SupportedModels   []string                 `json:"supported_models,omitempty"`
 	UpstreamID        string                   `json:"upstream_id,omitempty"`
 	ModelCapabilities ModelCapabilities        `json:"model_capabilities,omitempty"`
@@ -96,8 +95,7 @@ type Config struct {
 	Protocol                        string                   `json:"protocol,omitempty"` // resolved provider protocol; empty/auto means detect; legacy values remain supported
 	BaseURL                         string                   `json:"base_url,omitempty"`
 	Providers                       map[string]Provider      `json:"providers,omitempty"`
-	DefaultProviders                map[string]string        `json:"default_providers,omitempty"`
-	Model                           string                   `json:"model,omitempty"`
+	Model                           string                   `json:"model,omitempty"` // deprecated field decoded from old single-provider configs; never used for routing
 	UpstreamID                      string                   `json:"upstream_id,omitempty"`
 	APIVersion                      string                   `json:"anthropic_version,omitempty"`
 	UpstreamKeychain                KeychainReference        `json:"upstream_keychain,omitempty"`
@@ -248,9 +246,6 @@ func (c Config) Validate() error {
 		return err
 	}
 	if len(c.Providers) == 0 {
-		if len(c.DefaultProviders) != 0 {
-			return errors.New("default_providers requires named providers")
-		}
 		if c.BaseURL == "" {
 			if c.Protocol != "" || c.APIVersion != "" || !credentialReferenceEmpty(c.UpstreamKeychain) || c.Model != "" || c.UpstreamID != "" || c.ModelCapabilities != (ModelCapabilities{}) || len(c.Prices) != 0 || c.APIKey != "" {
 				return errors.New("incomplete legacy provider configuration")
@@ -272,8 +267,8 @@ func (c Config) Validate() error {
 					return errors.New("anthropic_version must be YYYY-MM-DD")
 				}
 			}
-			if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.UpstreamID) == "" {
-				return errors.New("model and upstream_id are required")
+			if strings.TrimSpace(c.UpstreamID) == "" {
+				return errors.New("upstream_id is required")
 			}
 		}
 	} else {
@@ -283,9 +278,6 @@ func (c Config) Validate() error {
 		if len(c.Providers) > 128 {
 			return errors.New("providers may contain at most 128 named entries")
 		}
-		availableProtocols := make(map[string]bool, 2)
-		protocolCounts := make(map[string]int, 2)
-		hasAutoProvider := false
 		for name, provider := range c.Providers {
 			if !validProviderName(name) {
 				return errors.New("provider names must be short non-secret labels using letters, numbers, dots, underscores or hyphens")
@@ -293,10 +285,7 @@ func (c Config) Validate() error {
 			protocol := normalizeProviderProtocol(provider.Protocol)
 			switch protocol {
 			case "", "auto":
-				hasAutoProvider = true
 			case "openai", "anthropic":
-				availableProtocols[protocol] = true
-				protocolCounts[protocol]++
 			default:
 				return errors.New("providers." + name + ".protocol must be auto, openai or anthropic")
 			}
@@ -305,9 +294,6 @@ func (c Config) Validate() error {
 			}
 			if _, err := provider.KeychainReferences(); err != nil {
 				return errors.New("providers." + name + "." + err.Error())
-			}
-			if strings.TrimSpace(provider.Model) == "" {
-				return errors.New("providers." + name + ".model is required")
 			}
 			seenModels := make(map[string]struct{}, len(provider.SupportedModels))
 			for _, model := range provider.SupportedModels {
@@ -318,9 +304,6 @@ func (c Config) Validate() error {
 					return errors.New("providers." + name + ".supported_models must not contain duplicate model IDs")
 				}
 				seenModels[model] = struct{}{}
-			}
-			if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, provider.Model) {
-				return errors.New("providers." + name + ".model must be included in supported_models")
 			}
 			if protocol == "openai" && provider.APIVersion != "" {
 				return errors.New("anthropic_version is valid only for the anthropic endpoint")
@@ -340,34 +323,6 @@ func (c Config) Validate() error {
 				if err := provider.Budget.Validate(); err != nil {
 					return errors.New("providers." + name + ".budget: " + err.Error())
 				}
-				price, ok := provider.Prices[provider.Model]
-				if !ok {
-					price, ok = adapter.BuiltInPrice(provider.BaseURL, provider.Model, time.Now())
-				}
-				if !ok {
-					return errors.New("providers." + name + ".budget requires pricing for its default model")
-				}
-				if price.Currency != provider.Budget.Currency {
-					return errors.New("providers." + name + ".budget currency must match the provider model pricing currency")
-				}
-			}
-		}
-		for protocol, name := range c.DefaultProviders {
-			if protocol != "openai" && protocol != "anthropic" {
-				return errors.New("default_providers keys must be openai or anthropic")
-			}
-			provider, ok := c.Providers[name]
-			if !ok {
-				return errors.New("default_providers." + protocol + " must reference a configured provider name")
-			}
-			providerProtocol := normalizeProviderProtocol(provider.Protocol)
-			if providerProtocol != "" && providerProtocol != "auto" && providerProtocol != protocol {
-				return errors.New("default_providers." + protocol + " must reference a provider with the same protocol")
-			}
-		}
-		for protocol := range availableProtocols {
-			if _, ok := c.DefaultProviders[protocol]; !ok && protocolCounts[protocol] > 1 && !hasAutoProvider {
-				return errors.New("default_providers must select a default for the " + protocol + " protocol")
 			}
 		}
 	}

@@ -239,11 +239,12 @@ measurements have been recorded.
 An optional `providers.<ref>.budget` policy applies only to that provider. A
 provider's budgeted usage is isolated from other providers, even when they use
 the same currency; TideMux does not convert currencies. A matching configured
-price for that provider's default model is required. DeepSeek's peak built-in
-and custom rates are stored alongside provider pricing; the budget only sets
-limits. Configure prices with `tidemux provider pricing` and limits with
-`tidemux provider budget REF`. If pricing is absent or uses another currency,
-TideMux refuses to start and never sends an upstream request. Budget windows
+price is required for each requested model while that provider's budget is
+enabled. DeepSeek's peak built-in and custom rates are stored alongside
+provider pricing; the budget only sets limits. Configure prices with
+`tidemux provider pricing` and limits with `tidemux provider budget REF`. If
+pricing is absent or uses another currency, TideMux rejects that request before
+sending it upstream. Budget windows
 are rolling five-hour and seven-day periods.
 
 ```json

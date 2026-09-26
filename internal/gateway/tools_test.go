@@ -56,7 +56,7 @@ func TestToolConversationThroughGateway(t *testing.T) {
 			}
 			defer closeDB()
 			var input map[string]any
-			json.Unmarshal([]byte(requestBody("openai")), &input)
+			json.Unmarshal([]byte(requestBodyFor("openai", protocol+"-main", "custom-model")), &input)
 			for turn := 0; turn < 2; turn++ {
 				body, _ := json.Marshal(input)
 				req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(string(body)))
@@ -120,8 +120,8 @@ func TestAnthropicToolContinuationThroughOpenAIProvider(t *testing.T) {
 	defer closeDB()
 
 	bodies := []string{
-		`{"model":"custom-model","max_tokens":32,"messages":[{"role":"user","content":"look up item 1"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
-		`{"model":"custom-model","max_tokens":32,"messages":[{"role":"user","content":"look up item 1"},{"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"lookup","input":{"id":"1"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":"fixture-result"}]}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
+		`{"model":"legacy/custom-model","max_tokens":32,"messages":[{"role":"user","content":"look up item 1"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
+		`{"model":"legacy/custom-model","max_tokens":32,"messages":[{"role":"user","content":"look up item 1"},{"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"lookup","input":{"id":"1"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":"fixture-result"}]}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
 	}
 	for turn, body := range bodies {
 		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))

@@ -123,7 +123,7 @@ func TestAnthropicClientStreamingWithOpenAIProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeDB()
-	body := strings.TrimSuffix(requestBody("anthropic"), "}") + `,"stream":true}`
+	body := strings.TrimSuffix(requestBodyFor("anthropic", "openai-main", "custom-model"), "}") + `,"stream":true}`
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
 	req.Header.Set("x-api-key", "local-secret")
 	out := httptest.NewRecorder()
@@ -172,7 +172,7 @@ func TestOpenAIClientStreamingFallsBackToNamedAnthropicProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeDB()
-	body := strings.TrimSuffix(requestBody("openai"), "}") + `,"stream":true}`
+	body := strings.TrimSuffix(requestBodyFor("openai", "anthropic-main", "custom-model"), "}") + `,"stream":true}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
@@ -202,7 +202,7 @@ func TestOpenAIClientStreamingWithLegacyAnthropicProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeDB()
-	body := `{"model":"custom-model","messages":[{"role":"user","content":"hello"}],"stream":true}`
+	body := `{"model":"legacy/custom-model","messages":[{"role":"user","content":"hello"}],"stream":true}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
@@ -226,7 +226,7 @@ func TestStreamingTranslationErrorKeepsFieldPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeDB()
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"custom-model","messages":[{"role":"user","content":"hello"}],"stream":true}`))
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"legacy/custom-model","messages":[{"role":"user","content":"hello"}],"stream":true}`))
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
 	h.ServeHTTP(out, req)
@@ -254,7 +254,7 @@ func TestStreamingCancellationRetainsConcurrencyUntilClose(t *testing.T) {
 	gate := httptest.NewServer(h)
 	defer gate.Close()
 	makeReq := func(ctx context.Context) *http.Request {
-		req, _ := http.NewRequestWithContext(ctx, "POST", gate.URL+endpoint("openai"), strings.NewReader(`{"messages":[{"role":"user","content":"hello"}],"stream":true}`))
+		req, _ := http.NewRequestWithContext(ctx, "POST", gate.URL+endpoint("openai"), strings.NewReader(`{"model":"legacy/custom-model","messages":[{"role":"user","content":"hello"}],"stream":true}`))
 		req.Header.Set("Authorization", "Bearer local-secret")
 		return req
 	}

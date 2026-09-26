@@ -154,11 +154,11 @@ func TestProviderAdditionWritesReferencesAndRollsBack(t *testing.T) {
 		t.Run(map[bool]string{false: "success", true: "validation failure"}[failValidation], func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.json")
-			provider := gateway.Provider{Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "test-model", UpstreamID: "test"}
+			provider := gateway.Provider{Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamID: "test"}
 			if failValidation {
-				provider.Model = ""
+				provider.BaseURL = ""
 			}
-			c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), Providers: map[string]gateway.Provider{"test": provider}, DefaultProviders: map[string]string{"openai": "test"}}
+			c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), Providers: map[string]gateway.Provider{"test": provider}}
 			store := &memorySecrets{values: map[string]string{}}
 			err := persistProviderAddition(path, c, nil, "test", "provider-secret", store)
 			if failValidation {
@@ -204,7 +204,7 @@ func TestProviderAdditionRejectsGatewayCredentialReuse(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	accessRef := gateway.KeychainReference{Service: "gateway", Account: "local"}
 	store := &memorySecrets{values: map[string]string{"gateway/local": "shared-secret"}}
-	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: accessRef, Providers: map[string]gateway.Provider{"test": {Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "test"}}, DefaultProviders: map[string]string{"openai": "test"}}
+	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: accessRef, Providers: map[string]gateway.Provider{"test": {Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamID: "test"}}}
 	if err := persistProviderAddition(path, c, nil, "test", "shared-secret", store); err == nil {
 		t.Fatal("same provider and gateway secret was accepted")
 	}
@@ -245,7 +245,7 @@ func TestLegacyProviderMigrationPreservesGatewaySettings(t *testing.T) {
 	if got.BaseURL != "" || got.MaxInFlight != 5 || got.MaxActiveSessions != 12 || got.ActiveSessionIdleTimeoutSeconds != 120 || got.LedgerPath != c.LedgerPath {
 		t.Fatalf("migration lost settings: %+v", got)
 	}
-	if len(got.Providers) != 1 || got.Providers["provider"].UpstreamKeychain != c.UpstreamKeychain || got.DefaultProviders["openai"] != "provider" {
+	if len(got.Providers) != 1 || got.Providers["provider"].UpstreamKeychain != c.UpstreamKeychain || got.Providers["provider"].BaseURL != c.BaseURL {
 		t.Fatalf("migration lost provider: %+v", got)
 	}
 	if err := got.Validate(); err != nil {
@@ -256,7 +256,7 @@ func TestLegacyProviderMigrationPreservesGatewaySettings(t *testing.T) {
 func TestProviderModelScopeAndPricingCommands(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"p": {Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "p", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "p"}}}, DefaultProviders: map[string]string{"openai": "p"}}
+	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"p": {Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamID: "p", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "p"}}}}
 	if err := writeCommandConfig(path, c, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestProviderModelScopeAndPricingCommands(t *testing.T) {
 func TestGatewayConfigureChangesOnlyGatewaySettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"p": {Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "p", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "p"}}}, DefaultProviders: map[string]string{"openai": "p"}}
+	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"p": {Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamID: "p", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "p"}}}}
 	if err := writeCommandConfig(path, c, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestGatewayConfigureChangesOnlyGatewaySettings(t *testing.T) {
 	if updated.ListenAddr != defaultListenAddr || updated.MaxInFlight != 4 || updated.MaxActiveSessions != 12 || updated.ActiveSessionIdleTimeoutSeconds != 180 {
 		t.Fatalf("gateway settings=%+v", updated)
 	}
-	if updated.Providers["p"].BaseURL != c.Providers["p"].BaseURL || updated.DefaultProviders["openai"] != "p" {
+	if updated.Providers["p"].BaseURL != c.Providers["p"].BaseURL {
 		t.Fatal("gateway configure changed provider settings")
 	}
 }

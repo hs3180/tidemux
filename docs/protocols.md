@@ -1,27 +1,21 @@
 # Protocol support — 0.2.0 development
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
-`/v1/chat/completions`; Anthropic clients use `/v1/messages`. Named profiles
-are keyed by provider name and each has one inferred or explicitly selected
-`protocol`, its own `base_url`,
-Keychain reference, default model, billing identity, model limits and prices.
-`default_providers` maps each client protocol to the named provider that serves
-it. An explicit default must use that same protocol. Multiple named providers
-may use the same protocol; only the selected default receives requests. In the
-target `provider add` flow, the first provider added for a protocol is recorded
-as its default, and adding another provider does not replace it. A hand-written
-configuration with multiple providers for one protocol and no default must
-specify one explicitly. Gateway authentication, active-session limits and the
-local ledger remain shared.
+`/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
+provider has one inferred or explicitly selected upstream `protocol`, its own
+`base_url`, Keychain reference, model limits and prices. There is no default
+provider or model. Every request selects a provider through its model ID:
+`REF/MODEL_ID`, where `REF` is the provider reference and `MODEL_ID` is the
+upstream model name. The gateway splits at the first slash, routes to that
+provider, and removes only the `REF/` prefix before forwarding.
 
-For each client protocol, TideMux first uses that protocol's configured default.
-If it is absent, TideMux uses the other protocol's configured default and
-converts the request and response. If neither route exists, the endpoint returns
-`provider_not_configured`. This is route selection, not failover: TideMux does
-not switch providers based on model support, authentication, billing, rate
-limits, upstream errors or timeouts. A model rejected by the selected provider
-does not cause a retry against another provider. Configured defaults remain
-same-protocol; the cross-protocol route is computed at runtime.
+Provider selection is independent of the client's API protocol. Either OpenAI
+or Anthropic clients can select any provider; TideMux uses the provider's
+configured upstream protocol and converts request/response semantics only when
+the client and provider protocols differ. Model, authentication, budget, rate
+limit, upstream errors and timeouts never cause an implicit route change or
+retry. Gateway authentication, active-session limits and the local ledger
+remain shared.
 
 The 0.1.x single-provider configuration remains a migration/compatibility path;
 do not rely on it as a 0.2.0 configuration guarantee.
@@ -45,25 +39,25 @@ detection behavior belongs to the 0.1.x compatibility path only.
 | Upstream credential | Bearer key | `x-api-key` |
 | Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
 | Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
-| Matching client protocol | Native route is preferred | Native route is preferred |
-| Non-matching client protocol | Used only if the client's native route is absent; conversion applies | Used only if the client's native route is absent; conversion applies |
+| OpenAI client | Selected explicitly by `model: "REF/MODEL_ID"`; native when provider is OpenAI | Selected explicitly by `model: "REF/MODEL_ID"`; conversion applies |
+| Anthropic client | Selected explicitly by `model: "REF/MODEL_ID"`; conversion applies | Selected explicitly by `model: "REF/MODEL_ID"`; native when provider is Anthropic |
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
-The client endpoints are independent of provider registration. Each named
-provider's `GET /models` response is used for whichever client route resolves to
-that provider when it is a complete, recognized model list; the gateway returns
-the catalogue in the requesting client's protocol shape.
-By default that catalogue is informational: any model ID is forwarded to the
-selected provider. Setting the provider's optional `supported_models` list
-restricts completion requests and the gateway's model listing to that subset.
-If a provider does not expose a complete recognizable list, its route returns
-an empty model catalogue unless an explicit allowlist is configured; direct
+The gateway's `GET /models` response combines available provider catalogs and
+returns qualified `REF/MODEL_ID` values in the requesting client's protocol
+shape. When a provider exposes a complete, recognized model list, those IDs
+appear with the provider reference prefixed. By default the catalog is
+informational: a qualified model ID is forwarded to the selected provider.
+Setting a provider's optional `supported_models` list restricts requests and
+the catalog to that provider's upstream model IDs (without the `REF/` prefix).
+If a provider does not expose a complete recognizable list, it contributes an
+empty catalog unless an explicit allowlist is configured; direct qualified
 requests are still sent to that provider.
 
-The adapter provides cross-protocol conversion for both named-provider fallback
-and the single-provider compatibility configuration. A same-protocol request
-uses its native route and is not round-tripped through the converter.
+The adapter provides cross-protocol conversion for named providers and the
+single-provider compatibility configuration. A same-protocol request uses its
+native route and is not round-tripped through the converter.
 
 Cross-protocol conversion covers supported text/system messages, tools and
 tool results, token limits, stop conditions, JSON-schema output where an

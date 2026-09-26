@@ -130,12 +130,13 @@ else:sys.exit(2)
             assert status == 0, "provider add failed with synthetic Keychain"
             assert unlocked == (mode == "success"), "unnecessary or missing unlock prompt"
             assert endpoint_sent and key_sent and schedule_sent, "missing guided setup prompt"
+            assert b"Select a model as local-provider/MODEL" in captured, "missing explicit provider/model guidance"
             contents = config.read_text()
             assert secret.decode() not in contents
             c = json.loads(contents)
             p = c["providers"]["local-provider"]
-            assert p["model"] == "deepseek-flash" and p["base_url"] == endpoint
-            assert p["protocol"] == "openai" and c["default_providers"]["openai"] == "local-provider"
+            assert "model" not in p and p["base_url"] == endpoint
+            assert p["protocol"] == "openai" and "default_providers" not in c
             if mode == "success":
                 assert c["report_schedule"] == {"time": "08:30", "channel": "macos"}
             else:

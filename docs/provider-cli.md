@@ -14,27 +14,26 @@ Guided setup starts by asking for an API Base URL:
 tidemux provider add
 ```
 
-TideMux reads the API key through hidden terminal input, infers the upstream
-protocol from the endpoint or authenticated `GET /models`, and selects the
-only discovered model automatically. If several models are returned, it asks
-which one clients should use when they omit a model. If protocol or model
-discovery is unavailable, it asks only for the missing information. Setup
-never sends a completion request. The first guided setup also asks whether to
-schedule a daily usage-report notification in local time; leave it blank to
-skip.
+TideMux reads the API key through hidden terminal input and infers the upstream
+protocol from the endpoint or authenticated `GET /models`. Model discovery is
+informational; setup never chooses a default model and never sends a completion
+request. Every request must identify its provider and model explicitly. The
+first guided setup also asks whether to schedule a daily usage-report
+notification in local time; leave it blank to skip.
 
 For direct setup, supply the endpoint and any known choices:
 
 ```sh
-tidemux provider add https://api.deepseek.com \
-  --model deepseek-flash
+tidemux provider add https://api.deepseek.com
 ```
 
 The API key is still prompted securely. The provider reference is inferred from
 the endpoint; use `--name LABEL` only when you want a different reference. If
 the endpoint does not identify the protocol, `--protocol openai` or
-`--protocol anthropic` forces it. `--model` is the fallback for clients that
-omit a model; all models are allowed unless an allowlist is set separately.
+`--protocol anthropic` forces it. All models are allowed unless an allowlist is
+set separately; provider add does not configure a default model. Use
+`tidemux provider list` to get the provider reference, then select a model with
+`REF/MODEL_ID` in the client or with the launcher's required `--model` option.
 
 Provider credentials are stored in macOS Keychain, never in command arguments
 or configuration JSON. Existing 0.1.x single-provider configurations are
@@ -46,7 +45,7 @@ changes are validated and atomically installed.
 ## Add API keys to a provider
 
 A named provider profile is also its API-key group: all keys in the group share
-one endpoint, protocol, default model, model scope and budget. The initial
+one endpoint, protocol, model scope and budget. The initial
 `provider add` flow creates the first key. Add or inspect additional keys with:
 
 ```sh
@@ -74,8 +73,6 @@ multi-key group.
 ```sh
 tidemux provider list
 tidemux provider show REF
-tidemux provider update REF --model MODEL_ID
-tidemux provider default openai REF
 tidemux provider models REF
 tidemux provider models REF --only model-a,model-b
 tidemux provider models REF --all
@@ -83,7 +80,7 @@ tidemux provider remove REF
 ```
 
 `list` and `show` never display credentials. `update` changes only the named
-fields: `--endpoint URL`, `--protocol openai|anthropic`, `--model ID`,
+fields: `--endpoint URL`, `--protocol openai|anthropic`,
 `--anthropic-version DATE` (Anthropic only), and `--rotate-key`. Updating
 credentials requires hidden terminal input. Changing
 an endpoint re-evaluates its protocol by default using the stored key; combine
@@ -91,22 +88,22 @@ an endpoint re-evaluates its protocol by default using the stored key; combine
 to force a wire format. Changing an endpoint clears any model allowlist,
 restoring the default all-models scope.
 
-The first provider added for a protocol becomes its default. Later additions
-do not silently change the route. A client first uses the default matching its
-protocol; if none is configured, it uses the other protocol's default through
-conversion. This is not error-based failover. `provider default` explicitly
-chooses a same-protocol default. Removal asks for confirmation. If
-the removed provider is a protocol default and alternatives remain, choose a
-replacement or pass `--default REF`; non-interactive removal requires `--yes`.
-Removing the last provider clears that protocol route. The gateway cannot serve
-requests until another provider is added. A Keychain item is removed only when
-no remaining provider references it.
+Every request explicitly selects a provider using the model ID
+`REF/MODEL_ID`; `REF` is the stable reference shown by `provider list`, and
+`MODEL_ID` is the upstream model name (which may itself contain slashes). The
+client protocol does not choose a provider. TideMux strips only the first
+`REF/` prefix before forwarding the request. Either client protocol can target
+any provider; cross-protocol conversion is applied when needed. Provider
+failures do not trigger a retry on another provider. Removal asks for
+confirmation; non-interactive removal requires `--yes`. A Keychain item is
+removed only when no remaining provider references it.
 
 With no scope option, `provider models` queries and prints the authenticated
-model catalog when the endpoint exposes a complete, recognizable list. `--only`
-sets an allowlist and must include the configured default model; `--all` clears
-the allowlist. An unavailable model catalog does not restrict requests unless
-an explicit allowlist is configured.
+model catalog when the endpoint exposes a complete, recognizable list. Use
+those upstream model IDs as the suffix in `REF/MODEL_ID`; `/v1/models` exposes
+the same IDs with the provider reference included. `--only` sets an allowlist
+of upstream model IDs; `--all` clears the allowlist. An unavailable model
+catalog does not restrict requests unless an explicit allowlist is configured.
 
 ## Provider pricing
 
@@ -127,9 +124,9 @@ tidemux provider pricing remove REF MODEL_ID
 All three rate flags are required when setting a price. Currency defaults to
 USD; source and version identify the rate reference. A matching built-in rate
 may be used when no explicit rate exists. Unknown prices remain unknown rather
-than guessed. An enabled budget requires a matching price for that provider's
-default model and for each model used while that budget is active. Unpriced
-models remain usable when the provider has no budget.
+than guessed. An enabled budget requires a matching price for each requested
+model while that budget is active. Unpriced models remain usable when the
+provider has no budget.
 
 ## Provider budget
 
@@ -146,9 +143,9 @@ tidemux provider budget REF --disable
 When exactly one provider is configured, `REF` may be omitted. With multiple
 providers it is required. Modes are `alert`, `soft` and `hard`; a zero limit
 disables that window, and setting both limits to zero disables the budget. An
-enabled budget requires a price whose currency matches
-the budget currency for the provider's default model. Other providers' usage
-does not count against this provider's limits.
+enabled budget requires a price whose currency matches the budget currency for
+every model used while that budget is active. Other providers' usage does not
+count against this provider's limits.
 
 If a profile still has the former gateway-wide budget, the first
 `provider budget REF` operation moves it to the selected provider. Existing

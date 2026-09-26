@@ -46,10 +46,9 @@ func resolveProviderProtocol(c Config, httpClient *http.Client) (string, string,
 	return detected, apiVersion, nil
 }
 
-// resolveProviders returns named profiles plus the selected profile for each
-// client protocol. Legacy configurations keep their historical single-profile
-// protocol detection and translation behavior.
-func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, map[string]string, error) {
+// resolveProviders returns named profiles. Requests select a profile through
+// their explicit provider/model ID rather than a protocol-level default.
+func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, error) {
 	if len(c.Providers) != 0 {
 		resolved := make(map[string]Provider, len(c.Providers))
 		for name, provider := range c.Providers {
@@ -61,7 +60,7 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, m
 				var err error
 				protocol, err = detectProviderProtocol(context.Background(), provider.BaseURL, provider.APIKey, provider.APIVersion, httpClient)
 				if err != nil {
-					return nil, nil, errors.New("cannot determine protocol for providers." + name + ": " + err.Error())
+					return nil, errors.New("cannot determine protocol for providers." + name + ": " + err.Error())
 				}
 			}
 			provider.Protocol = protocol
@@ -70,29 +69,25 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, m
 					provider.APIVersion = defaultAnthropicAPIVersion
 				}
 				if _, err := time.Parse("2006-01-02", provider.APIVersion); err != nil {
-					return nil, nil, errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
+					return nil, errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
 				}
 			} else if provider.APIVersion != "" {
-				return nil, nil, errors.New("providers." + name + ".anthropic_version is valid only for the anthropic endpoint")
+				return nil, errors.New("providers." + name + ".anthropic_version is valid only for the anthropic endpoint")
 			}
 			if provider.UpstreamID == "" {
 				provider.UpstreamID = name
 			}
 			resolved[name] = provider
 		}
-		routes, err := resolveDefaultProviderRoutes(resolved, c.DefaultProviders)
-		if err != nil {
-			return nil, nil, err
-		}
-		return resolved, routes, nil
+		return resolved, nil
 	}
 	if c.BaseURL == "" {
-		return nil, nil, errors.New("no upstream provider is configured; run `tidemux provider add`")
+		return nil, errors.New("no upstream provider is configured; run `tidemux provider add`")
 	}
 
 	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	name := "legacy"
 	provider := Provider{
@@ -100,54 +95,11 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, m
 		BaseURL:           c.BaseURL,
 		APIVersion:        apiVersion,
 		APIKey:            c.APIKey,
-		Model:             c.Model,
 		UpstreamID:        c.UpstreamID,
 		ModelCapabilities: c.ModelCapabilities,
 		Prices:            c.Prices,
 	}
-	return map[string]Provider{name: provider}, map[string]string{"openai": name, "anthropic": name}, nil
-}
-
-func resolveDefaultProviderRoutes(providers map[string]Provider, configured map[string]string) (map[string]string, error) {
-	routes := make(map[string]string, 2)
-	for protocol, name := range configured {
-		if protocol != "openai" && protocol != "anthropic" {
-			return nil, errors.New("default_providers keys must be openai or anthropic")
-		}
-		provider, ok := providers[name]
-		if !ok {
-			return nil, errors.New("default_providers." + protocol + " must reference a configured provider name")
-		}
-		if provider.Protocol != protocol {
-			return nil, errors.New("default_providers." + protocol + " must reference a provider with the same protocol")
-		}
-		routes[protocol] = name
-	}
-
-	providersByProtocol := map[string][]string{"openai": {}, "anthropic": {}}
-	for name, provider := range providers {
-		providersByProtocol[provider.Protocol] = append(providersByProtocol[provider.Protocol], name)
-	}
-	for protocol, names := range providersByProtocol {
-		if _, ok := routes[protocol]; ok || len(names) == 0 {
-			continue
-		}
-		if len(names) != 1 {
-			sort.Strings(names)
-			return nil, errors.New("default_providers." + protocol + " must select one of the providers: " + strings.Join(names, ", "))
-		}
-		routes[protocol] = names[0]
-	}
-
-	// A client without a same-protocol route uses the configured default of the
-	// other protocol. This is a single route choice, not request-time failover.
-	if routes["openai"] == "" {
-		routes["openai"] = routes["anthropic"]
-	}
-	if routes["anthropic"] == "" {
-		routes["anthropic"] = routes["openai"]
-	}
-	return routes, nil
+	return map[string]Provider{name: provider}, nil
 }
 
 // discoverProviderModels makes a bounded, redirect-free GET /models request.

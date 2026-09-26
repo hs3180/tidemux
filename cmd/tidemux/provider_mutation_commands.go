@@ -71,14 +71,13 @@ func deleteUnreferencedProviderKeys(c gateway.Config, references []gateway.Keych
 func providerUpdate(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
-		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID] [--rotate-key] [--config PATH]")
+		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--rotate-key] [--config PATH]")
 	}
 	flags := flag.NewFlagSet("provider update", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
 	endpoint := flags.String("endpoint", "", "replace API endpoint")
 	protocol := flags.String("protocol", "", "force API protocol: openai or anthropic")
-	model := flags.String("model", "", "replace default model")
 	rotateKey := flags.Bool("rotate-key", false, "replace the API key using hidden terminal input")
 	version := flags.String("anthropic-version", "2023-06-01", "Anthropic API version")
 	if err := flags.Parse(rest); err != nil {
@@ -94,7 +93,7 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		return errors.New("--protocol must be openai or anthropic")
 	}
 	versionRequested := flagWasSet(flags, "anthropic-version")
-	if *endpoint == "" && *protocol == "" && *model == "" && !*rotateKey && !versionRequested {
+	if *endpoint == "" && *protocol == "" && !*rotateKey && !versionRequested {
 		return errors.New("provider update requires at least one changed field")
 	}
 	if runtime.GOOS != "darwin" {
@@ -122,7 +121,6 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 			return errors.New("provider Keychain references are invalid")
 		}
 	}
-	oldProtocol := p.Protocol
 	if *endpoint != "" {
 		if err := gateway.ValidateProviderBaseURL(*endpoint); err != nil {
 			return err
@@ -174,11 +172,7 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		if forced == "" && *endpoint == "" && p.Protocol != "auto" {
 			forced = p.Protocol
 		}
-		selectedModel := *model
-		if selectedModel == "" {
-			selectedModel = p.Model
-		}
-		setup, err := inspectAndCompleteProvider(tty, baseURL, key, forced, selectedModel, *version, nil)
+		setup, err := inspectAndCompleteProvider(tty, baseURL, key, forced, *version, nil)
 		if err != nil {
 			return err
 		}
@@ -186,14 +180,6 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		if *endpoint != "" {
 			p.SupportedModels = nil
 		}
-		if *model != "" {
-			p.Model = strings.TrimSpace(*model)
-		}
-	} else if *model != "" {
-		p.Model = strings.TrimSpace(*model)
-	}
-	if p.Model == "" {
-		return errors.New("provider default model cannot be empty")
 	}
 	if versionRequested && p.Protocol != "anthropic" {
 		return errors.New("--anthropic-version is valid only for an Anthropic provider")
@@ -207,40 +193,7 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	if p.Protocol == "openai" {
 		p.APIVersion = ""
 	}
-	if len(p.SupportedModels) > 0 && !containsConfiguredModel(p.SupportedModels, p.Model) {
-		return errors.New("default model must be included in the provider model allowlist")
-	}
-	if c.DefaultProviders == nil {
-		c.DefaultProviders = map[string]string{}
-	}
-	if oldProtocol != p.Protocol && c.DefaultProviders[oldProtocol] == ref {
-		var alternatives []string
-		for name, candidate := range c.Providers {
-			if name != ref && candidate.Protocol == oldProtocol {
-				alternatives = append(alternatives, name)
-			}
-		}
-		sort.Strings(alternatives)
-		if len(alternatives) > 1 {
-			return fmt.Errorf("choose a replacement %s default first with `tidemux provider default %s REF`", oldProtocol, oldProtocol)
-		}
-		if len(alternatives) == 1 {
-			c.DefaultProviders[oldProtocol] = alternatives[0]
-		} else {
-			delete(c.DefaultProviders, oldProtocol)
-		}
-	}
 	c.Providers[ref] = p
-	if c.DefaultProviders[p.Protocol] == "" {
-		c.DefaultProviders[p.Protocol] = ref
-	}
-	if old := c.DefaultProviders; old != nil {
-		for proto, selected := range old {
-			if selected == ref && proto != p.Protocol {
-				delete(old, proto)
-			}
-		}
-	}
 	if *rotateKey {
 		gatewayKey, lookupErr := (gateway.MacOSKeychain{}).Lookup(context.Background(), c.AccessTokenKeychain)
 		if lookupErr != nil {
@@ -286,12 +239,11 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 func providerRemove(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
-		return errors.New("usage: tidemux provider remove REF [--default REF] [--yes] [--config PATH]")
+		return errors.New("usage: tidemux provider remove REF [--yes] [--config PATH]")
 	}
 	flags := flag.NewFlagSet("provider remove", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
-	replacement := flags.String("default", "", "replacement provider when removing a protocol default")
 	yes := flags.Bool("yes", false, "confirm removal")
 	if err := flags.Parse(rest); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -322,42 +274,12 @@ func providerRemove(args []string, stdout, stderr *os.File) error {
 		return errors.New("provider removal requires macOS Keychain")
 	}
 	var tty *os.File
-	if !*yes || (c.DefaultProviders[p.Protocol] == ref && *replacement == "") {
-		tty, err = openControlTTY("provider removal or default replacement requires a terminal; pass --yes and --default for non-interactive use")
+	if !*yes {
+		tty, err = openControlTTY("provider removal requires an interactive terminal; pass --yes for non-interactive use")
 		if err != nil {
 			return err
 		}
 		defer tty.Close()
-	}
-	if c.DefaultProviders[p.Protocol] == ref {
-		var alternatives []string
-		for name, candidate := range c.Providers {
-			if name != ref && candidate.Protocol == p.Protocol {
-				alternatives = append(alternatives, name)
-			}
-		}
-		sort.Strings(alternatives)
-		if *replacement != "" {
-			if !containsConfiguredModel(alternatives, *replacement) {
-				return errors.New("--default must name another provider with the same protocol")
-			}
-			c.DefaultProviders[p.Protocol] = *replacement
-		} else if len(alternatives) == 0 {
-			delete(c.DefaultProviders, p.Protocol)
-		} else {
-			fmt.Fprintf(tty, "Choose replacement default for %s (%s): ", p.Protocol, strings.Join(alternatives, ", "))
-			answer, readErr := readTerminalLine(tty)
-			if readErr != nil {
-				return errors.New("could not read replacement provider")
-			}
-			answer = strings.TrimSpace(answer)
-			if !containsConfiguredModel(alternatives, answer) {
-				return errors.New("replacement must be one of the listed providers")
-			}
-			c.DefaultProviders[p.Protocol] = answer
-		}
-	} else if *replacement != "" {
-		return errors.New("--default is only valid when removing a protocol default")
 	}
 	if !*yes {
 		fmt.Fprintf(tty, "Remove provider %s (%s at %s)? [y/N] ", ref, p.Protocol, p.BaseURL)
@@ -422,11 +344,6 @@ func providerPricingList(args []string, stdout, stderr *os.File) error {
 	models := make([]string, 0, len(p.Prices))
 	for model := range p.Prices {
 		models = append(models, model)
-	}
-	if _, ok := p.Prices[p.Model]; !ok {
-		if _, builtIn := adapter.BuiltInPrice(p.BaseURL, p.Model, time.Now()); builtIn {
-			models = append(models, p.Model)
-		}
 	}
 	sort.Strings(models)
 	for _, model := range models {

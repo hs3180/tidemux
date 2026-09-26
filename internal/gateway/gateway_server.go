@@ -45,7 +45,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		}
 	}
 	legacySingleProvider := len(c.Providers) == 0
-	providers, providerRoutes, err := resolveProviders(c, httpClient)
+	providers, err := resolveProviders(c, httpClient)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -78,21 +78,14 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	keyPools := make(map[string]*providerKeyPool, len(providers))
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
-	activeProviders := make(map[string]bool, len(providerRoutes))
-	for _, name := range providerRoutes {
-		activeProviders[name] = true
-	}
 	for name, provider := range providers {
 		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
-		if !legacySingleProvider && activeProviders[name] {
+		if !legacySingleProvider {
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
-		if legacySingleProvider && !modelsKnown[name] {
-			models[name] = []string{provider.Model}
-		}
 	}
-	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, providerRoutes: providerRoutes, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown}, func() error {
+	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()

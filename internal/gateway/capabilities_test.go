@@ -17,12 +17,16 @@ func TestModelCapabilitiesAreExplicitAndValidated(t *testing.T) {
 		c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "http://127.0.0.1:1")
 		c.Protocol = protocol
 		c.ModelCapabilities = ModelCapabilities{ContextTokens: 65536, MaxOutputTokens: 8192}
+		c = namedProviderConfig(c, "test")
+		provider := c.Providers["test"]
+		provider.SupportedModels = []string{"custom-model"}
+		c.Providers["test"] = provider
 		h, closeDB, err := NewHandler(c, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer closeDB()
-		for _, path := range []string{"/v1/models", "/v1/models/" + c.Model} {
+		for _, path := range []string{"/v1/models", "/v1/models/test/custom-model"} {
 			r := httptest.NewRequest("GET", path, nil)
 			r.Header.Set("Authorization", "Bearer local-secret")
 			w := httptest.NewRecorder()

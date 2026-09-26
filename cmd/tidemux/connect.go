@@ -27,7 +27,7 @@ import (
 // started with serve so its lifetime is independent of any one client session.
 func launch(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux <claude|kilo|kilo-ide|hermes> [--config path] [--executable path] -- [client arguments]")
+		return errors.New("usage: tidemux <claude|kilo|kilo-ide|hermes> --model PROVIDER/MODEL [--config path] [--executable path] -- [client arguments]")
 	}
 	name := args[0]
 	if name != "claude" && name != "kilo" && name != "kilo-ide" && name != "hermes" {
@@ -36,6 +36,7 @@ func launch(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("tidemux "+name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "gateway configuration; start tidemux serve with the same file")
+	model := flags.String("model", "", "required model ID in provider/model form")
 	defaultExecutable := name
 	if name == "kilo-ide" {
 		defaultExecutable = "code"
@@ -51,6 +52,9 @@ func launch(args []string, stdout, stderr *os.File) error {
 	if name != "kilo-ide" && *extensionsDir != "" {
 		return errors.New("--extensions-dir is only supported for kilo-ide")
 	}
+	if !isQualifiedModelID(*model) {
+		return errors.New("--model must be PROVIDER/MODEL: get PROVIDER from `tidemux provider list` and MODEL from `tidemux provider models REF`, or copy a qualified ID from /v1/models")
+	}
 	clientInput := flags.Args()
 	if name == "kilo-ide" {
 		var err error
@@ -65,6 +69,16 @@ func launch(args []string, stdout, stderr *os.File) error {
 	}
 	if err := validateClientProtocol(name, c.Protocol); err != nil {
 		return err
+	}
+	providerRef, _, _ := strings.Cut(*model, "/")
+	if len(c.Providers) > 0 {
+		provider, ok := c.Providers[providerRef]
+		if !ok {
+			return fmt.Errorf("provider %q is not configured; run `tidemux provider list`", providerRef)
+		}
+		c.ModelCapabilities = provider.ModelCapabilities
+	} else if c.BaseURL == "" || providerRef != "legacy" {
+		return fmt.Errorf("provider %q is not configured; run `tidemux provider list`", providerRef)
 	}
 	binary, err := exec.LookPath(*executable)
 	if err != nil {
@@ -112,10 +126,10 @@ func launch(args []string, stdout, stderr *os.File) error {
 		return errors.New("invalid local gateway credential")
 	}
 	url := "http://" + c.ListenAddr
-	if err = checkClientEndpoint(ctx, url, token, c.Model); err != nil {
+	if err = checkClientEndpoint(ctx, url, token); err != nil {
 		return err
 	}
-	overrides, clientArgs, err := clientLaunch(name, url, c.Model, state, os.Getenv("KILO_CONFIG_CONTENT"), c.ModelCapabilities)
+	overrides, clientArgs, err := clientLaunch(name, url, *model, state, os.Getenv("KILO_CONFIG_CONTENT"), c.ModelCapabilities)
 	if err != nil {
 		return err
 	}
@@ -135,7 +149,7 @@ func launch(args []string, stdout, stderr *os.File) error {
 	cmd.Stderr = stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 5 * time.Second
-	fmt.Fprintf(stderr, "Connecting %s to TideMux at %s (model %s).\n", name, url, c.Model)
+	fmt.Fprintf(stderr, "Connecting %s to TideMux at %s (model %s).\n", name, url, *model)
 	if err = cmd.Run(); err != nil {
 		return fmt.Errorf("%s exited: %w", name, err)
 	}
@@ -150,7 +164,14 @@ func validateClientProtocol(name, protocol string) error {
 	return errors.New("configuration has an invalid provider protocol; use automatic detection or a legacy openai/anthropic value")
 }
 
-func checkClientEndpoint(ctx context.Context, url, token, model string) error {
+func isQualifiedModelID(model string) bool {
+	provider, upstreamModel, ok := strings.Cut(model, "/")
+	return ok && provider != "" && upstreamModel != "" &&
+		strings.TrimSpace(provider) == provider && strings.TrimSpace(upstreamModel) == upstreamModel &&
+		!strings.ContainsAny(model, "\r\n\x00")
+}
+
+func checkClientEndpoint(ctx context.Context, url, token string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url+"/v1/models", nil)
 	if err != nil {
 		return errors.New("invalid gateway address")
@@ -168,20 +189,11 @@ func checkClientEndpoint(ctx context.Context, url, token, model string) error {
 	if r.StatusCode != 200 {
 		return errors.New("gateway model discovery unavailable; check the running TideMux build and profile")
 	}
-	var body struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body) != nil {
+	var body json.RawMessage
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || len(body) == 0 {
 		return errors.New("invalid gateway model list")
 	}
-	for _, m := range body.Data {
-		if m.ID == model {
-			return nil
-		}
-	}
-	return errors.New("configured model is not listed by the running gateway")
+	return nil
 }
 func overrideEnvironment(env []string, overrides map[string]string) []string {
 	result := make([]string, 0, len(env)+len(overrides))

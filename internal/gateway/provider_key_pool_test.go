@@ -20,14 +20,13 @@ func TestProviderGroupResolvesMultipleKeychainReferences(t *testing.T) {
 	c.ModelCapabilities, c.Prices = ModelCapabilities{}, nil
 	c.Providers = map[string]Provider{
 		"main": {
-			Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a",
+			Protocol: "openai", BaseURL: "https://provider.example/v1",
 			UpstreamKeychains: []KeychainReference{
 				{Service: "provider", Account: "first"},
 				{Service: "provider", Account: "second"},
 			},
 		},
 	}
-	c.DefaultProviders = map[string]string{"openai": "main"}
 	secrets := keyedTestSecrets{
 		"provider/first":       "provider-secret-one",
 		"provider/second":      "provider-secret-two",
@@ -145,7 +144,7 @@ func TestProviderKeyPoolRoundRobinKeepsKeyForEachRequest(t *testing.T) {
 	defer closeGateway()
 
 	for _, stream := range []bool{false, false, true} {
-		body := requestBody("openai")
+		body := requestBodyFor("openai", "main", "custom-model")
 		if stream {
 			body = strings.TrimSuffix(body, "}") + `,"stream":true}`
 		}

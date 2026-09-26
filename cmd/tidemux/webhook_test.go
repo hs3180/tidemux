@@ -204,13 +204,11 @@ func TestDeleteStaleWebhookCredentialPreservesMultiKeyProviderReference(t *testi
 	provider := map[string]json.RawMessage{
 		"protocol": json.RawMessage(`"openai"`),
 		"base_url": json.RawMessage(`"https://provider.example/v1"`),
-		"model":    json.RawMessage(`"model"`),
 		"upstream_keychains": mustWebhookJSON([]gateway.KeychainReference{
 			previous,
 		}),
 	}
 	raw["providers"] = mustWebhookJSON(map[string]map[string]json.RawMessage{"primary": provider})
-	raw["default_providers"] = mustWebhookJSON(map[string]string{"openai": "primary"})
 	data, err = json.Marshal(raw)
 	if err != nil {
 		t.Fatal(err)

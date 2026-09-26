@@ -28,7 +28,7 @@ func TestHermesProfileTransportAndOwnership(t *testing.T) {
 		t.Fatal("unmanaged profile changed")
 	}
 	state = t.TempDir()
-	for _, model := range []string{"first", "second"} {
+	for _, model := range []string{"test/first", "test/second"} {
 		if _, _, err := clientLaunch("hermes", "http://127.0.0.1:8787", model, state, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -63,7 +63,7 @@ func TestHermesProfileTransportAndOwnership(t *testing.T) {
 
 func TestClientLaunchConfiguration(t *testing.T) {
 	for _, name := range []string{"claude", "kilo", "hermes"} {
-		env, args, err := clientLaunch(name, "http://127.0.0.1:8787", "custom-model", filepath.Join(t.TempDir(), "state"), `{"permission":{"bash":"ask"},"provider":{"existing":{"name":"keep"}}}`)
+		env, args, err := clientLaunch(name, "http://127.0.0.1:8787", "openrouter/stealth/union-alpha", filepath.Join(t.TempDir(), "state"), `{"permission":{"bash":"ask"},"provider":{"existing":{"name":"keep"}}}`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +73,7 @@ func TestClientLaunchConfiguration(t *testing.T) {
 		}
 		switch name {
 		case "claude":
-			if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" || env["ANTHROPIC_MODEL"] != "custom-model" || env["CLAUDE_CODE_SIMPLE"] != "1" || len(args) != 0 {
+			if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" || env["ANTHROPIC_MODEL"] != "openrouter/stealth/union-alpha" || env["CLAUDE_CODE_SIMPLE"] != "1" || len(args) != 0 {
 				t.Fatal(env, args)
 			}
 		case "kilo":
@@ -83,7 +83,7 @@ func TestClientLaunchConfiguration(t *testing.T) {
 				t.Fatal("lost existing options or credential reference")
 			}
 		case "hermes":
-			if env["HERMES_HOME"] == "" || strings.Join(args, " ") != "chat --provider tidemux-local --model custom-model" {
+			if env["HERMES_HOME"] == "" || strings.Join(args, " ") != "chat --provider tidemux-local --model openrouter/stealth/union-alpha" {
 				t.Fatal(env, args)
 			}
 		}
@@ -128,7 +128,7 @@ func TestConnectChecksGatewayBeforeLaunch(t *testing.T) {
 	redirected := false
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirected = true }))
 	defer other.Close()
-	for _, mode := range []string{"ok", "401", "redirect", "wrong-model"} {
+	for _, mode := range []string{"ok", "401", "redirect", "empty-model-list"} {
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer local" {
 				t.Error("bad preflight")
@@ -138,15 +138,15 @@ func TestConnectChecksGatewayBeforeLaunch(t *testing.T) {
 				w.WriteHeader(401)
 			case "redirect":
 				http.Redirect(w, r, other.URL, 302)
-			case "wrong-model":
-				w.Write([]byte(`{"data":[{"id":"other"}]}`))
+			case "empty-model-list":
+				w.Write([]byte(`{"data":[]}`))
 			default:
 				w.Write([]byte(`{"data":[{"id":"custom-model"}]}`))
 			}
 		}))
-		err := checkClientEndpoint(context.Background(), up.URL, "local", "custom-model")
+		err := checkClientEndpoint(context.Background(), up.URL, "local")
 		up.Close()
-		if (err == nil) != (mode == "ok") {
+		if (err == nil) != (mode == "ok" || mode == "empty-model-list") {
 			t.Fatalf("%s %v", mode, err)
 		}
 	}
@@ -155,10 +155,23 @@ func TestConnectChecksGatewayBeforeLaunch(t *testing.T) {
 	}
 }
 
+func TestQualifiedModelID(t *testing.T) {
+	for _, model := range []string{"openrouter/stealth/union-alpha", "deepseek/flash"} {
+		if !isQualifiedModelID(model) {
+			t.Fatalf("expected qualified model %q", model)
+		}
+	}
+	for _, model := range []string{"", "model", "/model", "provider/", " provider/model", "provider/model "} {
+		if isQualifiedModelID(model) {
+			t.Fatalf("accepted invalid model %q", model)
+		}
+	}
+}
+
 func TestClientReceivesDeclaredContext(t *testing.T) {
 	for _, name := range []string{"kilo", "hermes"} {
 		state := t.TempDir()
-		env, _, err := clientLaunch(name, "http://127.0.0.1:8787", "m", state, "", gateway.ModelCapabilities{ContextTokens: 65536, MaxOutputTokens: 8192})
+		env, _, err := clientLaunch(name, "http://127.0.0.1:8787", "test/m", state, "", gateway.ModelCapabilities{ContextTokens: 65536, MaxOutputTokens: 8192})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +189,7 @@ func TestClientReceivesDeclaredContext(t *testing.T) {
 			t.Fatal("invalid client configuration")
 		}
 		if name == "kilo" {
-			limits := config["provider"].(map[string]any)["tidemux-local"].(map[string]any)["models"].(map[string]any)["m"].(map[string]any)["limit"].(map[string]any)
+			limits := config["provider"].(map[string]any)["tidemux-local"].(map[string]any)["models"].(map[string]any)["test/m"].(map[string]any)["limit"].(map[string]any)
 			if limits["context"] != float64(65536) || limits["output"] != float64(8192) {
 				t.Fatal("Kilo limits lost")
 			}
@@ -206,7 +219,7 @@ func TestIDEProfilePreventsStaleEnvironmentReuse(t *testing.T) {
 }
 func TestIDEConfigurationAndWorkspaceIsolation(t *testing.T) {
 	state := t.TempDir()
-	env, args, err := clientLaunch("kilo-ide", "http://127.0.0.1:8787", "m", state, `{"permission":{"bash":"ask"}}`)
+	env, args, err := clientLaunch("kilo-ide", "http://127.0.0.1:8787", "test/m", state, `{"permission":{"bash":"ask"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +255,7 @@ func TestDirectClientHelp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(data), "Usage of tidemux "+client+":") || !strings.Contains(string(data), "-executable") {
+			if !strings.Contains(string(data), "Usage of tidemux "+client+":") || !strings.Contains(string(data), "-executable") || !strings.Contains(string(data), "-model") {
 				t.Fatalf("missing client help: %s", data)
 			}
 		})

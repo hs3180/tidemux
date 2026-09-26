@@ -37,16 +37,18 @@ commands:
   version     print the TideMux version
 
 common examples:
-  tidemux provider add https://api.deepseek.com --model deepseek-flash
+  tidemux provider add https://api.deepseek.com
   tidemux provider list
   tidemux gateway configure --listen loopback
+  tidemux claude --model PROVIDER/deepseek-flash
   tidemux serve --config /path/to/config.json
 
 Each provider uses one API protocol and endpoint, with one or more API keys
 stored in Keychain. Provider protocol is detected from its endpoint unless
 explicitly forced.
-Clients prefer a same-protocol default; if absent, the other protocol's default
-is used with conversion. Upstream failures do not trigger provider retries.
+Set each client's model to PROVIDER/MODEL (or use the client's required
+--model option); TideMux strips PROVIDER/ before forwarding upstream. Provider
+selection is explicit, and upstream failures do not trigger retries.
 `
 )
 

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,35 +21,14 @@ import (
 )
 
 type handler struct {
-	config         Config
-	ledger         *ledger.Ledger
-	sessions       *limiter.SessionLimiter
-	providers      map[string]Provider
-	providerRoutes map[string]string
-	clients        map[string]*adapter.Client
-	keyPools       map[string]*providerKeyPool
-	models         map[string][]string
-	modelsKnown    map[string]bool
-}
-
-func (h *handler) clientForRequestProtocol(protocol string) *adapter.Client {
-	return h.clients[h.providerNameForRequest(protocol)]
-}
-
-func (h *handler) providerNameForRequest(protocol string) string {
-	return h.providerRoutes[protocol]
-}
-
-func (h *handler) providerForRequestProtocol(protocol string) Provider {
-	return h.providers[h.providerNameForRequest(protocol)]
-}
-
-func (h *handler) modelsForRequestProtocol(protocol string) ([]string, bool) {
-	providerName := h.providerNameForRequest(protocol)
-	if providerName == "" {
-		return nil, false
-	}
-	return h.modelsForProvider(providerName)
+	config      Config
+	ledger      *ledger.Ledger
+	sessions    *limiter.SessionLimiter
+	providers   map[string]Provider
+	clients     map[string]*adapter.Client
+	keyPools    map[string]*providerKeyPool
+	models      map[string][]string
+	modelsKnown map[string]bool
 }
 
 func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
@@ -56,6 +36,47 @@ func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
 		return provider.SupportedModels, true
 	}
 	return h.models[providerName], h.modelsKnown[providerName]
+}
+
+func parseQualifiedModelID(value string) (providerName, model string, ok bool) {
+	separator := strings.IndexByte(value, '/')
+	if separator <= 0 || separator == len(value)-1 {
+		return "", "", false
+	}
+	providerName, model = value[:separator], value[separator+1:]
+	if strings.TrimSpace(providerName) != providerName || strings.TrimSpace(model) != model || strings.ContainsAny(value, "\r\n\x00") {
+		return "", "", false
+	}
+	return providerName, model, true
+}
+
+func qualifiedModelID(providerName, model string) string {
+	return providerName + "/" + model
+}
+
+func (h *handler) allQualifiedModels() []string {
+	var result []string
+	for providerName := range h.providers {
+		models, _ := h.modelsForProvider(providerName)
+		for _, model := range models {
+			result = append(result, qualifiedModelID(providerName, model))
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func replaceRequestModel(body []byte, model string) ([]byte, error) {
+	var request map[string]json.RawMessage
+	if err := json.Unmarshal(body, &request); err != nil || request == nil {
+		return nil, errors.New("invalid_request")
+	}
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		return nil, err
+	}
+	request["model"] = encoded
+	return json.Marshal(request)
 }
 
 func containsModel(models []string, model string) bool {
@@ -128,15 +149,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelList := r.URL.Path == "/v1/models" || r.URL.Path == "/models"
 	modelDetail := strings.HasPrefix(r.URL.Path, "/v1/models/") || strings.HasPrefix(r.URL.Path, "/models/")
 	if r.Method == "GET" && (modelList || modelDetail) {
-		provider := h.providerForRequestProtocol(protocol)
-		if h.providerNameForRequest(protocol) == "" {
-			h.reject(w, r, protocol, 503, "provider_not_configured")
-			return
-		}
-		models, _ := h.modelsForRequestProtocol(protocol)
+		models := h.allQualifiedModels()
+		var detailID string
+		var detailProvider Provider
 		if modelDetail {
-			modelID := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
-			if !containsModel(models, modelID) {
+			detailID = strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
+			providerName, modelID, ok := parseQualifiedModelID(detailID)
+			if !ok {
+				h.reject(w, r, protocol, 404, "model_not_found")
+				return
+			}
+			var exists bool
+			detailProvider, exists = h.providers[providerName]
+			providerModels, _ := h.modelsForProvider(providerName)
+			if !exists || !containsModel(providerModels, modelID) {
 				h.reject(w, r, protocol, 404, "model_not_found")
 				return
 			}
@@ -144,16 +170,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if protocol == "anthropic" {
 			if modelDetail {
-				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
-				model := map[string]any{"id": id, "type": "model", "display_name": id}
-				provider.ModelCapabilities.addToModel(model)
+				model := map[string]any{"id": detailID, "type": "model", "display_name": detailID}
+				detailProvider.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
 			data := make([]map[string]any, 0, len(models))
 			for _, id := range models {
 				model := map[string]any{"id": id, "type": "model", "display_name": id}
-				provider.ModelCapabilities.addToModel(model)
+				providerName, _, _ := parseQualifiedModelID(id)
+				h.providers[providerName].ModelCapabilities.addToModel(model)
 				data = append(data, model)
 			}
 			result := map[string]any{"data": data, "has_more": false}
@@ -163,14 +189,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(result)
 		} else {
 			if modelDetail {
-				id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
-				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": provider.UpstreamID}
-				provider.ModelCapabilities.addToModel(model)
+				model := map[string]any{"id": detailID, "object": "model", "created": 0, "owned_by": detailProvider.UpstreamID}
+				detailProvider.ModelCapabilities.addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
 			data := make([]map[string]any, 0, len(models))
 			for _, id := range models {
+				providerName, _, _ := parseQualifiedModelID(id)
+				provider := h.providers[providerName]
 				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": provider.UpstreamID}
 				provider.ModelCapabilities.addToModel(model)
 				data = append(data, model)
@@ -187,13 +214,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 404, "unsupported_endpoint")
 		return
 	}
-	providerClient := h.clientForRequestProtocol(protocol)
-	providerName := h.providerNameForRequest(protocol)
-	provider := h.providerForRequestProtocol(protocol)
-	if providerClient == nil || providerName == "" {
-		h.reject(w, r, protocol, 503, "provider_not_configured")
-		return
-	}
 	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
 	if err := options.Validate(protocol); err != nil {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
@@ -205,12 +225,28 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 413, "request_too_large")
 		return
 	}
-	body, model, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, provider.Model)
+	body, qualifiedModel, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, "")
 	if len(ignoredFields) > 0 {
 		log.Printf("tidemux: ignored unsupported request fields protocol=%s fields=%q", protocol, ignoredFields)
 	}
 	if err != nil {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
+		return
+	}
+	providerName, model, qualified := parseQualifiedModelID(qualifiedModel)
+	if !qualified {
+		h.reject(w, r, protocol, 400, "model_must_include_provider", "model")
+		return
+	}
+	provider, providerExists := h.providers[providerName]
+	providerClient := h.clients[providerName]
+	if !providerExists || providerClient == nil {
+		h.reject(w, r, protocol, 404, "provider_not_found", "model")
+		return
+	}
+	body, err = replaceRequestModel(body, model)
+	if err != nil {
+		h.reject(w, r, protocol, 400, "invalid_request", "model")
 		return
 	}
 	if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, model) {
