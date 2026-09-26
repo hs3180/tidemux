@@ -80,7 +80,7 @@ else:sys.exit(2)
             os.execve(binary, [binary, "provider", "add"], env)
 
         captured = b""
-        endpoint_sent = key_sent = schedule_sent = unlocked = False
+        endpoint_sent = key_sent = model_scope_sent = schedule_sent = unlocked = False
         deadline = time.monotonic() + 20
         status = None
         try:
@@ -104,6 +104,10 @@ else:sys.exit(2)
                         time.sleep(0.05)
                         os.write(fd, secret + b"\n")
                         key_sent = True
+                    if not model_scope_sent and b"Allowed models (" in captured:
+                        time.sleep(0.05)
+                        os.write(fd, b"\n")
+                        model_scope_sent = True
                     if not schedule_sent and b"Daily report notification time" in captured:
                         time.sleep(0.05)
                         os.write(fd, b"08:30\n" if mode == "success" else b"\n")
@@ -129,13 +133,14 @@ else:sys.exit(2)
         else:
             assert status == 0, "provider add failed with synthetic Keychain"
             assert unlocked == (mode == "success"), "unnecessary or missing unlock prompt"
-            assert endpoint_sent and key_sent and schedule_sent, "missing guided setup prompt"
+            assert endpoint_sent and key_sent and model_scope_sent and schedule_sent, "missing guided setup prompt"
             assert b"Select a model as local-provider/MODEL" in captured, "missing explicit provider/model guidance"
             contents = config.read_text()
             assert secret.decode() not in contents
             c = json.loads(contents)
             p = c["providers"]["local-provider"]
             assert "model" not in p and p["base_url"] == endpoint
+            assert "supported_models" not in p, "blank selection should allow all models"
             assert p["protocol"] == "openai" and "default_providers" not in c
             if mode == "success":
                 assert c["report_schedule"] == {"time": "08:30", "channel": "macos"}

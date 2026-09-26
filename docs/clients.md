@@ -18,12 +18,13 @@ tidemux provider list
 ```
 
 Each command securely prompts for the upstream API key. TideMux infers the
-provider protocol from its endpoint. All models are allowed by default; use
-`tidemux provider models REF --only ...` to restrict a provider. Choose the
-provider reference shown by `provider list`, and always request the model as
-`REF/MODEL_ID` (for example, `openrouter/stealth/union-alpha`). The gateway
-strips the first `REF/` prefix before forwarding the upstream model ID. Its
-`/v1/models` endpoint lists selectable qualified IDs.
+provider protocol from its endpoint. All models are allowed by default; pass
+`--model MODEL[,MODEL...]` to restrict a provider during setup, or use
+`tidemux provider models REF --only ...` later. Choose the provider reference
+shown by `provider list`, and always request the model as `REF/MODEL_ID` (for
+example, `openrouter/stealth/union-alpha`). The gateway strips the first
+`REF/` prefix before forwarding the upstream model ID. Its `/v1/models`
+endpoint lists selectable qualified IDs.
 
 Configure the shared gateway credential and listener, then start the gateway:
 

@@ -2,6 +2,9 @@
 
 ## 0.2.0 development
 
+- Treat model IDs selected during provider setup or supplied with `--model` as
+  the provider's allowed-model list; use `--default-model` only to set the
+  fallback when a client omits its model.
 - Remove the DeepSeek `--preset` shortcut; use the general `--base-url` and
   `--model` options, which still select verified built-in rates for known models.
 - Expose OpenAI Chat Completions and Anthropic Messages APIs simultaneously to

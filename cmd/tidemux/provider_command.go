@@ -52,6 +52,7 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 	configPath := flags.String("config", defaultConfigPath(), "configuration path")
 	name := flags.String("name", "", "optional provider label")
 	protocol := flags.String("protocol", "", "force endpoint protocol: openai or anthropic")
+	model := flags.String("model", "", "comma-separated model allowlist")
 	apiVersion := flags.String("anthropic-version", "2023-06-01", "Anthropic API version")
 	if err := flags.Parse(rest); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -60,10 +61,18 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*configPath) == "" {
-		return errors.New("usage: tidemux provider add [ENDPOINT] [--name LABEL] [--protocol openai|anthropic] [--config PATH]")
+		return errors.New("usage: tidemux provider add [ENDPOINT] [--name LABEL] [--protocol openai|anthropic] [--model ID[,ID...]] [--config PATH]")
 	}
 	if *protocol != "" && *protocol != "openai" && *protocol != "anthropic" {
 		return errors.New("--protocol must be openai or anthropic")
+	}
+	allowedModels, err := parseProviderModelList(*model)
+	if err != nil {
+		return fmt.Errorf("invalid --model allowlist: %w", err)
+	}
+	modelRequested := flagWasSet(flags, "model")
+	if modelRequested && len(allowedModels) == 0 {
+		return errors.New("--model requires at least one allowed model ID")
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("provider credentials require macOS Keychain")
@@ -76,10 +85,9 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 	if err := unlockKeychainIfNeeded(context.Background(), tty); err != nil {
 		return err
 	}
-
 	var setup interactiveProviderSetup
 	if endpoint == "" {
-		setup, err = promptNewProvider(tty, tty, *apiVersion, nil, *protocol, *name)
+		setup, err = promptNewProvider(tty, tty, *apiVersion, nil, *protocol, allowedModels, !modelRequested, *name)
 		if err != nil {
 			return err
 		}
@@ -97,7 +105,7 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 		if !validSecret(key) {
 			return errors.New("a valid provider API key is required")
 		}
-		setup, err = inspectAndCompleteProvider(tty, endpoint, string(key), *protocol, *apiVersion, nil)
+		setup, err = inspectAndCompleteProviderWithModels(tty, endpoint, string(key), *protocol, allowedModels, false, *apiVersion, nil)
 		if err != nil {
 			return err
 		}
@@ -154,7 +162,11 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 		}
 	}
 	fmt.Fprintf(stdout, "Added provider %s (%s) at %s.\n", providerName, setup.Provider.Protocol, setup.Provider.BaseURL)
-	fmt.Fprintln(stdout, "All models are allowed. Restrict them with `tidemux provider models` if needed.")
+	if len(setup.Provider.SupportedModels) > 0 {
+		fmt.Fprintf(stdout, "Allowed models: %s\n", strings.Join(setup.Provider.SupportedModels, ", "))
+	} else {
+		fmt.Fprintln(stdout, "All models are allowed. Restrict them with `tidemux provider models` if needed.")
+	}
 	fmt.Fprintf(stdout, "Select a model as %s/MODEL in client requests; list upstream model IDs with `tidemux provider models %s`.\n", providerName, providerName)
 	return nil
 }
@@ -211,6 +223,29 @@ func inspectAndCompleteProvider(tty *os.File, endpoint, key, forcedProtocol, api
 	}
 	name := providerNameFromBaseURL(endpoint)
 	return interactiveProviderSetup{Name: name, Provider: gateway.Provider{Protocol: protocol, BaseURL: endpoint, APIVersion: version, UpstreamID: name}}, nil
+}
+
+func inspectAndCompleteProviderWithModels(tty *os.File, endpoint, key, forcedProtocol string, allowedModels []string, promptForModels bool, apiVersion string, client *http.Client) (interactiveProviderSetup, error) {
+	setup, err := inspectAndCompleteProvider(tty, endpoint, key, forcedProtocol, apiVersion, client)
+	if err != nil {
+		return interactiveProviderSetup{}, err
+	}
+	if allowedModels != nil {
+		setup.Provider.SupportedModels = append([]string(nil), allowedModels...)
+		return setup, nil
+	}
+	if !promptForModels {
+		return setup, nil
+	}
+	models, known := gateway.DiscoverProviderModels(endpoint, key, apiVersion, setup.Provider.Protocol, client)
+	if !known {
+		fmt.Fprintln(tty, "Model discovery is unavailable; all models will be allowed unless you restrict them later.")
+	}
+	setup.Provider.SupportedModels, err = chooseProviderModels(tty, tty, models, known)
+	if err != nil {
+		return interactiveProviderSetup{}, err
+	}
+	return setup, nil
 }
 
 func uniqueProviderName(providers map[string]gateway.Provider, candidate string) string {
