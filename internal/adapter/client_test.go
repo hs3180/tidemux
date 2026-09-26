@@ -2,15 +2,314 @@ package adapter
 
 import (
 	"context"
-	"github.com/hs3180/tidemux/internal/ledger"
-	"github.com/hs3180/tidemux/internal/limiter"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/hs3180/tidemux/internal/ledger"
+	"github.com/hs3180/tidemux/internal/limiter"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func newCandidateTestClient(t *testing.T, upstream *http.Client) (*Client, *ledger.Ledger) {
+	t.Helper()
+	l, err := ledger.Open(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := limiter.NewConcurrencyGate(1)
+	if err != nil {
+		l.Close()
+		t.Fatal(err)
+	}
+	return &Client{Protocol: "openai", BaseURL: "http://upstream.invalid/v1", APIKey: "unused", Upstream: "test", HTTP: upstream, Ledger: l, Gate: g}, l
+}
+
+func TestKeyCandidatesFailOverWithOneAuditRecord(t *testing.T) {
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Header.Get("Authorization"))
+		if r.Header.Get("Authorization") == "Bearer key-a" {
+			w.Header().Set("Retry-After", "9")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"private rate limit detail"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"chat1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.BaseURL = upstream.URL + "/v1"
+	var failedIndex int = -1
+	var failure *CallError
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
+	response, id, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{
+		Failed: func(index int, callErr *CallError) (bool, time.Duration) {
+			failedIndex, failure = index, callErr
+			return true, 0
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response) == 0 || id == "" || len(calls) != 2 || failedIndex != 0 || failure == nil || !failure.Retryable || failure.UpstreamStatus != 429 || failure.Cooldown != 9*time.Second {
+		t.Fatalf("response=%s id=%q calls=%v failedIndex=%d failure=%+v", response, id, calls, failedIndex, failure)
+	}
+	if calls[0] != "Bearer key-a" || calls[1] != "Bearer key-b" {
+		t.Fatalf("credential order = %v", calls)
+	}
+	rows, err := l.Recent(context.Background(), 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("audits=%d err=%v", len(rows), err)
+	}
+	if rows[0].ID != id || rows[0].Status != "ok" || !containsEvent(rows[0].Events, "rate_limit_429") || !containsEvent(rows[0].Events, "key_failover") {
+		t.Fatalf("audit = %+v", rows[0])
+	}
+	if rows[0].InputTokens == nil || *rows[0].InputTokens != 2 || rows[0].OutputTokens == nil || *rows[0].OutputTokens != 1 {
+		t.Fatalf("audit usage should come from the successful attempt only: %+v", rows[0])
+	}
+	if strings.Contains(strings.Join(rows[0].Events, ","), "key-a") || strings.Contains(strings.Join(rows[0].Events, ","), "key-b") {
+		t.Fatalf("audit exposed key material: %+v", rows[0].Events)
+	}
+}
+
+func TestAnthropicKeyCandidatesFailOverWithXAPIKey(t *testing.T) {
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Header.Get("x-api-key"))
+		if r.Header.Get("x-api-key") == "key-a" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"msg1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.Protocol = "anthropic"
+	client.APIVersion = "2023-06-01"
+	client.BaseURL = upstream.URL + "/v1"
+	body := []byte(`{"model":"m","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
+	_, _, err := client.CallFromKeyCandidates("anthropic", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
+	if err != nil || len(calls) != 2 || calls[0] != "key-a" || calls[1] != "key-b" {
+		t.Fatalf("err=%v key attempts=%v", err, calls)
+	}
+}
+
+func TestStreamingCandidateFailoverBeforeFirstFrameKeepsOneLogicalID(t *testing.T) {
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Header.Get("Authorization"))
+		if r.Header.Get(SessionIDHeader) != "session-123" {
+			t.Errorf("session ID not preserved across attempts: %q", r.Header.Get(SessionIDHeader))
+		}
+		if r.Header.Get("Authorization") == "Bearer key-a" {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.BaseURL = upstream.URL + "/v1"
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	var frameIDs []string
+	var frames [][]byte
+	response, id, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", func(frameID string, frame []byte) error {
+		frameIDs = append(frameIDs, frameID)
+		frames = append(frames, append([]byte(nil), frame...))
+		return nil
+	}, CallOptions{SessionID: "session-123"}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
+	if err != nil || len(calls) != 2 || calls[0] != "Bearer key-a" || calls[1] != "Bearer key-b" {
+		t.Fatalf("err=%v calls=%v", err, calls)
+	}
+	if id == "" || len(frameIDs) != 2 || frameIDs[0] != id || frameIDs[1] != id || len(response) == 0 {
+		t.Fatalf("requestID=%q frameIDs=%v response=%s frames=%q", id, frameIDs, response, frames)
+	}
+	rows, err := l.Recent(context.Background(), 10)
+	if err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Status != "ok" {
+		t.Fatalf("audits=%+v err=%v", rows, err)
+	}
+}
+
+func TestPreWriteTransportFailureCanFailOver(t *testing.T) {
+	attempts := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("dial failed")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chat1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`))}, nil
+	})
+	client, l := newCandidateTestClient(t, &http.Client{Transport: transport})
+	defer l.Close()
+	var failure *CallError
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
+	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{
+		Failed: func(_ int, callErr *CallError) (bool, time.Duration) {
+			failure = callErr
+			return true, 0
+		},
+	})
+	if err != nil || attempts != 2 || failure == nil || !failure.Retryable || failure.Cooldown != 5*time.Second {
+		t.Fatalf("err=%v attempts=%d failure=%+v", err, attempts, failure)
+	}
+}
+
+func TestTransportFailureAfterHeadersDoesNotFailOver(t *testing.T) {
+	attempts := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		attempts++
+		if trace := httptrace.ContextClientTrace(request.Context()); trace != nil && trace.WroteHeaders != nil {
+			trace.WroteHeaders()
+		}
+		return nil, errors.New("connection lost after request write")
+	})
+	client, l := newCandidateTestClient(t, &http.Client{Transport: transport})
+	defer l.Close()
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
+	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
+	var callErr *CallError
+	if !errors.As(err, &callErr) || callErr.Retryable || attempts != 1 {
+		t.Fatalf("err=%v attempts=%d", err, attempts)
+	}
+}
+
+func TestFailoverGuardRejectsRetryAfterOutputOrCancellation(t *testing.T) {
+	callErr := &CallError{Retryable: true}
+	if canFailover(callErr, true, false, context.Background()) != true {
+		t.Fatal("eligible pre-output retry was rejected")
+	}
+	if canFailover(callErr, true, true, context.Background()) {
+		t.Fatal("retry allowed after downstream output began")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if canFailover(callErr, true, false, ctx) {
+		t.Fatal("retry allowed after request cancellation")
+	}
+}
+
+func TestIncompleteStreamAfterOutputDoesNotTryAnotherKey(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.BaseURL = upstream.URL + "/v1"
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	frames := 0
+	_, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", func(string, []byte) error {
+		frames++
+		return nil
+	}, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
+	var callErr *CallError
+	if !errors.As(err, &callErr) || callErr.Code != "incomplete_upstream_stream" || frames != 1 || calls != 1 {
+		t.Fatalf("err=%v frames=%d upstream calls=%d", err, frames, calls)
+	}
+}
+
+func TestStreamCancellationAfterFirstFrameDoesNotTryAnotherKey(t *testing.T) {
+	attempts := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts <- r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.BaseURL = upstream.URL + "/v1"
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	frames := make(chan []byte, 1)
+	type result struct {
+		id  string
+		err error
+	}
+	completed := make(chan result, 1)
+	go func() {
+		_, id, err := client.CallFromKeyCandidates("openai", ctx, body, "m", func(_ string, frame []byte) error {
+			frames <- append([]byte(nil), frame...)
+			return nil
+		}, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{})
+		completed <- result{id: id, err: err}
+	}()
+
+	select {
+	case frame := <-frames:
+		if !strings.Contains(string(frame), "partial") {
+			t.Fatalf("first stream frame = %q", frame)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the first stream frame")
+	}
+	select {
+	case authorization := <-attempts:
+		if authorization != "Bearer key-a" {
+			t.Fatalf("first attempt used unexpected credential: %q", authorization)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstream was not called")
+	}
+	cancel()
+
+	var resultValue result
+	select {
+	case resultValue = <-completed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for canceled stream to finish")
+	}
+	var callErr *CallError
+	if !errors.As(resultValue.err, &callErr) || callErr.Code != "request_canceled" || resultValue.id == "" {
+		t.Fatalf("request ID=%q error=%v", resultValue.id, resultValue.err)
+	}
+	select {
+	case authorization := <-attempts:
+		t.Fatalf("canceled stream unexpectedly tried another key: %q", authorization)
+	default:
+	}
+	rows, err := l.Recent(context.Background(), 10)
+	if err != nil || len(rows) != 1 || rows[0].ID != resultValue.id || rows[0].Status != "canceled" || rows[0].ErrorCode != "request_canceled" {
+		t.Fatalf("audits=%+v err=%v", rows, err)
+	}
+}
+
+func containsEvent(events []string, target string) bool {
+	for _, event := range events {
+		if event == target {
+			return true
+		}
+	}
+	return false
+}
 
 func TestQueuedCancellationIsAuditedWithoutSending(t *testing.T) {
 	l, err := ledger.Open(filepath.Join(t.TempDir(), "l.db"))

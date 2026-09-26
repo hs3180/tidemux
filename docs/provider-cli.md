@@ -60,8 +60,16 @@ tidemux provider key remove REF INDEX
 `key add` reads the new secret through hidden terminal input, stores it in
 Keychain and atomically appends only its reference to the profile. Keys are
 selected round-robin per request; one selected key is retained for the entire
-response stream. A configured `supported_models` allowlist applies to the
-whole group. With no allowlist, every model remains eligible.
+response stream. Before any response is delivered, TideMux can try the other
+keys in the same group after an upstream 401/403, 429, or a transport failure
+that occurred before request headers were written. It never changes keys after
+an SSE frame may have reached the client. Failed keys enter a process-local
+cooldown: 30 seconds for 401/403, 5 seconds for a safe pre-write transport
+failure, and the upstream `Retry-After` for 429 (one minute if absent, bounded
+to five minutes). If every key is cooling down, the gateway returns 503 with
+`Retry-After` instead of sending another request upstream. Cooldowns reset when
+the gateway process restarts. A configured `supported_models` allowlist
+applies to the whole group. With no allowlist, every model remains eligible.
 
 `key list` prints numbered redacted slots, not credentials or Keychain account
 details. `key remove` uses the listed index, asks for confirmation and requires
