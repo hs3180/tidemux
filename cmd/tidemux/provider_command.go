@@ -19,15 +19,19 @@ import (
 
 func providerCommand(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux provider <add|list|show|update|remove|key|models|pricing|budget>")
+		return errors.New("usage: tidemux provider <add|manage|list|show|validate|update|remove|key|models|pricing|budget>")
 	}
 	switch args[0] {
 	case "add":
 		return providerAdd(args[1:], stdout, stderr)
+	case "manage":
+		return providerManage(args[1:], stdout, stderr)
 	case "list":
 		return providerList(args[1:], stdout, stderr)
 	case "show":
 		return providerShow(args[1:], stdout, stderr)
+	case "validate":
+		return providerValidate(args[1:], stdout, stderr)
 	case "update":
 		return providerUpdate(args[1:], stdout, stderr)
 	case "remove":
@@ -41,7 +45,7 @@ func providerCommand(args []string, stdout, stderr *os.File) error {
 	case "budget":
 		return providerBudgetCommand(args[1:], os.Stdin, stdout, stderr)
 	default:
-		return errors.New("usage: tidemux provider <add|list|show|update|remove|key|models|pricing|budget>")
+		return errors.New("usage: tidemux provider <add|manage|list|show|validate|update|remove|key|models|pricing|budget>")
 	}
 }
 
@@ -473,13 +477,14 @@ func providerShow(args []string, stdout, stderr *os.File) error {
 func providerModels(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
-		return errors.New("usage: tidemux provider models REF [--only MODELS|--all] [--config PATH]")
+		return errors.New("usage: tidemux provider models REF [--only MODELS|--all|--select] [--config PATH]")
 	}
 	flags := flag.NewFlagSet("provider models", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
 	only := flags.String("only", "", "comma-separated model allowlist")
 	flags.Bool("all", false, "allow all models")
+	flags.Bool("select", false, "interactively select an allowlist from discovered or manual model IDs")
 	if err := flags.Parse(rest); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -488,8 +493,9 @@ func providerModels(args []string, stdout, stderr *os.File) error {
 	}
 	onlyRequested := flagWasSet(flags, "only")
 	allRequested := flagWasSet(flags, "all")
-	if flags.NArg() != 0 || (allRequested && onlyRequested) {
-		return errors.New("use at most one of --only or --all")
+	selectRequested := flagWasSet(flags, "select")
+	if flags.NArg() != 0 || (allRequested && onlyRequested) || (selectRequested && (onlyRequested || allRequested)) {
+		return errors.New("use at most one of --only, --all or --select")
 	}
 	c, abs, before, err := loadCommandConfig(*path)
 	if err != nil {
@@ -498,6 +504,9 @@ func providerModels(args []string, stdout, stderr *os.File) error {
 	p, ok := c.Providers[ref]
 	if !ok {
 		return fmt.Errorf("provider %q not found", ref)
+	}
+	if selectRequested {
+		return providerModelsSelect(ref, *path, stdout)
 	}
 	if onlyRequested || allRequested {
 		if onlyRequested {

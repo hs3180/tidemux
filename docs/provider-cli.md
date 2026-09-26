@@ -71,6 +71,34 @@ older `provider update --rotate-key`
 continues to rotate a single-key profile; use the `provider key` commands for a
 multi-key group.
 
+## Interactive provider manager
+
+Run the provider-scoped terminal manager to perform these operations without
+assembling subcommands manually:
+
+```sh
+tidemux provider manage
+```
+
+It lists stable provider references, protocol, key count and model scope, then
+offers provider inspection/editing, key add/list/remove, model-scope editing,
+local validation and provider removal. It never displays API keys or
+Keychain service/account details. Editing an endpoint re-detects its protocol
+unless an override is entered and clears the model allowlist because the new
+endpoint may expose a different catalog. Model scope can then be narrowed from
+the discovered catalog or by entering model IDs; `all` restores unrestricted
+access and a blank selection cancels without changing it.
+
+The equivalent local validation command is:
+
+```sh
+tidemux provider validate REF
+```
+
+It checks that the provider's configured Keychain entries are readable and
+valid, distinct from the gateway credential and unique within the group. It
+makes no upstream request and never prints credential values.
+
 ## Inspect and manage providers
 
 ```sh
@@ -78,8 +106,10 @@ tidemux provider list
 tidemux provider show REF
 tidemux provider update REF --model model-a,model-b
 tidemux provider models REF
+tidemux provider models REF --select
 tidemux provider models REF --only model-a,model-b
 tidemux provider models REF --all
+tidemux provider validate REF
 tidemux provider remove REF
 ```
 
@@ -109,6 +139,9 @@ those upstream model IDs as the suffix in `REF/MODEL_ID`; `/v1/models` exposes
 the same IDs with the provider reference included. `--only` sets an allowlist
 of upstream model IDs; `--all` clears the allowlist. An unavailable model
 catalog does not restrict requests unless an explicit allowlist is configured.
+`--select` interactively chooses catalog entries by number or exact ID; when
+discovery is unavailable, model IDs can still be entered manually. Enter `all`
+to clear the allowlist or press Enter to leave the current scope unchanged.
 
 ## Provider pricing
 
