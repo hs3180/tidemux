@@ -79,7 +79,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
 	for name, provider := range providers {
-		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
 		if !legacySingleProvider {
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)

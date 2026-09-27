@@ -122,6 +122,48 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 	}
 }
 
+func mappedUpstreamErrorPayload(callErr *adapter.CallError, protocol string) map[string]any {
+	_, code, message, kind := callErr.Category.ClientError(protocol)
+	detail := map[string]any{"type": kind, "message": message, "code": code}
+	if callErr.ProviderCode != "" {
+		detail["provider_code"] = callErr.ProviderCode
+	}
+	if callErr.Param != "" {
+		detail["param"] = callErr.Param
+	}
+	payload := map[string]any{"error": detail}
+	if protocol == "anthropic" {
+		payload["type"] = "error"
+	}
+	return payload
+}
+
+func (h *handler) failUpstream(w http.ResponseWriter, callErr *adapter.CallError, protocol string) {
+	if callErr.Category == "" {
+		h.fail(w, callErr.Status, callErr.Code, protocol, callErr.Param)
+		return
+	}
+	status, _, _, _ := callErr.Category.ClientError(protocol)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(mappedUpstreamErrorPayload(callErr, protocol))
+}
+
+func setRetryAfterHeader(w http.ResponseWriter, callErr *adapter.CallError) {
+	if callErr.RetryProvided {
+		w.Header().Set("Retry-After", strconv.FormatInt(callErr.RetryAfterSecs, 10))
+		return
+	}
+	if callErr.RetryAfterSecs > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(callErr.RetryAfterSecs, 10))
+		return
+	}
+	if callErr.Cooldown > 0 {
+		seconds := int64((callErr.Cooldown + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	}
+}
+
 func (h *handler) protocolForRequest(r *http.Request) string {
 	// Messages has a unique path. Model discovery shares /v1/models across
 	// protocols, so use Anthropic's authentication/version headers only there;
@@ -410,24 +452,24 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !errors.As(err, &ce) {
 			ce = &adapter.CallError{Status: 500, Code: "internal_error"}
 		}
-		if ce.Cooldown > 0 {
-			seconds := int((ce.Cooldown + time.Second - 1) / time.Second)
-			w.Header().Set("Retry-After", strconv.Itoa(seconds))
-		}
+		setRetryAfterHeader(w, ce)
 		if !sent {
 			if id != "" {
 				w.Header().Set("X-TideMux-Request-ID", id)
 			}
-			h.fail(w, ce.Status, ce.Code, protocol, ce.Param)
+			h.failUpstream(w, ce, protocol)
 			return
 		}
-		detail := map[string]any{"type": "api_error", "message": ce.Code}
-		if ce.Param != "" {
-			detail["param"] = ce.Param
-		}
-		payload := map[string]any{"error": detail}
-		if protocol == "anthropic" {
-			payload["type"] = "error"
+		payload := mappedUpstreamErrorPayload(ce, protocol)
+		if ce.Category == "" {
+			detail := map[string]any{"type": "api_error", "message": ce.Code, "code": ce.Code}
+			if ce.Param != "" {
+				detail["param"] = ce.Param
+			}
+			payload = map[string]any{"error": detail}
+			if protocol == "anthropic" {
+				payload["type"] = "error"
+			}
 		}
 		encoded, _ := json.Marshal(payload)
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
@@ -441,11 +483,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ce *adapter.CallError
 		if errors.As(err, &ce) {
-			if ce.Cooldown > 0 {
-				seconds := int((ce.Cooldown + time.Second - 1) / time.Second)
-				w.Header().Set("Retry-After", strconv.Itoa(seconds))
-			}
-			h.fail(w, ce.Status, ce.Code, protocol, ce.Param)
+			setRetryAfterHeader(w, ce)
+			h.failUpstream(w, ce, protocol)
 		} else {
 			h.fail(w, 500, "internal_error", protocol)
 		}

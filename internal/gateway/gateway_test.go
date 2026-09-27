@@ -100,6 +100,7 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 					}
 					switch scenario {
 					case "429":
+						w.Header().Set("Retry-After", "0")
 						w.WriteHeader(429)
 						io.WriteString(w, `{"error":"provider-secret private detail"}`)
 					case "500":
@@ -148,6 +149,12 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 				}
 				if scenario == "429" {
 					want = 429
+					if got := out.Header().Get("Retry-After"); got != "0" {
+						t.Errorf("Retry-After = %q, want explicit zero", got)
+					}
+					if calls != 3 {
+						t.Errorf("same-key 429 attempts = %d, want 3", calls)
+					}
 				}
 				if scenario == "canceled" {
 					want = 408
@@ -180,6 +187,230 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 				}
 				if scenario != "success" && a.InputTokens != nil {
 					t.Error("unknown usage presented as zero")
+				}
+			})
+		}
+	}
+}
+
+func TestMappedProviderErrorsUseClientProtocolAndHideProviderMessages(t *testing.T) {
+	for _, clientProtocol := range []string{"openai", "anthropic"} {
+		for _, providerProtocol := range []string{"openai", "anthropic"} {
+			t.Run(clientProtocol+"-client/"+providerProtocol+"-provider", func(t *testing.T) {
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusPaymentRequired)
+					_, _ = io.WriteString(w, `{"error":{"code":"balance_low","message":"private provider account text"}}`)
+				}))
+				defer upstream.Close()
+
+				c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "p")
+				provider := c.Providers["p"]
+				provider.Protocol = providerProtocol
+				provider.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "balance_low", HTTPStatus: 402, Category: adapter.ProviderErrorInsufficientBalance}}
+				c.Providers["p"] = provider
+				h, closeDB, err := NewHandler(c, upstream.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer closeDB()
+
+				path := "/v1/chat/completions"
+				if clientProtocol == "anthropic" {
+					path = "/v1/messages"
+				}
+				req := httptest.NewRequest("POST", path, strings.NewReader(requestBodyFor(clientProtocol, "p", "custom-model")))
+				if clientProtocol == "anthropic" {
+					req.Header.Set("x-api-key", "local-secret")
+					req.Header.Set("anthropic-version", "2023-06-01")
+				} else {
+					req.Header.Set("Authorization", "Bearer local-secret")
+				}
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				if out.Code != http.StatusPaymentRequired || strings.Contains(out.Body.String(), "private provider account text") {
+					t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+				}
+				var payload map[string]any
+				if err := json.Unmarshal(out.Body.Bytes(), &payload); err != nil {
+					t.Fatal(err)
+				}
+				detail, ok := payload["error"].(map[string]any)
+				if !ok || detail["code"] != "provider_insufficient_balance" || detail["provider_code"] != "balance_low" {
+					t.Fatalf("mapped error payload=%s", out.Body.String())
+				}
+				if clientProtocol == "anthropic" && (payload["type"] != "error" || detail["type"] != "billing_error") {
+					t.Fatalf("Anthropic error shape=%s", out.Body.String())
+				}
+				if clientProtocol == "openai" && detail["type"] != "insufficient_quota" {
+					t.Fatalf("OpenAI error shape=%s", out.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestProviderErrorMappingsDoNotCrossProviderProfiles(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, `{"error":{"code":"balance_low","message":"private provider account text"}}`)
+	}))
+	defer upstream.Close()
+
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "mapped")
+	mapped := c.Providers["mapped"]
+	mapped.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "balance_low", HTTPStatus: 402, Category: adapter.ProviderErrorInsufficientBalance}}
+	c.Providers["mapped"] = mapped
+	other := mapped
+	other.ErrorCodeMappings = nil
+	c.Providers["other"] = other
+	h, closeDB, err := NewHandler(c, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	for _, tc := range []struct {
+		provider         string
+		wantCode         string
+		wantProviderCode string
+		wantHTTP         int
+	}{{provider: "mapped", wantCode: "provider_insufficient_balance", wantProviderCode: "balance_low", wantHTTP: http.StatusPaymentRequired}, {provider: "other", wantCode: "upstream_error", wantHTTP: http.StatusBadGateway}} {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", tc.provider, "custom-model")))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, req)
+		var payload map[string]any
+		if err := json.Unmarshal(out.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		detail := payload["error"].(map[string]any)
+		var wantProviderCode any
+		if tc.wantProviderCode != "" {
+			wantProviderCode = tc.wantProviderCode
+		}
+		if out.Code != tc.wantHTTP || detail["code"] != tc.wantCode || detail["provider_code"] != wantProviderCode || strings.Contains(out.Body.String(), "private provider account text") {
+			t.Fatalf("provider %s: status=%d payload=%s", tc.provider, out.Code, out.Body.String())
+		}
+	}
+}
+
+func TestNativeAnthropicDocumentAndCitationsReachProvider(t *testing.T) {
+	upstreamBody := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":[],"has_more":false}`)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upstream request: %v", err)
+		}
+		upstreamBody <- string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, responseBody("anthropic"))
+	}))
+	defer upstream.Close()
+
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "p")
+	provider := c.Providers["p"]
+	provider.Protocol = "anthropic"
+	c.Providers["p"] = provider
+	h, closeDB, err := NewHandler(c, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+
+	body := `{"model":"p/custom-model","max_tokens":64,"messages":[{"role":"user","content":[{"type":"text","text":"Use this citation.","citations":[{"type":"char_location","cited_text":"source","document_index":0,"document_title":"Reference","start_char_index":0,"end_char_index":6}]},{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Reference text"},"title":"Reference"}]}]}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "local-secret")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+	}
+	forwarded := <-upstreamBody
+	for _, fragment := range []string{`"model":"custom-model"`, `"type":"document"`, `"citations"`, `"Reference text"`} {
+		if !strings.Contains(forwarded, fragment) {
+			t.Fatalf("native provider request lost %s: %s", fragment, forwarded)
+		}
+	}
+}
+
+func TestMappedProviderStreamErrorsUseNativeClientEnvelopeAfterOutput(t *testing.T) {
+	for _, clientProtocol := range []string{"openai", "anthropic"} {
+		for _, providerProtocol := range []string{"openai", "anthropic"} {
+			t.Run(clientProtocol+"-client/"+providerProtocol+"-provider", func(t *testing.T) {
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					if providerProtocol == "openai" {
+						_, _ = io.WriteString(w, "data: {\"id\":\"chat1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"custom-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"first\"},\"finish_reason\":null}]}\n\n")
+					} else {
+						_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"role\":\"assistant\",\"model\":\"custom-model\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n")
+					}
+					w.(http.Flusher).Flush()
+					if providerProtocol == "openai" {
+						_, _ = io.WriteString(w, "event: error\ndata: {\"error\":{\"code\":\"balance_low\",\"message\":\"private provider account text\"}}\n\n")
+					} else {
+						_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"billing_error\",\"code\":\"balance_low\",\"message\":\"private provider account text\"}}\n\n")
+					}
+				}))
+				defer upstream.Close()
+
+				c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "p")
+				provider := c.Providers["p"]
+				provider.Protocol = providerProtocol
+				provider.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "balance_low", Category: adapter.ProviderErrorInsufficientBalance}}
+				c.Providers["p"] = provider
+				h, closeDB, err := NewHandler(c, upstream.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer closeDB()
+
+				path := "/v1/chat/completions"
+				if clientProtocol == "anthropic" {
+					path = "/v1/messages"
+				}
+				body := requestBodyFor(clientProtocol, "p", "custom-model")
+				body = strings.TrimSuffix(body, "}") + `,"stream":true}`
+				req := httptest.NewRequest("POST", path, strings.NewReader(body))
+				if clientProtocol == "anthropic" {
+					req.Header.Set("x-api-key", "local-secret")
+					req.Header.Set("anthropic-version", "2023-06-01")
+				} else {
+					req.Header.Set("Authorization", "Bearer local-secret")
+				}
+				out := httptest.NewRecorder()
+				h.ServeHTTP(out, req)
+				if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), "event: error") || strings.Contains(out.Body.String(), "private provider account text") {
+					t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+				}
+				var envelope struct {
+					Type  string `json:"type"`
+					Error struct {
+						Type         string `json:"type"`
+						Code         string `json:"code"`
+						ProviderCode string `json:"provider_code"`
+					} `json:"error"`
+				}
+				errorFrame := strings.SplitN(out.Body.String(), "event: error\ndata: ", 2)
+				if len(errorFrame) != 2 {
+					t.Fatalf("missing error frame: %s", out.Body.String())
+				}
+				if err := json.Unmarshal([]byte(strings.SplitN(errorFrame[1], "\n\n", 2)[0]), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if envelope.Error.Code != "provider_insufficient_balance" || envelope.Error.ProviderCode != "balance_low" {
+					t.Fatalf("stream error envelope=%+v body=%s", envelope, out.Body.String())
+				}
+				if clientProtocol == "anthropic" && (envelope.Type != "error" || envelope.Error.Type != "billing_error") {
+					t.Fatalf("Anthropic stream error envelope=%+v", envelope)
+				}
+				if clientProtocol == "openai" && envelope.Error.Type != "insufficient_quota" {
+					t.Fatalf("OpenAI stream error envelope=%+v", envelope)
 				}
 			})
 		}

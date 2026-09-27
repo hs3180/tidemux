@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -243,7 +244,7 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 	if !validChoice(protocol, in.ToolChoice) {
 		return nil, "", warnings, validationError("tools", "tool_choice")
 	}
-	for _, m := range in.Messages {
+	for index, m := range in.Messages {
 		// System-role messages are a compatible-provider extension emitted by
 		// gateway clients. Preserve their position; do not promote or rewrite them.
 		allowed := m.Role == "user" || m.Role == "assistant" || m.Role == "system"
@@ -267,7 +268,11 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 		}
 		emptyAssistant := protocol == "openai" && m.Role == "assistant" && len(m.ToolCalls) > 0 && (len(m.Content) == 0 || string(m.Content) == "null")
 		if !emptyAssistant && !messageContent(protocol, m.Role, m.Content) {
-			return nil, "", warnings, validationError("messages", "messages.content")
+			path := fmt.Sprintf("messages[%d].content", index)
+			if unsupported := unsupportedContentBlockPath(protocol, m.Role, m.Content, path); unsupported != path {
+				return nil, "", warnings, validationError("unsupported_request_feature", unsupported)
+			}
+			return nil, "", warnings, validationError("messages", path)
 		}
 	}
 	for _, field := range []struct {

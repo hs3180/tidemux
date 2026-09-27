@@ -17,10 +17,17 @@ import (
 )
 
 func gatewayCommand(args []string, stdout, stderr *os.File) error {
-	if len(args) == 0 || args[0] != "configure" {
-		return errors.New("usage: tidemux gateway configure [options]")
+	if len(args) == 0 {
+		return errors.New("usage: tidemux gateway <configure|check> [options]")
 	}
-	return gatewayConfigure(args[1:], stdout, stderr)
+	switch args[0] {
+	case "configure":
+		return gatewayConfigure(args[1:], stdout, stderr)
+	case "check":
+		return gatewayCheck(args[1:], stdout, stderr, gateway.MacOSKeychain{})
+	default:
+		return errors.New("usage: tidemux gateway <configure|check> [options]")
+	}
 }
 
 func gatewayConfigure(args []string, stdout, stderr *os.File) error {

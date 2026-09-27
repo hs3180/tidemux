@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httptrace"
 	"strings"
@@ -24,18 +25,26 @@ type Client struct {
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
 	MaxOutputTokens                                 int64
 	Prices                                          map[string]Price
+	ErrorCodeMappings                               []ProviderErrorMapping
 	PromptCache                                     *PromptCache
 	HTTP                                            *http.Client
 	Ledger                                          *ledger.Ledger
 	Gate                                            *limiter.ConcurrencyGate
+	waitRateLimit                                   func(context.Context, time.Duration) error
 }
 type CallError struct {
 	Status         int
 	Code           string
 	Param          string
+	ProviderCode   string
+	Category       ProviderErrorCategory
 	UpstreamStatus int
 	Retryable      bool
+	RateLimited    bool
 	Cooldown       time.Duration
+	RetryDelay     time.Duration
+	RetryAfterSecs int64
+	RetryProvided  bool
 }
 
 func (e *CallError) Error() string { return e.Code }
@@ -206,14 +215,18 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			}
 		}
 		attempted = true
-		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered)
+		handleRateLimit := func(callErr *CallError) {
+			a.Events = append(a.Events, "rate_limit")
+			if callbacks.Failed != nil {
+				callbacks.Failed(candidateIndex, callErr)
+			}
+		}
+		recordRateLimitRetry := func() { a.Events = append(a.Events, "rate_limit_retry") }
+		data, usage, err = c.doAttemptWithRateLimitRetries(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, handleRateLimit, recordRateLimitRetry)
 		if err == nil {
 			break
 		}
 		var callErr *CallError
-		if errors.As(err, &callErr) && callErr.UpstreamStatus == http.StatusTooManyRequests {
-			a.Events = append(a.Events, "rate_limit_429")
-		}
 		if !errors.As(err, &callErr) || !callErr.Retryable {
 			break
 		}
@@ -255,6 +268,77 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}
 	a.Status = "ok"
 	return data, id, nil
+}
+
+func (c *Client) doAttemptWithRateLimitRetries(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, onRateLimit func(*CallError), onRetry func()) ([]byte, TokenUsage, error) {
+	for attempt := 1; ; attempt++ {
+		data, usage, err := c.doAttempt(ctx, clientProtocol, providerBody, model, sink, options, limits, id, apiKey, observed, delivered)
+		if err == nil {
+			return data, usage, nil
+		}
+		var callErr *CallError
+		if !errors.As(err, &callErr) || !callErr.RateLimited {
+			return nil, TokenUsage{}, err
+		}
+		if onRateLimit != nil {
+			onRateLimit(callErr)
+		}
+		delay := callErr.RetryDelay
+		if !callErr.RetryProvided {
+			delay = rateLimitBackoff(attempt)
+			callErr.RetryAfterSecs = int64(math.Ceil(delay.Seconds()))
+		}
+		if attempt >= 3 || *delivered || !retryDelayFits(ctx, delay) {
+			callErr.Retryable = false
+			return nil, TokenUsage{}, callErr
+		}
+		if delay > 0 {
+			var waitErr error
+			if c.waitRateLimit != nil {
+				waitErr = c.waitRateLimit(ctx, delay)
+			} else {
+				waitErr = waitContext(ctx, delay)
+			}
+			if waitErr != nil {
+				return nil, TokenUsage{}, &CallError{Status: 408, Code: "request_canceled"}
+			}
+		}
+		if onRetry != nil {
+			onRetry()
+		}
+	}
+}
+
+func rateLimitBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > 8 {
+		attempt = 8
+	}
+	return time.Second * time.Duration(1<<(attempt-1))
+}
+
+func retryDelayFits(ctx context.Context, delay time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	return !ok || delay < time.Until(deadline)
+}
+
+func waitContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func logConversionWarnings(clientProtocol, providerProtocol string, fields []string) {
@@ -309,7 +393,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, TokenUsage{}, upstreamError(resp)
+		return nil, TokenUsage{}, upstreamError(resp, c.ErrorCodeMappings...)
 	}
 	recordedBody := observedReader{Reader: resp.Body, observed: observed}
 	if sink != nil {
@@ -339,7 +423,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 				return &CallError{Status: 502, Code: "downstream_write_error"}
 			}
 			return nil
-		})
+		}, streamErrorContext{response: resp, mappings: c.ErrorCodeMappings})
 		if err == nil && translator != nil {
 			data, err = translator.terminal(data)
 		}

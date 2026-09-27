@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 )
 
@@ -13,10 +14,15 @@ import (
 // terminal frame is returned to the caller and sent only after audit commits.
 type StreamSink func(id string, frame []byte) error
 
+type streamErrorContext struct {
+	response *http.Response
+	mappings []ProviderErrorMapping
+}
+
 func readStream(protocol string, r io.Reader, emit func([]byte) error) (TokenUsage, []byte, error) {
 	return readStreamWithLimits(protocol, r, Limits{}.Effective(), emit)
 }
-func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func([]byte) error) (TokenUsage, []byte, error) {
+func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func([]byte) error, errorContexts ...streamErrorContext) (TokenUsage, []byte, error) {
 	maxBytes := limits.StreamBytes
 	reader := io.LimitReader(r, maxBytes+1)
 	scan := bufio.NewScanner(reader)
@@ -36,6 +42,12 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 	finished := false
 	fail := func(code string) (TokenUsage, []byte, error) {
 		return TokenUsage{}, nil, &CallError{Status: 502, Code: code}
+	}
+	streamError := func(data []byte) (TokenUsage, []byte, error) {
+		if len(errorContexts) == 0 {
+			return fail("upstream_stream_error")
+		}
+		return TokenUsage{}, nil, providerStreamError(data, errorContexts[0])
 	}
 	for scan.Scan() {
 		wireLine := scan.Bytes()
@@ -70,13 +82,13 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 			}
 			continue
 		}
+		data := strings.Join(lines, "\n")
 		if event == "error" {
-			return fail("upstream_stream_error")
+			return streamError([]byte(data))
 		}
 		if protocol == "openai" && event != "" && event != "message" {
 			return fail("invalid_upstream_stream")
 		}
-		data := strings.Join(lines, "\n")
 		terminal := false
 		if protocol == "openai" && data == "[DONE]" {
 			if !started || !finished {
@@ -94,7 +106,7 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 				return fail("invalid_upstream_stream")
 			}
 			if obj["error"] != nil || kind == "error" {
-				return fail("upstream_stream_error")
+				return streamError([]byte(data))
 			}
 			merge := func(raw json.RawMessage) error {
 				if len(raw) == 0 || string(raw) == "null" {

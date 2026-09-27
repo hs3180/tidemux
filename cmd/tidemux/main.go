@@ -20,14 +20,14 @@ import (
 )
 
 const (
-	version = "0.2.0"
+	version = "0.2.1"
 	usage   = `usage: tidemux <command> [options]
 
 commands:
   serve       start the local gateway
   doctor      check the configuration, Keychain and local state directory
   provider    add, inspect and edit upstream providers
-  gateway     configure gateway-wide settings
+  gateway     configure settings or check the running gateway
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
               inspect delivery attempts with report deliveries --id N
@@ -43,12 +43,13 @@ common examples:
   tidemux report webhook --provider lark
   tidemux report schedule --time 09:00 --channel webhook
   tidemux gateway configure --listen loopback
+  tidemux gateway check
   tidemux claude --model PROVIDER/deepseek-flash
   tidemux serve --config /path/to/config.json
 
 Each provider uses one API protocol and endpoint, with one or more API keys
-stored in Keychain. Provider protocol is detected from its endpoint unless
-explicitly forced.
+stored in Keychain. Provider protocol is detected from bounded authenticated
+/models schema probes unless explicitly forced.
 Set each client's model to PROVIDER/MODEL (or use the client's required
 --model option); TideMux strips PROVIDER/ before forwarding upstream. Provider
 selection is explicit. Key failover is limited to safe failures within that

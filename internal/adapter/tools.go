@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -100,18 +101,28 @@ func validChoice(protocol string, raw json.RawMessage) bool {
 }
 
 type contentBlock struct {
-	Type         string          `json:"type"`
-	Text         *string         `json:"text,omitempty"`
-	CacheControl *CacheControl   `json:"cache_control,omitempty"`
-	ID           string          `json:"id,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	Content      json.RawMessage `json:"content,omitempty"`
-	IsError      *bool           `json:"is_error,omitempty"`
-	Thinking     *string         `json:"thinking,omitempty"`
-	Signature    string          `json:"signature,omitempty"`
-	Data         string          `json:"data,omitempty"`
+	Type             string          `json:"type"`
+	Text             *string         `json:"text,omitempty"`
+	CacheControl     *CacheControl   `json:"cache_control,omitempty"`
+	ID               string          `json:"id,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	Input            json.RawMessage `json:"input,omitempty"`
+	ToolUseID        string          `json:"tool_use_id,omitempty"`
+	Content          json.RawMessage `json:"content,omitempty"`
+	IsError          *bool           `json:"is_error,omitempty"`
+	Thinking         *string         `json:"thinking,omitempty"`
+	Signature        string          `json:"signature,omitempty"`
+	Data             string          `json:"data,omitempty"`
+	Source           json.RawMessage `json:"source,omitempty"`
+	Citations        json.RawMessage `json:"citations,omitempty"`
+	Transformations  json.RawMessage `json:"transformations,omitempty"`
+	Title            string          `json:"title,omitempty"`
+	Context          string          `json:"context,omitempty"`
+	Caller           json.RawMessage `json:"caller,omitempty"`
+	EncryptedContent string          `json:"encrypted_content,omitempty"`
+	ReturnCode       *int64          `json:"return_code,omitempty"`
+	Stderr           string          `json:"stderr,omitempty"`
+	FileID           string          `json:"file_id,omitempty"`
 }
 
 func messageContent(protocol, role string, raw json.RawMessage) bool {
@@ -129,22 +140,34 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 		}
 		switch b.Type {
 		case "text":
-			if b.Text == nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" {
+			if b.Text == nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
+				return false
+			}
+		case "image":
+			if protocol != "anthropic" || role != "user" && role != "tool_result" || !object(b.Source) || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Citations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
+				return false
+			}
+		case "document":
+			if protocol != "anthropic" || role != "user" && role != "tool_result" || !object(b.Source) || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Transformations != nil || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
+				return false
+			}
+		case "search_result":
+			if protocol != "anthropic" || b.Content == nil || b.Source == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Transformations != nil || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
 				return false
 			}
 		case "tool_use":
-			if protocol != "anthropic" || role != "assistant" || b.ID == "" || b.Name == "" || !object(b.Input) || b.Text != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" {
+			if protocol != "anthropic" || role != "assistant" || b.ID == "" || b.Name == "" || !object(b.Input) || b.Text != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
 				return false
 			}
 		case "tool_result":
-			if protocol != "anthropic" || role != "user" || b.ToolUseID == "" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" {
+			if protocol != "anthropic" || role != "user" || b.ToolUseID == "" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
 				return false
 			}
 			if b.Content != nil && !messageContent(protocol, "tool_result", b.Content) {
 				return false
 			}
 		case "thinking", "redacted_thinking":
-			if protocol != "anthropic" || role != "assistant" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil {
+			if protocol != "anthropic" || role != "assistant" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
 				return false
 			}
 			if b.Type == "thinking" && (b.Thinking == nil || b.Signature == "" || b.Data != "") {
@@ -153,9 +176,59 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 			if b.Type == "redacted_thinking" && (b.Data == "" || b.Thinking != nil || b.Signature != "") {
 				return false
 			}
+		case "server_tool_use":
+			if protocol != "anthropic" || role != "assistant" || b.ID == "" || b.Name == "" || !object(b.Input) || b.Text != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
+				return false
+			}
+		case "web_search_tool_result", "web_fetch_tool_result":
+			if protocol != "anthropic" || b.ToolUseID == "" || b.Content == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.FileID != "" {
+				return false
+			}
+		case "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result":
+			if protocol != "anthropic" || b.ToolUseID == "" || b.Content == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.FileID != "" {
+				return false
+			}
+		case "container_upload":
+			if protocol != "anthropic" || b.FileID == "" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" {
+				return false
+			}
 		default:
 			return false
 		}
 	}
 	return true
+}
+
+func unsupportedContentBlockPath(protocol, role string, raw json.RawMessage, path string) string {
+	var blocks []struct {
+		Type    string          `json:"type"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil || blocks == nil {
+		return path
+	}
+	for index, block := range blocks {
+		blockPath := path + "[" + strconv.Itoa(index) + "]"
+		if !supportedContentBlockType(protocol, block.Type) {
+			return blockPath + ".type"
+		}
+		if block.Type == "tool_result" {
+			if nested := unsupportedContentBlockPath(protocol, "tool_result", block.Content, blockPath+".content"); nested != "" {
+				return nested
+			}
+		}
+	}
+	return path
+}
+
+func supportedContentBlockType(protocol, kind string) bool {
+	if protocol == "openai" {
+		return kind == "text"
+	}
+	switch kind {
+	case "text", "image", "document", "search_result", "tool_use", "tool_result", "thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result", "container_upload":
+		return true
+	default:
+		return false
+	}
 }
