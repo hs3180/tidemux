@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 — 2026-09-28
+
+- Classify provider errors by exact, per-provider code mappings and return
+  protocol-native safe errors without exposing provider message text.
+- Retry rate limits on the same key with a bounded wait, honor `Retry-After`,
+  then use only the selected provider's key group for failover.
+- Detect provider protocol from bounded authenticated model-list responses;
+  remove endpoint-name heuristics and retain explicit protocol overrides.
+- Add read-only gateway connectivity checks and agent-led install/setup
+  guidance for Claude Code, Codex, Hermes and dsh.
+- Keep configurations, Keychain references, provider scopes, budgets and audit
+  records intact; clarify the limits of direct Codex routing.
+- Preserve documented Anthropic image, document, citation and server-tool
+  blocks on native Anthropic routes; return precise errors for unsupported
+  cross-protocol content.
+- For rollback to 0.2.0, remove any newly added `error_code_mappings` from the
+  config before reinstalling 0.2.0; the older binary does not recognize that
+  field.
+
 ## 0.2.0 — 2026-09-26
 
 - Require clients to select providers explicitly with `REF/MODEL`. Provider

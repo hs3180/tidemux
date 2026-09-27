@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -133,31 +133,14 @@ func InspectProviderEndpoint(ctx context.Context, baseURL, apiKey, apiVersion st
 	if strings.TrimSpace(apiKey) == "" {
 		return ProviderEndpointInfo{}, errors.New("provider API key is required for endpoint inspection")
 	}
-	if protocol := providerProtocolHint(baseURL); protocol != "" {
-		provider := Provider{APIKey: apiKey, APIVersion: apiVersion}
-		if protocol == "anthropic" && provider.APIVersion == "" {
-			provider.APIVersion = defaultAnthropicAPIVersion
-		}
-		models, known := discoverProviderModels(baseURL, provider, protocol, httpClient)
-		return ProviderEndpointInfo{Protocol: protocol, Models: models, ModelsKnown: known}, nil
-	}
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	probeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	for _, protocol := range []string{"openai", "anthropic"} {
-		body, err := fetchProviderModels(probeContext, baseURL, apiKey, apiVersion, protocol, httpClient)
-		if err != nil {
-			continue
-		}
-		if detected := classifyProviderModels(body); detected != "" {
-			models, known := parseProviderModels(body, detected)
-			return ProviderEndpointInfo{Protocol: detected, Models: models, ModelsKnown: known}, nil
-		}
+	protocol, models, known, err := detectProviderEndpoint(ctx, baseURL, apiKey, apiVersion, httpClient)
+	if err != nil {
+		return ProviderEndpointInfo{}, err
 	}
-	return ProviderEndpointInfo{}, errors.New("cannot determine provider API protocol from endpoint or GET /models; choose openai or anthropic explicitly")
+	return ProviderEndpointInfo{Protocol: protocol, Models: models, ModelsKnown: known}, nil
 }
 
 // DiscoverProviderModels fetches the model catalog using an explicitly chosen
@@ -220,10 +203,16 @@ func parseProviderModels(body []byte, protocol string) ([]string, bool) {
 	return models, true
 }
 
-func fetchProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, protocol string, httpClient *http.Client) ([]byte, error) {
+type providerModelsResponse struct {
+	status      int
+	contentType string
+	body        []byte
+}
+
+func requestProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, protocol string, httpClient *http.Client) (providerModelsResponse, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
 	if err != nil {
-		return nil, err
+		return providerModelsResponse{}, err
 	}
 	switch protocol {
 	case "openai":
@@ -235,7 +224,7 @@ func fetchProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, proto
 		}
 		request.Header.Set("anthropic-version", apiVersion)
 	default:
-		return nil, errors.New("unknown provider protocol")
+		return providerModelsResponse{}, errors.New("unknown provider protocol")
 	}
 	client := http.Client{Timeout: 5 * time.Second}
 	if httpClient != nil {
@@ -244,102 +233,114 @@ func fetchProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, proto
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		return providerModelsResponse{}, err
 	}
 	defer response.Body.Close()
+	result := providerModelsResponse{status: response.StatusCode, contentType: response.Header.Get("Content-Type")}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, nil
+		return result, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil || len(body) > 1<<20 {
-		return nil, errors.New("provider model response is unreadable or too large")
+		return providerModelsResponse{}, errors.New("provider model response is unreadable or too large")
 	}
-	return body, nil
+	result.body = body
+	return result, nil
 }
 
-// detectProviderProtocol identifies the upstream wire format without making a
-// billable model request. Official provider roots and explicit compatibility
-// paths are resolved locally; generic roots are inspected through GET /models.
-func detectProviderProtocol(ctx context.Context, baseURL, apiKey, apiVersion string, httpClient *http.Client) (string, error) {
-	if protocol := providerProtocolHint(baseURL); protocol != "" {
-		return protocol, nil
+func fetchProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, protocol string, httpClient *http.Client) ([]byte, error) {
+	response, err := requestProviderModels(ctx, baseURL, apiKey, apiVersion, protocol, httpClient)
+	if err != nil || response.status < http.StatusOK || response.status >= http.StatusMultipleChoices {
+		return nil, err
 	}
+	return response.body, nil
+}
 
+// detectProviderProtocol identifies the upstream wire format from bounded,
+// protocol-authenticated capability requests without generating billable text.
+func detectProviderProtocol(ctx context.Context, baseURL, apiKey, apiVersion string, httpClient *http.Client) (string, error) {
+	protocol, _, _, err := detectProviderEndpoint(ctx, baseURL, apiKey, apiVersion, httpClient)
+	return protocol, err
+}
+
+func detectProviderEndpoint(ctx context.Context, baseURL, apiKey, apiVersion string, httpClient *http.Client) (string, []string, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	probeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	type evidence struct {
+		protocol string
+		models   []string
+		known    bool
+	}
+	confirmed := make(map[string]evidence)
 	for _, auth := range []string{"openai", "anthropic"} {
-		protocol, err := probeProviderModels(probeContext, baseURL, apiKey, apiVersion, auth, httpClient)
-		if err != nil {
+		response, err := requestProviderModels(probeContext, baseURL, apiKey, apiVersion, auth, httpClient)
+		if err != nil || response.status < http.StatusOK || response.status >= http.StatusMultipleChoices || len(response.body) == 0 || !isJSONMediaType(response.contentType) {
 			continue
 		}
-		if protocol != "" {
-			return protocol, nil
+		openAI, anthropic := classifyProviderModelSemantics(response.body)
+		if openAI != anthropic {
+			protocol := "anthropic"
+			if openAI {
+				protocol = "openai"
+			}
+			models, known := parseProviderModels(response.body, protocol)
+			confirmed[protocol] = evidence{protocol: protocol, models: models, known: known}
 		}
 	}
-	return "", errors.New("cannot determine provider API protocol; the API root must identify an OpenAI/Anthropic endpoint or expose a compatible GET /models response")
+	if len(confirmed) == 1 {
+		for _, result := range confirmed {
+			return result.protocol, result.models, result.known, nil
+		}
+	}
+	return "", nil, false, errors.New("cannot determine one provider API protocol from authenticated GET /models probes; set --protocol openai or --protocol anthropic")
 }
 
-func providerProtocolHint(baseURL string) string {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return ""
+func isJSONMediaType(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return true
 	}
-	haystack := strings.ToLower(u.Hostname() + " " + u.Path)
-	// A path such as /anthropic/v1 is more specific than a provider hostname
-	// and is common for OpenAI-compatible services exposing both APIs.
-	if strings.Contains(haystack, "anthropic") {
-		return "anthropic"
-	}
-	if strings.Contains(haystack, "openai") {
-		return "openai"
-	}
-	// DeepSeek's base endpoint is OpenAI-compatible unless its explicit
-	// /anthropic/ path matched above. This keeps the endpoint usable even when a
-	// provider deployment does not expose model discovery.
-	if strings.Contains(haystack, "deepseek") {
-		return "openai"
-	}
-	return ""
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && (mediaType == "application/json" || strings.HasSuffix(mediaType, "+json"))
 }
 
-func probeProviderModels(ctx context.Context, baseURL, apiKey, apiVersion, auth string, httpClient *http.Client) (string, error) {
-	body, err := fetchProviderModels(ctx, baseURL, apiKey, apiVersion, auth, httpClient)
-	if err != nil {
-		return "", err
-	}
-	if len(body) == 0 {
-		return "", nil
-	}
-	return classifyProviderModels(body), nil
-}
-
-func classifyProviderModels(body []byte) string {
+func classifyProviderModelSemantics(body []byte) (openAI, anthropic bool) {
 	var envelope struct {
-		Object string            `json:"object"`
-		Data   []json.RawMessage `json:"data"`
+		Object  string            `json:"object"`
+		HasMore *bool             `json:"has_more"`
+		Data    []json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(body, &envelope) != nil {
-		return ""
+		return false, false
 	}
+	if envelope.Data == nil {
+		return false, false
+	}
+	// Anthropic model-list pages carry has_more and model-typed records;
+	// OpenAI lists use object=list and model objects without has_more.
+	openAIItemsValid, anthropicItemsValid := true, true
 	for _, raw := range envelope.Data {
 		var item struct {
-			ID          string `json:"id"`
-			Object      string `json:"object"`
-			Type        string `json:"type"`
-			DisplayName string `json:"display_name"`
+			ID     string `json:"id"`
+			Object string `json:"object"`
+			Type   string `json:"type"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
-			continue
+			return false, false
 		}
-		if item.Type == "model" || item.DisplayName != "" {
-			return "anthropic"
+		if item.ID == "" {
+			return false, false
 		}
-		if item.Object == "model" || (item.ID != "" && item.Type == "") {
-			return "openai"
+		if item.Object != "model" {
+			openAIItemsValid = false
+		}
+		if item.Type != "model" {
+			anthropicItemsValid = false
 		}
 	}
-	if envelope.Object == "list" {
-		return "openai"
-	}
-	return ""
+	openAI = envelope.Object == "list" && envelope.HasMore == nil && openAIItemsValid
+	anthropic = envelope.HasMore != nil && anthropicItemsValid
+	return openAI, anthropic
 }

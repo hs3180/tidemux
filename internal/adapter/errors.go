@@ -3,6 +3,7 @@ package adapter
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,8 +11,10 @@ import (
 )
 
 const (
-	defaultRateLimitCooldown = time.Minute
-	maximumKeyCooldown       = 5 * time.Minute
+	defaultRateLimitRetry = time.Second
+	maximumKeyCooldown    = 24 * time.Hour
+	maximumRetryAfter     = 24 * time.Hour
+	maxProviderErrorBody  = 64 << 10
 )
 
 func boundedCooldown(delay time.Duration) time.Duration {
@@ -24,29 +27,125 @@ func boundedCooldown(delay time.Duration) time.Duration {
 	return delay
 }
 
-func retryAfter(resp *http.Response) time.Duration {
+func retryAfter(resp *http.Response) (time.Duration, int64, bool) {
 	value := strings.TrimSpace(resp.Header.Get("Retry-After"))
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
-		if seconds <= 0 {
-			return time.Second
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		delay := time.Duration(seconds) * time.Second
+		if seconds > int64(maximumRetryAfter/time.Second) {
+			delay = maximumRetryAfter
 		}
-		if seconds >= int64(maximumKeyCooldown/time.Second) {
-			return maximumKeyCooldown
-		}
-		return boundedCooldown(time.Duration(seconds) * time.Second)
+		return delay, seconds, true
 	}
 	if at, err := http.ParseTime(value); err == nil {
-		return boundedCooldown(time.Until(at))
+		delay := time.Until(at)
+		if delay < 0 {
+			delay = 0
+		}
+		if delay > maximumRetryAfter {
+			delay = maximumRetryAfter
+		}
+		seconds := int64(math.Ceil(delay.Seconds()))
+		return delay, seconds, true
 	}
-	return defaultRateLimitCooldown
+	return 0, 0, false
 }
 
-// Preserve actionable error categories without forwarding provider text, which
-// can contain echoed prompts, credentials, or account details. A client can
-// then apply its own documented recovery (for example unsupported JSON Schema).
-func upstreamError(resp *http.Response) *CallError {
+func providerErrorCode(body []byte) string {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || len(envelope.Error) == 0 {
+		return ""
+	}
+	var detail struct {
+		Code string `json:"code"`
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(envelope.Error, &detail) != nil {
+		return ""
+	}
+	if safeProviderErrorCode(detail.Code) {
+		return detail.Code
+	}
+	if safeProviderErrorCode(detail.Type) {
+		return detail.Type
+	}
+	return ""
+}
+
+func providerErrorHTTPStatus(body []byte) int {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || len(envelope.Error) == 0 {
+		return 0
+	}
+	var detail struct {
+		Status     int `json:"status"`
+		StatusCode int `json:"status_code"`
+	}
+	if json.Unmarshal(envelope.Error, &detail) != nil {
+		return 0
+	}
+	for _, status := range []int{detail.Status, detail.StatusCode} {
+		if status >= 400 && status <= 599 {
+			return status
+		}
+	}
+	return 0
+}
+
+func providerStreamError(body []byte, stream streamErrorContext) *CallError {
+	providerCode := providerErrorCode(body)
+	if providerCode == "" {
+		return &CallError{Status: 502, Code: "upstream_stream_error"}
+	}
+	status := providerErrorHTTPStatus(body)
+	category, ok := resolveProviderErrorCategory(providerCode, status, stream.mappings)
+	if !ok {
+		return &CallError{Status: 502, Code: "upstream_stream_error"}
+	}
+	response := &http.Response{StatusCode: 200, Header: make(http.Header)}
+	if stream.response != nil {
+		response.StatusCode = stream.response.StatusCode
+		response.Header = stream.response.Header
+	}
+	return mappedProviderError(response, category, providerCode)
+}
+
+func mappedProviderError(resp *http.Response, category ProviderErrorCategory, providerCode string) *CallError {
+	status, code, _, _ := category.ClientError("openai")
+	result := &CallError{Status: status, Code: code, ProviderCode: providerCode, Category: category, UpstreamStatus: resp.StatusCode}
+	if category == ProviderErrorRateLimited {
+		result.RateLimited = true
+		result.Retryable = true
+		result.RetryDelay, result.RetryAfterSecs, result.RetryProvided = retryAfter(resp)
+		if result.RetryProvided {
+			result.Cooldown = boundedCooldown(result.RetryDelay)
+		} else {
+			result.Cooldown = defaultRateLimitRetry
+		}
+	} else if category == ProviderErrorAuthentication {
+		result.Retryable = true
+		result.Cooldown = 30 * time.Second
+	}
+	return result
+}
+
+// Preserve safe built-in categories without forwarding provider messages, which
+// can contain echoed prompts, credentials, or account details. Exact configured
+// error codes can add provider-specific meaning without parsing arbitrary text.
+func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) *CallError {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderErrorBody))
+	if providerCode := providerErrorCode(body); providerCode != "" {
+		if category, ok := resolveProviderErrorCategory(providerCode, resp.StatusCode, mappings); ok {
+			return mappedProviderError(resp, category, providerCode)
+		}
+	}
 	if resp.StatusCode == 429 {
-		return &CallError{Status: 429, Code: "upstream_rate_limited", UpstreamStatus: resp.StatusCode, Retryable: true, Cooldown: retryAfter(resp)}
+		result := mappedProviderError(resp, ProviderErrorRateLimited, "")
+		result.ProviderCode = ""
+		return result
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode, Retryable: true, Cooldown: 30 * time.Second}
@@ -56,26 +155,23 @@ func upstreamError(resp *http.Response) *CallError {
 	}
 	code := "upstream_invalid_request"
 	param := ""
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if err == nil {
-		var envelope struct {
-			Error struct {
-				Message string `json:"message"`
-				Param   string `json:"param"`
-				Code    string `json:"code"`
-			} `json:"error"`
-		}
-		if json.Unmarshal(raw, &envelope) == nil {
-			message := strings.ToLower(envelope.Error.Message)
-			param = envelope.Error.Param
-			unsupported := strings.Contains(message, "not support") || strings.Contains(message, "unsupported") || strings.Contains(message, "unavailable") || strings.Contains(message, "unknown parameter") || strings.Contains(message, "unrecognized") || strings.Contains(message, "extra inputs are not permitted")
-			if unsupported {
-				for _, p := range []string{"response_format", "output_config", "reasoning_effort", "thinking", "temperature", "tools", "tool_choice"} {
-					if envelope.Error.Param == p || strings.Contains(message, p) {
-						code = "unsupported_parameter_" + p
-						param = p
-						break
-					}
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+			Param   string `json:"param"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil {
+		message := strings.ToLower(envelope.Error.Message)
+		param = envelope.Error.Param
+		unsupported := strings.Contains(message, "not support") || strings.Contains(message, "unsupported") || strings.Contains(message, "unavailable") || strings.Contains(message, "unknown parameter") || strings.Contains(message, "unrecognized") || strings.Contains(message, "extra inputs are not permitted")
+		if unsupported {
+			for _, p := range []string{"response_format", "output_config", "reasoning_effort", "thinking", "temperature", "tools", "tool_choice"} {
+				if envelope.Error.Param == p || strings.Contains(message, p) {
+					code = "unsupported_parameter_" + p
+					param = p
+					break
 				}
 			}
 		}

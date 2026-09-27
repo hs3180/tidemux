@@ -1,4 +1,4 @@
-# Protocol support — 0.2.0
+# Protocol support — 0.2.1
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
@@ -21,18 +21,22 @@ response bytes may have reached the client. Gateway authentication,
 active-session limits and the local ledger remain shared.
 
 The 0.1.x single-provider configuration remains a migration/compatibility path;
-do not rely on it as a 0.2.0 configuration guarantee.
+do not rely on it as a 0.2.1 configuration guarantee.
 
 For named providers, an explicitly configured `protocol` of `openai` or
 `anthropic` forces that upstream format and skips detection. Otherwise TideMux
-checks recognized endpoint host/path hints such as OpenAI, Anthropic and
-DeepSeek. For other roots it sends an authenticated `GET` to `base_url + /models`
-using OpenAI and Anthropic authentication shapes, then classifies the returned
-model objects. It never sends a completion or message just to detect the
-protocol. If it cannot confidently identify the format, startup fails with the
-provider reference so the user can explicitly set the protocol. Model discovery
-then uses the resolved protocol and the same endpoint. The older single-provider
-detection behavior belongs to the 0.1.x compatibility path only.
+sends bounded, authenticated `GET base_url/models` probes using both
+authentication shapes and checks each successful JSON response against the
+OpenAI and Anthropic model-list schemas. URL host and path names do not select a
+protocol. TideMux checks both candidates even after one schema matches; it
+starts only when exactly one protocol is confirmed. If both or neither match,
+startup reports the provider reference and the `tidemux provider update REF
+--protocol openai|anthropic` recovery command. No completion or message is sent
+for detection. The probe has a five-second total deadline, reads at most 1 MiB
+per response, and refuses redirects so credentials cannot be forwarded. Model
+discovery then uses the resolved protocol and the same endpoint. Old `auto`
+profiles may now need an explicit protocol if their `/models` response is
+ambiguous or non-standard; detection does not rewrite the stored configuration.
 
 | Feature | Named OpenAI provider | Named Anthropic provider |
 | --- | --- | --- |
@@ -103,11 +107,15 @@ schema, but actual reasoning and schema enforcement depend on the upstream.
 Unknown request fields are ignored with a gateway log warning. Unknown config
 fields, duplicate JSON keys, multiple JSON documents, malformed tool envelopes
 and invalid beta headers are rejected.
-Images, document/audio blocks, provider server tools, Responses API, embeddings,
-batches and token-counting endpoints are not implemented. These remain explicit
-boundaries; normal tested client workflows do not prove every client feature or
-every upstream model is supported. See the [0.1.1 client acceptance matrix](client-compatibility.md)
-for prior-release evidence; it does not certify the 0.2.0 routing model.
+Native Anthropic routes preserve documented image, document, citation and
+server-tool content blocks for the upstream to validate. TideMux does not
+translate these blocks to OpenAI Chat Completions; a cross-protocol request
+receives a field-specific unsupported-feature error. Audio, Responses API,
+embeddings, batches and token-counting endpoints are not implemented. These
+remain explicit boundaries; normal tested client workflows do not prove every
+client feature or every upstream model is supported. See the
+[0.1.1 client acceptance matrix](client-compatibility.md) for prior-release
+evidence; it does not certify the 0.2.1 routing model.
 
 ## Streaming and errors
 
@@ -121,9 +129,24 @@ concurrency slot until the upstream body is closed.
 HTTP 429 is preserved as a rate-limit error. Upstream 400/422 parameter rejections
 retain their status with a safe, recognized parameter code when available; raw
 provider bodies are not returned. This allows Hermes to retry without an
-unsupported structured-output field. Other upstream failures use safe gateway
-errors. TideMux itself does not automatically retry. Clients may retry or choose
-a different transport, creating separate auditable attempts.
+unsupported structured-output field. Provider-specific error codes can be
+classified per named provider with `error_code_mappings`; only exact codes
+match, optional HTTP status conditions take precedence over unqualified rules,
+and arbitrary provider message text is never used to infer billing or policy
+errors. Mapped failures use protocol-native error envelopes, stable public
+codes, and safe guidance; a safe provider code is included when available.
+
+TideMux retries HTTP 429 on the same selected key and provider at most three
+total attempts, following `Retry-After` seconds or HTTP-date values. Invalid or
+missing values use a one-then-two-second backoff. The request timeout bounds
+total waiting; if the indicated delay does not fit, TideMux returns the mapped
+rate-limit error without an early retry and includes `Retry-After`. A 429 does
+not immediately move to a different key. Authentication and safe pre-write
+transport failures keep their existing same-provider key failover behavior.
+Cancellation interrupts a wait, and no retry occurs after response bytes may
+have reached the client. A recognized error reported inside an SSE stream is
+sent as the current client protocol's `error` event; a stream already in
+progress is never replayed.
 
 ## Configuration and accounting
 

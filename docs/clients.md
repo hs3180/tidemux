@@ -1,6 +1,6 @@
 # Client setup
 
-This guide describes the current named-provider CLI. Install the client you
+This guide describes the 0.2.1 named-provider CLI. Install the client you
 want to use separately; TideMux does not install Claude Code, Kilo CLI or
 Hermes Agent. The tested 0.1.1 release matrix is documented in
 [client compatibility](client-compatibility.md); its single-provider routing
@@ -17,9 +17,10 @@ tidemux provider add https://api.deepseek.com/anthropic/v1
 tidemux provider list
 ```
 
-Each command securely prompts for the upstream API key. TideMux infers the
-provider protocol from its endpoint. All models are allowed by default; pass
-`--model MODEL[,MODEL...]` to restrict a provider during setup, or use
+Each command securely prompts for the upstream API key. Unless `--protocol` is
+supplied, TideMux identifies the provider protocol from bounded authenticated
+`/models` schema probes, not the endpoint's name. All models are allowed by
+default; pass `--model MODEL[,MODEL...]` to restrict a provider during setup, or use
 `tidemux provider models REF --only ...` later. Choose the provider reference
 shown by `provider list`, and always request the model as `REF/MODEL_ID` (for
 example, `openrouter/stealth/union-alpha`). The gateway strips the first
@@ -100,3 +101,9 @@ interactive terminal and a bidirectional streaming HTTP connection.
 
 The existing `tidemux kilo-ide` command is experimental. VS Code extension
 compatibility is not part of the current release scope.
+
+For agent-led installation and setup across Claude Code, Codex, Hermes and dsh,
+see the [agent installation guide](agent-install.md) and its
+[copyable prompt](agent-install-prompt.md). Codex can perform TideMux setup;
+Codex itself cannot currently route through TideMux because its custom
+providers use the Responses API, which TideMux does not serve.

@@ -87,8 +87,8 @@ func (p *providerKeyPool) CooldownAt(index int, delay time.Duration, now time.Ti
 	if delay < time.Second {
 		delay = time.Second
 	}
-	if delay > 5*time.Minute {
-		delay = 5 * time.Minute
+	if delay > 24*time.Hour {
+		delay = 24 * time.Hour
 	}
 	until := now.Add(delay)
 	p.mu.Lock()

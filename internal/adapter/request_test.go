@@ -100,3 +100,27 @@ func TestRequestDropsUnknownContentBlockFieldsRecursively(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeAnthropicContentBlocksAndCitationFieldsArePreserved(t *testing.T) {
+	body := []byte(`{"model":"provider/model","max_tokens":128,"messages":[{"role":"user","content":[{"type":"text","text":"Use these sources.","citations":[{"type":"char_location","cited_text":"source","document_index":0,"document_title":"Reference","start_char_index":0,"end_char_index":6}]},{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Reference text"},"title":"Reference"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},{"role":"assistant","content":[{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"example"},"caller":{"type":"direct"}},{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","title":"Example","url":"https://example.com","encrypted_content":"opaque"}],"encrypted_content":"opaque"}]}]}`)
+	encoded, model, ignored, err := RequestWithWarnings("anthropic", body, "")
+	if err != nil || model != "provider/model" {
+		t.Fatalf("model=%q ignored=%v err=%v", model, ignored, err)
+	}
+	if len(ignored) != 0 {
+		t.Fatalf("valid native fields reported as ignored: %v", ignored)
+	}
+	for _, fragment := range []string{`"type":"document"`, `"type":"image"`, `"citations"`, `"server_tool_use"`, `"web_search_tool_result"`, `"encrypted_content"`, `"caller"`} {
+		if !strings.Contains(string(encoded), fragment) {
+			t.Fatalf("native content field %s was dropped: %s", fragment, encoded)
+		}
+	}
+}
+
+func TestUnsupportedAnthropicContentBlockReportsExactFieldPath(t *testing.T) {
+	body := []byte(`{"model":"provider/model","max_tokens":64,"messages":[{"role":"user","content":[{"type":"future_block","payload":"opaque"}]}]}`)
+	_, _, err := Request("anthropic", body, "")
+	if err == nil || err.Error() != "unsupported_request_feature" || ValidationParameter(err) != "messages[0].content[0].type" {
+		t.Fatalf("err=%v param=%q", err, ValidationParameter(err))
+	}
+}

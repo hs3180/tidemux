@@ -1,6 +1,6 @@
 # Provider and gateway setup
 
-The 0.2.0 CLI uses resource-oriented commands. Provider setup and
+The 0.2.1 CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
 retained. This guide describes the current release CLI.
@@ -14,7 +14,9 @@ tidemux provider add
 ```
 
 TideMux reads the API key through hidden terminal input and infers the upstream
-protocol from the endpoint or authenticated `GET /models`. Model discovery is
+protocol from authenticated `GET /models` response schemas. URL names do not
+select a protocol; when both or neither schema match, setup asks for an explicit
+`--protocol openai` or `--protocol anthropic`. Model discovery is
 informational and never sends a completion request. In guided setup, choose
 model IDs to create an allowlist or leave the selection blank to allow all
 models. If discovery is unavailable, enter IDs to restrict access or leave it
@@ -59,15 +61,18 @@ tidemux provider key remove REF INDEX
 `key add` reads the new secret through hidden terminal input, stores it in
 Keychain and atomically appends only its reference to the profile. Keys are
 selected round-robin per request; one selected key is retained for the entire
-response stream. Before any response is delivered, TideMux can try the other
-keys in the same group after an upstream 401/403, 429, or a transport failure
-that occurred before request headers were written. It never changes keys after
-an SSE frame may have reached the client. Failed keys enter a process-local
-cooldown: 30 seconds for 401/403, 5 seconds for a safe pre-write transport
-failure, and the upstream `Retry-After` for 429 (one minute if absent, bounded
-to five minutes). If every key is cooling down, the gateway returns 503 with
-`Retry-After` instead of sending another request upstream. Cooldowns reset when
-the gateway process restarts. A configured `supported_models` allowlist
+response stream. Authentication failures and transport failures known to have
+happened before request headers were written can try the next ready key within
+the same group. HTTP 429 first retries the same key at most three total
+attempts; it does not switch keys to bypass the provider's wait. TideMux follows
+`Retry-After` seconds or HTTP-date values when the delay fits inside the request
+timeout. Otherwise it returns the rate-limit error without retrying early. An
+invalid or missing header uses one-then-two-second backoff. Every 429 updates a
+process-local key cooldown (minimum one second, maximum 24 hours). A safe
+pre-write transport failure cools a key for five seconds and an authentication
+failure for 30 seconds. If every key is cooling down, the gateway returns 503
+with `Retry-After` instead of sending another request upstream. Cooldowns reset
+when the gateway process restarts. A configured `supported_models` allowlist
 applies to the whole group. With no allowlist, every model remains eligible.
 
 `key list` prints numbered redacted slots, not credentials or Keychain account
@@ -183,6 +188,30 @@ than guessed. An enabled budget requires a matching price for each requested
 model while that budget is active. Unpriced models remain usable when the
 provider has no budget.
 
+## Provider error-code mappings
+
+Use exact upstream codes to give a provider-specific failure a stable client
+category. The mapping is stored on one provider profile and never applies to
+another provider:
+
+```sh
+tidemux provider error-map list REF
+tidemux provider error-map add REF --code billing_quota --category insufficient_balance
+tidemux provider error-map add REF --code key_throttled --status 429 --category rate_limited
+tidemux provider error-map remove REF --code billing_quota
+tidemux provider error-map remove REF --code key_throttled --status 429
+```
+
+`--status` is an optional exact upstream HTTP status from 400 through 599. An
+exact code-and-status entry wins over the same code's unqualified entry;
+duplicate code/status pairs are rejected. Valid categories are
+`insufficient_balance`, `rate_limited`, `authentication`, `permission_denied`,
+`invalid_request`, and `model_not_found`. Provider messages are never inspected
+to infer a category or returned to the client. The response includes the
+protocol-native envelope, a safe explanation, a stable TideMux code, and the
+upstream code if it contains only safe ASCII characters. Rate-limit mappings
+use the same bounded retry policy as HTTP 429.
+
 ## Provider budget
 
 Budget policy and budgeted usage belong to an individual provider. Configure or
@@ -220,6 +249,7 @@ tidemux gateway configure
 tidemux gateway configure --listen loopback
 tidemux gateway configure --max-active-sessions 20 \
   --active-session-idle-timeout-seconds 300
+tidemux gateway check
 ```
 
 The only listener modes are `loopback` and `0.0.0.0`; the configured port is
@@ -229,6 +259,12 @@ prompts for the key with hidden input; press Enter to generate a random key. A
 generated key is printed once so remote clients can use it. Traffic is
 plain HTTP, so keep external access on a trusted LAN and protect it with a
 firewall; do not expose it directly to the internet.
+
+`tidemux gateway check` reads the gateway key from Keychain and verifies the
+running local listener's authenticated `/v1/models` endpoint without printing
+the key or changing configuration. Start `tidemux serve` with the same config
+first; the check always connects through loopback, including when the listener
+is bound to `0.0.0.0`.
 
 `--max-in-flight` controls concurrent upstream requests. `--max-active-sessions`
 sets the gateway-wide logical-session cap; zero disables it. A retained session

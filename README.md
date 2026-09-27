@@ -23,7 +23,7 @@ If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
 Homebrew installs the current published release. The quick start below uses
-the 0.2.0 provider and gateway commands.
+the 0.2.1 provider and gateway commands.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -31,7 +31,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.2.0 CLI**.
+This walkthrough describes the **0.2.1 CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -97,12 +97,14 @@ RFC3339 date bounds. Use `tidemux doctor --diagnostics` to inspect local request
 rejections. See [accounting](docs/accounting.md#billing-statistics-and-download)
 for periods, synchronization status, statement coverage and the CSV format.
 For current client launch commands and profile behavior, see the
-[client setup guide](docs/clients.md). The tested 0.1.1 release matrix is
+[client setup guide](docs/clients.md). Agent-led installation for Claude Code,
+Codex, Hermes and dsh is covered in the [agent installation guide](docs/agent-install.md).
+The tested 0.1.1 release matrix is
 documented separately in [client compatibility](docs/client-compatibility.md).
 
 ## Compatibility
 
-TideMux 0.2.0 exposes OpenAI Chat Completions and Anthropic
+TideMux 0.2.1 exposes OpenAI Chat Completions and Anthropic
 Messages client APIs simultaneously. Each request selects a named provider with
 `model: "REF/MODEL"`; TideMux uses that provider's configured upstream protocol
 and strips `REF/` before forwarding the model to it. Provider selection is
@@ -110,20 +112,22 @@ independent of the client's protocol, so either client API can reach any
 provider, with conversion only when required. There is no default provider or
 model. When a provider has multiple keys, TideMux may fail over within that key
 group on 401/403 or 429, or on a transport failure before request headers are
-written. A 429 indicates rate limiting (and may also reflect an exhausted
-provider quota); TideMux honors `Retry-After` for that key's cooldown. It never
+written. A 429 retries the same key up to three times and honors `Retry-After`,
+then may fail over within that provider's key group. It never
 switches to a different named provider, and stops retrying once response
 content may have reached the client. Gateway auth, session limits and ledger
 accounting remain shared.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
-not certify the 0.2.0 named-provider routing. Other compatible providers can be
+not certify the 0.2.1 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.
 
-Responses API, images/audio and IDE extensions are outside this release's
-scope. Provider-specific features without an equivalent in the selected
-protocol are not forwarded silently. See the
+Responses API, audio and IDE extensions are outside this release's scope.
+Anthropic images, documents, citations and server-tool blocks pass through on
+native Anthropic routes but cannot be converted to OpenAI Chat Completions.
+Provider-specific features without an equivalent in the selected protocol are
+reported with a field-specific error. See the
 [0.1.1 tested-client matrix](docs/client-compatibility.md) for release evidence
-and [protocol support](docs/protocols.md) for the 0.2.0 routing contract.
+and [protocol support](docs/protocols.md) for the 0.2.1 routing contract.
 
 ## CLI design principles
 
@@ -131,12 +135,12 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.2.0 CLI; older binaries
+`tidemux gateway`. The commands below describe the 0.2.1 CLI; older binaries
 may expose a different command set.
 
 | Command | Semantics |
 | --- | --- |
-| `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model MODELS]` | Add exactly one provider without replacing others. `--model` is a comma-separated allowlist. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol and allow all models unless `--model` is supplied. |
+| `tidemux provider add [ENDPOINT] [--name LABEL] [--protocol PROTOCOL] [--model MODELS]` | Add exactly one provider without replacing others. `--model` is a comma-separated allowlist. With no endpoint, start guided setup and offer the initial daily-notification prompt; with an endpoint, infer protocol from bounded authenticated `/models` schema probes and allow all models unless `--model` is supplied. |
 | `tidemux provider list [--json]` | List provider references, endpoint, protocol, key count, model scope and budget status. Never reveal credentials. |
 | `tidemux provider show REF` | Show one provider's effective settings, including its budget, but not its API key. |
 | `tidemux provider validate REF` | Check a provider's configuration and Keychain credentials locally without an upstream request or displaying key material. |
@@ -158,9 +162,10 @@ overrides that reference. Multiple profiles may use the same endpoint (for
 example, separate accounts); each `add` creates a distinct reference and never
 silently updates or replaces an existing provider. Use `tidemux provider key
 add REF` to attach additional credentials to one profile; they share that
-profile's endpoint and model scope. The endpoint determines the protocol by
-default, with `--protocol openai|anthropic` available only to override
-inference. API keys are always collected through hidden input, never
+profile's endpoint and model scope. TideMux detects protocol from bounded,
+authenticated `/models` schema probes; endpoint names do not select a protocol.
+If the response is ambiguous or unrecognized, set `--protocol
+openai|anthropic` explicitly. API keys are always collected through hidden input, never
 command-line arguments or configuration JSON; they are stored in macOS
 Keychain. Without a terminal for that prompt, setup fails before changing
 configuration. Model discovery uses
@@ -247,6 +252,8 @@ tidemux claude --model REF_FROM_LIST/model-a
 
 [Provider and gateway CLI](docs/provider-cli.md) ·
 [Client setup](docs/clients.md) ·
+[Agent installation and setup](docs/agent-install.md) ·
+[0.2.1 release plan](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
 [Privacy](PRIVACY.md) · [Security](SECURITY.md)

@@ -11,15 +11,17 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/gateway"
 	"golang.org/x/term"
 )
 
 func providerCommand(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget>")
+		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget|error-map>")
 	}
 	switch args[0] {
 	case "add":
@@ -42,9 +44,131 @@ func providerCommand(args []string, stdout, stderr *os.File) error {
 		return providerPricing(args[1:], stdout, stderr)
 	case "budget":
 		return providerBudgetCommand(args[1:], os.Stdin, stdout, stderr)
+	case "error-map":
+		return providerErrorMapCommand(args[1:], stdout, stderr)
 	default:
-		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget>")
+		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget|error-map>")
 	}
+}
+
+func providerErrorMapCommand(args []string, stdout, stderr *os.File) error {
+	if len(args) == 0 {
+		return errors.New("usage: tidemux provider error-map <list|add|remove> REF [options]")
+	}
+	action := args[0]
+	flags := flag.NewFlagSet("provider error-map "+action, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", defaultConfigPath(), "configuration path")
+	code := flags.String("code", "", "exact upstream error code")
+	category := flags.String("category", "", "canonical category")
+	status := flags.Int("status", 0, "optional exact upstream HTTP status")
+	if err := flags.Parse(interspersedProviderErrorMapArgs(args[1:])); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 1 || strings.TrimSpace(*configPath) == "" {
+		return errors.New("usage: tidemux provider error-map <list|add|remove> REF [--code CODE] [--status STATUS] [--category CATEGORY] [--config PATH]")
+	}
+	ref := flags.Arg(0)
+	c, path, before, err := loadCommandConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	provider, ok := c.Providers[ref]
+	if !ok {
+		return fmt.Errorf("provider %q not found", ref)
+	}
+	switch action {
+	case "list":
+		if flagWasSet(flags, "code") || flagWasSet(flags, "category") || flagWasSet(flags, "status") || flags.NArg() != 1 {
+			return errors.New("provider error-map list accepts only REF and --config")
+		}
+		if len(provider.ErrorCodeMappings) == 0 {
+			fmt.Fprintf(stdout, "Provider %s has no error-code mappings.\n", ref)
+			return nil
+		}
+		for _, mapping := range provider.ErrorCodeMappings {
+			statusLabel := "any"
+			if mapping.HTTPStatus != 0 {
+				statusLabel = strconv.Itoa(mapping.HTTPStatus)
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", mapping.UpstreamCode, statusLabel, mapping.Category)
+		}
+		return nil
+	case "add":
+		if !flagWasSet(flags, "code") || !flagWasSet(flags, "category") {
+			return errors.New("provider error-map add requires --code CODE and --category CATEGORY")
+		}
+		mapping := adapter.ProviderErrorMapping{UpstreamCode: *code, Category: adapter.ProviderErrorCategory(*category)}
+		if flagWasSet(flags, "status") {
+			mapping.HTTPStatus = *status
+		}
+		provider.ErrorCodeMappings = append(provider.ErrorCodeMappings, mapping)
+		if err := adapter.ValidateProviderErrorMappings(provider.ErrorCodeMappings); err != nil {
+			return err
+		}
+		c.Providers[ref] = provider
+		if err := writeCommandConfig(path, c, before); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Added error-code mapping for provider %s.\n", ref)
+		return nil
+	case "remove":
+		if !flagWasSet(flags, "code") || flagWasSet(flags, "category") {
+			return errors.New("provider error-map remove requires --code CODE and accepts --status STATUS")
+		}
+		wantStatus := 0
+		if flagWasSet(flags, "status") {
+			wantStatus = *status
+		}
+		kept := make([]adapter.ProviderErrorMapping, 0, len(provider.ErrorCodeMappings))
+		removed := false
+		for _, mapping := range provider.ErrorCodeMappings {
+			if mapping.UpstreamCode == *code && mapping.HTTPStatus == wantStatus {
+				removed = true
+				continue
+			}
+			kept = append(kept, mapping)
+		}
+		if !removed {
+			return errors.New("matching provider error-code mapping not found")
+		}
+		provider.ErrorCodeMappings = kept
+		c.Providers[ref] = provider
+		if err := writeCommandConfig(path, c, before); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Removed error-code mapping for provider %s.\n", ref)
+		return nil
+	default:
+		return errors.New("usage: tidemux provider error-map <list|add|remove> REF [options]")
+	}
+}
+
+// Keep the provider reference usable before or after flags, matching the
+// neighboring provider commands' positional syntax.
+func interspersedProviderErrorMapArgs(args []string) []string {
+	var options, positionals []string
+	valueFlags := map[string]bool{"--config": true, "-config": true, "--code": true, "-code": true, "--category": true, "-category": true, "--status": true, "-status": true}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+		options = append(options, arg)
+		name := arg
+		if equal := strings.IndexByte(name, '='); equal >= 0 {
+			name = name[:equal]
+		}
+		if valueFlags[name] && !strings.Contains(arg, "=") && i+1 < len(args) {
+			i++
+			options = append(options, args[i])
+		}
+	}
+	return append(options, positionals...)
 }
 
 func providerAdd(args []string, stdout, stderr *os.File) error {
