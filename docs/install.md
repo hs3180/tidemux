@@ -41,9 +41,10 @@ it. The installer does not change configuration or Keychain credentials.
 The 0.2.1 upgrade does not rewrite provider profiles, Keychain references,
 gateway settings, budgets or the audit ledger. Back up the config before an
 upgrade as part of your normal local-data practice. If you added
-`error_code_mappings` and need to return to 0.2.0, remove those entries with
-`tidemux provider error-map list REF` and `tidemux provider error-map remove`
-before starting the older binary; 0.2.0 rejects that newer config field. Then
+`error_code_mappings` and need to return to 0.2.0, list each provider's rules
+with `tidemux provider error-map list REF`, then remove every entry with
+`tidemux provider error-map remove REF --code CODE [--status STATUS]` before
+starting the older binary; 0.2.0 rejects that newer config field. Then
 download and inspect the installer from the `v0.2.0` tag and run it with
 `TIDEMUX_VERSION=0.2.0`. Provider protocol auto-detection behavior also returns
 to the 0.2.0 implementation after rollback.
