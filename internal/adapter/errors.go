@@ -29,7 +29,13 @@ func boundedCooldown(delay time.Duration) time.Duration {
 
 func retryAfter(resp *http.Response) (time.Duration, int64, bool) {
 	value := strings.TrimSpace(resp.Header.Get("Retry-After"))
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+	if decimalSeconds(value) {
+		seconds, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			// A syntactically valid but unrepresentably large delta must not be
+			// mistaken for a malformed header and retried with the short fallback.
+			return maximumRetryAfter, int64(maximumRetryAfter / time.Second), true
+		}
 		delay := time.Duration(seconds) * time.Second
 		if seconds > int64(maximumRetryAfter/time.Second) {
 			delay = maximumRetryAfter
@@ -48,6 +54,18 @@ func retryAfter(resp *http.Response) (time.Duration, int64, bool) {
 		return delay, seconds, true
 	}
 	return 0, 0, false
+}
+
+func decimalSeconds(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func providerErrorCode(body []byte) string {

@@ -51,6 +51,7 @@ func TestRetryAfterIsBounded(t *testing.T) {
 		wantValid   bool
 	}{
 		{value: "999999", want: maximumRetryAfter, wantSeconds: 999999, wantValid: true},
+		{value: "999999999999999999999999", want: maximumRetryAfter, wantSeconds: int64(maximumRetryAfter / time.Second), wantValid: true},
 		{value: "-1"},
 		{value: "not-a-date"},
 	} {
