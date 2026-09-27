@@ -180,7 +180,11 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 			if protocol != "anthropic" || role != "assistant" || b.ID == "" || b.Name == "" || !object(b.Input) || b.Text != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
 				return false
 			}
-		case "web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result":
+		case "web_search_tool_result", "web_fetch_tool_result":
+			if protocol != "anthropic" || b.ToolUseID == "" || b.Content == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.FileID != "" {
+				return false
+			}
+		case "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result":
 			if protocol != "anthropic" || b.ToolUseID == "" || b.Content == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.FileID != "" {
 				return false
 			}

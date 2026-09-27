@@ -102,7 +102,7 @@ func TestRequestDropsUnknownContentBlockFieldsRecursively(t *testing.T) {
 }
 
 func TestNativeAnthropicContentBlocksAndCitationFieldsArePreserved(t *testing.T) {
-	body := []byte(`{"model":"provider/model","max_tokens":128,"messages":[{"role":"user","content":[{"type":"text","text":"Use these sources.","citations":[{"type":"char_location","cited_text":"source","document_index":0,"document_title":"Reference","start_char_index":0,"end_char_index":6}]},{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Reference text"},"title":"Reference"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},{"role":"assistant","content":[{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"example"},"caller":{"type":"direct"}},{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","title":"Example","url":"https://example.com","encrypted_content":"opaque"}],"encrypted_content":"opaque"}]}]}`)
+	body := []byte(`{"model":"provider/model","max_tokens":128,"messages":[{"role":"user","content":[{"type":"text","text":"Use these sources.","citations":[{"type":"char_location","cited_text":"source","document_index":0,"document_title":"Reference","start_char_index":0,"end_char_index":6}]},{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Reference text"},"title":"Reference"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},{"role":"assistant","content":[{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"example"},"caller":{"type":"direct"}},{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","title":"Example","url":"https://example.com","encrypted_content":"opaque"}],"caller":{"type":"code_execution_20260120","tool_id":"srvtoolu_exec"}},{"type":"server_tool_use","id":"srvtoolu_2","name":"web_fetch","input":{"url":"https://example.com"},"caller":{"type":"code_execution_20260120","tool_id":"srvtoolu_exec"}},{"type":"web_fetch_tool_result","tool_use_id":"srvtoolu_2","content":{"type":"web_fetch_result","url":"https://example.com","content":[{"type":"text","text":"Fetched text"}]},"caller":{"type":"code_execution_20260120","tool_id":"srvtoolu_exec"}}]}]}`)
 	encoded, model, ignored, err := RequestWithWarnings("anthropic", body, "")
 	if err != nil || model != "provider/model" {
 		t.Fatalf("model=%q ignored=%v err=%v", model, ignored, err)
@@ -110,7 +110,7 @@ func TestNativeAnthropicContentBlocksAndCitationFieldsArePreserved(t *testing.T)
 	if len(ignored) != 0 {
 		t.Fatalf("valid native fields reported as ignored: %v", ignored)
 	}
-	for _, fragment := range []string{`"type":"document"`, `"type":"image"`, `"citations"`, `"server_tool_use"`, `"web_search_tool_result"`, `"encrypted_content"`, `"caller"`} {
+	for _, fragment := range []string{`"type":"document"`, `"type":"image"`, `"citations"`, `"server_tool_use"`, `"web_search_tool_result"`, `"web_fetch_tool_result"`, `"encrypted_content"`, `"caller"`} {
 		if !strings.Contains(string(encoded), fragment) {
 			t.Fatalf("native content field %s was dropped: %s", fragment, encoded)
 		}
