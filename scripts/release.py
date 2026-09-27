@@ -59,8 +59,8 @@ def build_artifacts(dest,commit,version,build_id):
   version "{version}"
   sha256 "{sha}"
   license "Apache-2.0"
-  depends_on macos: :sequoia
   depends_on arch: :arm64
+  depends_on macos: :sequoia
 
   def install
     bin.install "tidemux"
