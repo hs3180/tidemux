@@ -110,13 +110,13 @@ Messages client APIs simultaneously. Each request selects a named provider with
 and strips `REF/` before forwarding the model to it. Provider selection is
 independent of the client's protocol, so either client API can reach any
 provider, with conversion only when required. There is no default provider or
-model. When a provider has multiple keys, TideMux may fail over within that key
-group on 401/403 or 429, or on a transport failure before request headers are
-written. A 429 retries the same key up to three times and honors `Retry-After`,
-then may fail over within that provider's key group. It never
-switches to a different named provider, and stops retrying once response
-content may have reached the client. Gateway auth, session limits and ledger
-accounting remain shared.
+model. A 429 retries on the same key for up to three total attempts, honoring
+`Retry-After`; if those attempts fail, TideMux returns a rate-limit error
+without trying another key or provider. Eligible 401/403 and transport failures
+before request headers are written can still fail over within the selected
+provider's key group. TideMux stops retrying once response content may have
+reached the client. Gateway auth, session limits and ledger accounting remain
+shared.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
 not certify the 0.2.1 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.

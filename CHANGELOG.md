@@ -4,8 +4,10 @@
 
 - Classify provider errors by exact, per-provider code mappings and return
   protocol-native safe errors without exposing provider message text.
-- Retry rate limits on the same key with a bounded wait, honor `Retry-After`,
-  then use only the selected provider's key group for failover.
+- Retry HTTP 429 on the same key for up to three total attempts, honoring
+  `Retry-After` and the request deadline; return a normalized rate-limit error
+  when exhausted. Eligible authentication and pre-write transport failures
+  retain same-provider key failover.
 - Detect provider protocol from bounded authenticated model-list responses;
   remove endpoint-name heuristics and retain explicit protocol overrides.
 - Add read-only gateway connectivity checks and agent-led install/setup

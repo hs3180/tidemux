@@ -140,9 +140,10 @@ TideMux retries HTTP 429 on the same selected key and provider at most three
 total attempts, following `Retry-After` seconds or HTTP-date values. Invalid or
 missing values use a one-then-two-second backoff. The request timeout bounds
 total waiting; if the indicated delay does not fit, TideMux returns the mapped
-rate-limit error without an early retry and includes `Retry-After`. A 429 does
-not immediately move to a different key. Authentication and safe pre-write
-transport failures keep their existing same-provider key failover behavior.
+rate-limit error without an early retry and includes `Retry-After`. A 429 never
+moves to a different key; if same-key attempts are exhausted, TideMux returns
+the normalized rate-limit error. Authentication and safe pre-write transport
+failures keep their existing same-provider key failover behavior.
 Cancellation interrupts a wait, and no retry occurs after response bytes may
 have reached the client. A recognized error reported inside an SSE stream is
 sent as the current client protocol's `error` event; a stream already in

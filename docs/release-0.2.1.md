@@ -8,7 +8,7 @@ keeping the named-provider boundary introduced in 0.2.0.
 | Priority | Issue | Release outcome |
 | --- | --- | --- |
 | P0 | [#31](https://github.com/hs3180/tidemux/issues/31) | Map exact provider error codes to safe, stable categories; return the right OpenAI or Anthropic error envelope without exposing provider messages. |
-| P0 | [#47](https://github.com/hs3180/tidemux/issues/47) | Configure mappings per provider and honor bounded same-key `Retry-After` waits/retries before any same-provider key failover. |
+| P0 | [#47](https://github.com/hs3180/tidemux/issues/47) | Configure mappings per provider; retry HTTP 429 on the same key for up to three total attempts while honoring bounded `Retry-After` waits, then return the normalized rate-limit error without switching keys or providers. |
 | P0 | [#51](https://github.com/hs3180/tidemux/issues/51) | Identify protocols from authenticated model-list response shapes; retain explicit overrides and fail clearly on ambiguous/unknown schemas. |
 | P0 | [#54](https://github.com/hs3180/tidemux/issues/54) | Preserve documented Anthropic Messages content blocks and citations on native Anthropic routes; return a precise field path when a block cannot be translated to OpenAI. |
 | P1 | [#38](https://github.com/hs3180/tidemux/issues/38) | Document repeatable install and setup workflows for Claude Code, Codex, Hermes and dsh, including local credential handling and client compatibility limits. |
