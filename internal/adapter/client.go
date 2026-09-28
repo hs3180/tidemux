@@ -33,8 +33,11 @@ type Client struct {
 	waitRateLimit                                   func(context.Context, time.Duration) error
 }
 type CallError struct {
-	Status         int
-	Code           string
+	Status int
+	Code   string
+	// BudgetCost preserves a known charge when the audit row itself cannot be
+	// written. It is internal accounting data and is never sent to clients.
+	BudgetCost     *float64
 	Param          string
 	ProviderCode   string
 	Category       ProviderErrorCategory
@@ -158,7 +161,12 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			// and request ID needed to diagnose a conservative budget hold.
 			log.Printf("tidemux: request audit append failed request_id=%s error=%v", id, e)
 			response = nil
-			err = &CallError{Status: 500, Code: "audit_failed_do_not_retry_blindly"}
+			callErr := &CallError{Status: 500, Code: "audit_failed_do_not_retry_blindly"}
+			if a.EstimatedCost != nil {
+				cost := *a.EstimatedCost
+				callErr.BudgetCost = &cost
+			}
+			err = callErr
 		}
 	}()
 	admission, e := c.Gate.Acquire(ctx)

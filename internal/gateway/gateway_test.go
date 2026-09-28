@@ -1253,6 +1253,66 @@ func TestBudgetSettlementFailureIsLoggedAndBlocksFurtherRequests(t *testing.T) {
 	}
 }
 
+func TestAuditAppendFailureSettlesKnownBudgetCost(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			calls++
+		}
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer up.Close()
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL), "openai-main")
+	provider := c.Providers["openai-main"]
+	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: .000004, WeeklyLimit: .000004, AlertThreshold: .8, Mode: "hard"}
+	c.Providers["openai-main"] = provider
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	triggerDB, err := sql.Open("sqlite", c.LedgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := triggerDB.Exec(`CREATE TRIGGER fail_request_audit BEFORE INSERT ON request_audit BEGIN SELECT RAISE(FAIL,'injected audit append failure'); END`); err != nil {
+		triggerDB.Close()
+		t.Fatal(err)
+	}
+	if err := triggerDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	gatewayHandler := h.(*handler)
+	previousLogWriter := log.Writer()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousLogWriter)
+
+	body := requestBodyFor("openai", "openai-main", "custom-model")
+	send := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer local-secret")
+		out := httptest.NewRecorder()
+		gatewayHandler.ServeHTTP(out, req)
+		return out
+	}
+	first := send()
+	if first.Code != http.StatusInternalServerError || !strings.Contains(first.Body.String(), "audit_failed_do_not_retry_blindly") {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	if !strings.Contains(logs.String(), "injected audit append failure") || strings.Contains(logs.String(), "budget settlement unresolved") {
+		t.Fatalf("audit failure diagnostics=%s", logs.String())
+	}
+	second := send()
+	if second.Code != http.StatusTooManyRequests || !strings.Contains(second.Body.String(), "budget_hard_limit") || strings.Contains(second.Body.String(), "budget_usage_unknown") {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls=%d want 1", calls)
+	}
+}
+
 func TestRedirectDoesNotLeakCredentials(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("redirect followed") }))
 	defer target.Close()
