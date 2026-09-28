@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,7 +28,7 @@ import (
 // started with serve so its lifetime is independent of any one client session.
 func launch(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux <claude|kilo|kilo-ide|hermes> --model PROVIDER/MODEL [--config path] [--executable path] -- [client arguments]")
+		return errors.New("usage: tidemux <claude|kilo|kilo-ide|hermes> --model MODEL_ID|REF/MODEL_ID [--config path] [--executable path] -- [client arguments]")
 	}
 	name := args[0]
 	if name != "claude" && name != "kilo" && name != "kilo-ide" && name != "hermes" {
@@ -36,7 +37,7 @@ func launch(args []string, stdout, stderr *os.File) error {
 	flags := flag.NewFlagSet("tidemux "+name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", defaultConfigPath(), "gateway configuration; start tidemux serve with the same file")
-	model := flags.String("model", "", "required model ID in provider/model form")
+	model := flags.String("model", "", "required upstream model ID; qualify as REF/MODEL_ID to disambiguate")
 	defaultExecutable := name
 	if name == "kilo-ide" {
 		defaultExecutable = "code"
@@ -52,8 +53,8 @@ func launch(args []string, stdout, stderr *os.File) error {
 	if name != "kilo-ide" && *extensionsDir != "" {
 		return errors.New("--extensions-dir is only supported for kilo-ide")
 	}
-	if !isQualifiedModelID(*model) {
-		return errors.New("--model must be PROVIDER/MODEL: get PROVIDER from `tidemux provider list` and MODEL from `tidemux provider models REF`, or copy a qualified ID from /v1/models")
+	if !isValidClientModelID(*model) {
+		return errors.New("--model must be an upstream model ID or REF/MODEL_ID; use a non-empty ID without leading/trailing whitespace")
 	}
 	clientInput := flags.Args()
 	if name == "kilo-ide" {
@@ -69,16 +70,6 @@ func launch(args []string, stdout, stderr *os.File) error {
 	}
 	if err := validateClientProtocol(name, c.Protocol); err != nil {
 		return err
-	}
-	providerRef, _, _ := strings.Cut(*model, "/")
-	if len(c.Providers) > 0 {
-		provider, ok := c.Providers[providerRef]
-		if !ok {
-			return fmt.Errorf("provider %q is not configured; run `tidemux provider list`", providerRef)
-		}
-		c.ModelCapabilities = provider.ModelCapabilities
-	} else if c.BaseURL == "" || providerRef != "legacy" {
-		return fmt.Errorf("provider %q is not configured; run `tidemux provider list`", providerRef)
 	}
 	binary, err := exec.LookPath(*executable)
 	if err != nil {
@@ -126,8 +117,16 @@ func launch(args []string, stdout, stderr *os.File) error {
 		return errors.New("invalid local gateway credential")
 	}
 	url := "http://" + c.ListenAddr
-	if err = checkClientEndpoint(ctx, url, token); err != nil {
+	availableModels, err := fetchGatewayModels(ctx, url, token)
+	if err != nil {
 		return err
+	}
+	providerRef, err := resolveClientProvider(c, *model, availableModels)
+	if err != nil {
+		return err
+	}
+	if len(c.Providers) > 0 {
+		c.ModelCapabilities = c.Providers[providerRef].ModelCapabilities
 	}
 	overrides, clientArgs, err := clientLaunch(name, url, *model, state, os.Getenv("KILO_CONFIG_CONTENT"), c.ModelCapabilities)
 	if err != nil {
@@ -171,29 +170,114 @@ func isQualifiedModelID(model string) bool {
 		!strings.ContainsAny(model, "\r\n\x00")
 }
 
+func isValidClientModelID(model string) bool {
+	return model != "" && strings.TrimSpace(model) == model && !strings.ContainsAny(model, "\r\n\x00")
+}
+
+func resolveClientProvider(c gateway.Config, model string, catalog []string) (string, error) {
+	if !isValidClientModelID(model) {
+		return "", errors.New("--model must be an upstream model ID or REF/MODEL_ID; use a non-empty ID without leading/trailing whitespace")
+	}
+	if ref, suffix, qualified := strings.Cut(model, "/"); qualified && ref != "" && suffix != "" {
+		if len(c.Providers) > 0 {
+			if _, exists := c.Providers[ref]; exists {
+				return ref, nil
+			}
+		} else if ref == "legacy" && c.BaseURL != "" {
+			return "legacy", nil
+		}
+	}
+
+	var candidates []string
+	if len(c.Providers) == 0 {
+		if c.BaseURL != "" && (!strings.Contains(model, "/") || catalogContainsQualifiedModel(catalog, "legacy", model)) {
+			return "legacy", nil
+		}
+	} else {
+		for ref, provider := range c.Providers {
+			matches := false
+			if len(provider.SupportedModels) > 0 {
+				matches = containsClientModel(provider.SupportedModels, model)
+			} else if strings.Contains(model, "/") {
+				matches = catalogContainsQualifiedModel(catalog, ref, model)
+			} else {
+				// An unscoped provider can serve any slash-free model ID, matching
+				// the gateway's bare-model routing contract.
+				matches = true
+			}
+			if matches {
+				candidates = append(candidates, ref)
+			}
+		}
+	}
+	sort.Strings(candidates)
+	switch len(candidates) {
+	case 0:
+		return "", fmt.Errorf("no configured provider scope matches model %q; use `tidemux provider models REF` or an explicit REF/MODEL_ID", model)
+	case 1:
+		return candidates[0], nil
+	default:
+		return "", fmt.Errorf("model %q matches multiple provider scopes; use REF/MODEL_ID to choose one of: %s", model, strings.Join(candidates, ", "))
+	}
+}
+
+func containsClientModel(models []string, model string) bool {
+	for _, candidate := range models {
+		if candidate == model {
+			return true
+		}
+	}
+	return false
+}
+
+func catalogContainsQualifiedModel(catalog []string, ref, model string) bool {
+	want := ref + "/" + model
+	for _, candidate := range catalog {
+		if candidate == want {
+			return true
+		}
+	}
+	return false
+}
+
 func checkClientEndpoint(ctx context.Context, url, token string) error {
+	_, err := fetchGatewayModels(ctx, url, token)
+	return err
+}
+
+func fetchGatewayModels(ctx context.Context, url, token string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url+"/v1/models", nil)
 	if err != nil {
-		return errors.New("invalid gateway address")
+		return nil, errors.New("invalid gateway address")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	client := http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	r, err := client.Do(req)
 	if err != nil {
-		return errors.New("gateway is not reachable; run tidemux serve --config with the same profile first")
+		return nil, errors.New("gateway is not reachable; run tidemux serve --config with the same profile first")
 	}
 	defer r.Body.Close()
 	if r.StatusCode == 401 {
-		return errors.New("gateway rejected this profile's local credential; check the running serve profile")
+		return nil, errors.New("gateway rejected this profile's local credential; check the running serve profile")
 	}
 	if r.StatusCode != 200 {
-		return errors.New("gateway model discovery unavailable; check the running TideMux build and profile")
+		return nil, errors.New("gateway model discovery unavailable; check the running TideMux build and profile")
 	}
-	var body json.RawMessage
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || len(body) == 0 {
-		return errors.New("invalid gateway model list")
+	var body struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
 	}
-	return nil
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		return nil, errors.New("invalid gateway model list")
+	}
+	models := make([]string, 0, len(body.Data))
+	for _, model := range body.Data {
+		if model.ID != "" {
+			models = append(models, model.ID)
+		}
+	}
+	return models, nil
 }
 func overrideEnvironment(env []string, overrides map[string]string) []string {
 	result := make([]string, 0, len(env)+len(overrides))

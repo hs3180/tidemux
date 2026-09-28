@@ -1,6 +1,6 @@
 # Provider and gateway setup
 
-The 0.2.1 CLI uses resource-oriented commands. Provider setup and
+The 0.2.2 CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
 retained. This guide describes the current release CLI.
@@ -20,8 +20,10 @@ select a protocol; when both or neither schema match, setup asks for an explicit
 informational and never sends a completion request. In guided setup, choose
 model IDs to create an allowlist or leave the selection blank to allow all
 models. If discovery is unavailable, enter IDs to restrict access or leave it
-blank to allow all. Every client request must identify its provider and model
-explicitly as `REF/MODEL_ID`; setup never chooses a default provider or model.
+blank to allow all. A request may use a bare upstream model ID when it matches
+exactly one provider's configured model scope; use `REF/MODEL_ID` to select a
+provider explicitly or when multiple providers can serve the same ID. Client
+protocol does not choose a provider, and setup never chooses a default.
 The first guided setup also asks whether to schedule a daily usage-report
 notification in local time; leave it blank to skip.
 
@@ -36,8 +38,10 @@ the endpoint; use `--name LABEL` only when you want a different reference. If
 the endpoint does not identify the protocol, `--protocol openai` or
 `--protocol anthropic` forces it. `--model MODEL[,MODEL...]` restricts the
 provider to those IDs; omit it to allow all models. Use `tidemux provider list`
-to get the provider reference, then select a model with `REF/MODEL_ID` in the
-client or with the launcher's required `--model` option.
+to get the provider reference. After adding a provider, restart a running
+`tidemux serve` process before routing requests to it. In a client, use the
+bare upstream model ID when its configured scope selects one provider, or use
+`REF/MODEL_ID` for explicit routing.
 
 Provider credentials are stored in macOS Keychain, never in command arguments
 or configuration JSON. Existing 0.1.x single-provider configurations are
@@ -145,11 +149,13 @@ its protocol by default using the stored key; combine
 to force a wire format. Changing an endpoint clears any model allowlist,
 restoring the default all-models scope.
 
-Every request explicitly selects a provider using the model ID
-`REF/MODEL_ID`; `REF` is the stable reference shown by `provider list`, and
-`MODEL_ID` is the upstream model name (which may itself contain slashes). The
-client protocol does not choose a provider. TideMux strips only the first
-`REF/` prefix before forwarding the request. Either client protocol can target
+Every request may use a bare upstream model ID when exactly one provider's
+configured model scope matches. Multiple unscoped providers can serve any model,
+so a bare ID is ambiguous between them. Use `REF/MODEL_ID` for explicit routing;
+`REF` is the stable reference shown by `provider list`, and `MODEL_ID` is the
+upstream model name (which may itself contain slashes). The client protocol does
+not choose a provider. TideMux strips only the first `REF/` prefix before
+forwarding an explicitly qualified request. Either client protocol can target
 any provider; cross-protocol conversion is applied when needed. Provider
 failures do not trigger a retry on another provider. Removal asks for
 confirmation; non-interactive removal requires `--yes`. A Keychain item is

@@ -1,6 +1,6 @@
 # Installation
 
-TideMux 0.2.1 targets macOS 15+ on Apple Silicon. Install your coding client
+TideMux 0.2.2 targets macOS 15+ on Apple Silicon. Install your coding client
 separately; TideMux does not install Claude Code, Kilo CLI or Hermes Agent.
 
 ## Homebrew (recommended)
@@ -19,12 +19,12 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Install without Homebrew
 
-Install version 0.2.1:
+Install version 0.2.2:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.2.1/scripts/install.sh -o /tmp/tidemux-install.sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.2.2/scripts/install.sh -o /tmp/tidemux-install.sh
 less /tmp/tidemux-install.sh
-TIDEMUX_VERSION=0.2.1 sh /tmp/tidemux-install.sh
+TIDEMUX_VERSION=0.2.2 sh /tmp/tidemux-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -38,16 +38,21 @@ it. The installer does not change configuration or Keychain credentials.
 
 ## Upgrade and rollback
 
-The 0.2.1 upgrade does not rewrite provider profiles, Keychain references,
-gateway settings, budgets or the audit ledger. Back up the config before an
-upgrade as part of your normal local-data practice. If you added
+The 0.2.2 upgrade does not rewrite provider profiles, Keychain references,
+gateway settings, budgets or the audit ledger. It adds bare-model routing and
+provider-specific handling of inconclusive auto probes without changing the
+config format. Back up the config before an upgrade as part of your normal
+local-data practice. If you added
 `error_code_mappings` and need to return to 0.2.0, list each provider's rules
 with `tidemux provider error-map list REF`, then remove every entry with
 `tidemux provider error-map remove REF --code CODE [--status STATUS]` before
 starting the older binary; 0.2.0 rejects that newer config field. Then
 download and inspect the installer from the `v0.2.0` tag and run it with
-`TIDEMUX_VERSION=0.2.0`. Provider protocol auto-detection behavior also returns
-to the 0.2.0 implementation after rollback.
+`TIDEMUX_VERSION=0.2.0`. To return to 0.2.1, use its version-pinned installer.
+That version requires provider-qualified model IDs, lacks the post-tag budget
+recovery and audit settlement fixes, and restores all-or-none startup behavior
+for `protocol:auto`; configure ambiguous providers explicitly before restarting
+0.2.1.
 
 ## Build from source
 

@@ -2,7 +2,7 @@
 
 This guide is for a coding agent helping its user install TideMux and configure
 one requested provider/model route. The agent may run in Claude Code, OpenAI
-Codex, Hermes Agent or dsh. TideMux 0.2.1 itself runs on macOS 15 or newer with
+Codex, Hermes Agent or dsh. TideMux 0.2.2 itself runs on macOS 15 or newer with
 Apple Silicon.
 
 ## Installation
@@ -42,7 +42,10 @@ Ask for the provider and model only when the user has not already specified
 them. Keep the provider endpoint, model ID and client scope explicit. Do not
 guess a provider or model. Run `tidemux provider add ENDPOINT --model MODEL_ID`
 for a restricted model scope, or omit `--model` when the user wants every model
-from that endpoint. TideMux will prompt for the upstream key using hidden
+from that endpoint. Use the upstream model ID in client requests when exactly
+one configured provider scope matches it; use `REF/MODEL_ID` when scopes
+overlap or the user asks for explicit provider selection. Client protocol does
+not choose the provider. TideMux will prompt for the upstream key using hidden
 terminal input. The key goes directly into the local Keychain; never ask the
 user to paste it into the agent conversation, shell arguments, a file or a
 configuration JSON. If the agent cannot provide a secure interactive terminal,
@@ -67,18 +70,20 @@ external client transcript.
 
 ## Configure the requested client
 
-- **Claude Code:** launch with `tidemux claude --model REF/MODEL_ID`. TideMux
+- **Claude Code:** launch with `tidemux claude --model MODEL_ID`, or use
+  `REF/MODEL_ID` when more than one provider can serve the same ID. TideMux
   supplies a local Anthropic Messages endpoint and credentials through its
   isolated client state.
 - **Hermes Agent:** launch with
-  `tidemux hermes --model REF/MODEL_ID -- -q '…'`. TideMux selects Hermes'
-  `chat_completions` transport and isolated local client state.
+  `tidemux hermes --model MODEL_ID -- -q '…'`; qualify it with `REF/` only to
+  disambiguate provider scopes. TideMux selects Hermes' `chat_completions`
+  transport and isolated local client state.
 - **dsh:** use Settings → Models → Add a custom provider (see the
   [dsh quickstart](https://dsh.fish/docs/quickstart)). Set base URL
-  `http://127.0.0.1:4000/v1` (or the configured loopback port), model
-  `REF/MODEL_ID`, and the local TideMux gateway key. The user should enter that
-  key directly into dsh's credential UI from their local terminal; the agent
-  must not read or relay it.
+  `http://127.0.0.1:4000/v1` (or the configured loopback port), the upstream
+  model ID (or `REF/MODEL_ID` if scopes overlap), and the local TideMux gateway
+  key. The user should enter that key directly into dsh's credential UI from
+  their local terminal; the agent must not read or relay it.
 - **Codex:** Codex can perform TideMux installation and setup as an agent.
   Direct Codex-to-TideMux model routing is not supported: the
   [Codex configuration reference](https://developers.openai.com/codex/config-reference/)

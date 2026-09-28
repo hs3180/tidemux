@@ -46,11 +46,33 @@ func resolveProviderProtocol(c Config, httpClient *http.Client) (string, string,
 	return detected, apiVersion, nil
 }
 
-// resolveProviders returns named profiles. Requests select a profile through
-// their explicit provider/model ID rather than a protocol-level default.
+// resolveProviders returns named profiles. Requests select a profile explicitly
+// or through a uniquely matching model scope; client protocol does not choose a
+// provider.
 func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, error) {
+	resolved, unavailable, err := resolveProvidersPartial(c, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	if len(unavailable) > 0 {
+		names := make([]string, 0, len(unavailable))
+		for name := range unavailable {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		name := names[0]
+		return nil, errors.New("cannot determine protocol for providers." + name + ": " + unavailable[name].Error())
+	}
+	return resolved, nil
+}
+
+// resolveProvidersPartial keeps named providers whose automatic protocol probe
+// failed as unavailable entries, allowing the gateway to serve other resolved
+// providers. Legacy single-provider configuration remains all-or-nothing.
+func resolveProvidersPartial(c Config, httpClient *http.Client) (map[string]Provider, map[string]error, error) {
 	if len(c.Providers) != 0 {
 		resolved := make(map[string]Provider, len(c.Providers))
+		unavailable := make(map[string]error)
 		for name, provider := range c.Providers {
 			if keys := provider.ResolvedAPIKeys(); len(keys) > 0 {
 				provider.APIKey = keys[0]
@@ -60,7 +82,13 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, e
 				var err error
 				protocol, err = detectProviderProtocol(context.Background(), provider.BaseURL, provider.APIKey, provider.APIVersion, httpClient)
 				if err != nil {
-					return nil, errors.New("cannot determine protocol for providers." + name + ": " + err.Error())
+					if provider.UpstreamID == "" {
+						provider.UpstreamID = name
+					}
+					provider.Protocol = "auto"
+					resolved[name] = provider
+					unavailable[name] = err
+					continue
 				}
 			}
 			provider.Protocol = protocol
@@ -69,25 +97,25 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, e
 					provider.APIVersion = defaultAnthropicAPIVersion
 				}
 				if _, err := time.Parse("2006-01-02", provider.APIVersion); err != nil {
-					return nil, errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
+					return nil, nil, errors.New("providers." + name + ".anthropic_version must be YYYY-MM-DD")
 				}
 			} else if provider.APIVersion != "" {
-				return nil, errors.New("providers." + name + ".anthropic_version is valid only for the anthropic endpoint")
+				return nil, nil, errors.New("providers." + name + ".anthropic_version is valid only for the anthropic endpoint")
 			}
 			if provider.UpstreamID == "" {
 				provider.UpstreamID = name
 			}
 			resolved[name] = provider
 		}
-		return resolved, nil
+		return resolved, unavailable, nil
 	}
 	if c.BaseURL == "" {
-		return nil, errors.New("no upstream provider is configured; run `tidemux provider add`")
+		return nil, nil, errors.New("no upstream provider is configured; run `tidemux provider add`")
 	}
 
 	protocol, apiVersion, err := resolveProviderProtocol(c, httpClient)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	name := "legacy"
 	provider := Provider{
@@ -99,7 +127,7 @@ func resolveProviders(c Config, httpClient *http.Client) (map[string]Provider, e
 		ModelCapabilities: c.ModelCapabilities,
 		Prices:            c.Prices,
 	}
-	return map[string]Provider{name: provider}, nil
+	return map[string]Provider{name: provider}, nil, nil
 }
 
 // discoverProviderModels makes a bounded, redirect-free GET /models request.

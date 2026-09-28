@@ -23,7 +23,7 @@ If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
 Homebrew installs the current published release. The quick start below uses
-the 0.2.1 provider and gateway commands.
+the 0.2.2 provider and gateway commands.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -31,7 +31,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.2.1 CLI**.
+This walkthrough describes the **0.2.2 CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -52,9 +52,11 @@ Each command prompts for its API key without echo. Provider references and
 readable labels are generated from the endpoint; no provider name is required.
 All models are allowed by default. During guided setup, choose model IDs only
 if you want to restrict a provider; the selection can also be supplied as
-`--model MODEL[,MODEL...]`. Client requests must always specify a model as
-`REF/MODEL`; `/v1/models` lists those qualified IDs. To configure just one
-protocol, add only its endpoint.
+`--model MODEL[,MODEL...]`. A bare model ID routes when exactly one provider's
+configured scope matches it; use `REF/MODEL` to select a provider explicitly
+when scopes overlap. `/v1/models` lists qualified IDs. If you add a provider
+while the gateway is running, restart `tidemux serve` before using it. To
+configure just one protocol, add only its endpoint.
 
 ### 2. Start the gateway
 
@@ -104,10 +106,11 @@ documented separately in [client compatibility](docs/client-compatibility.md).
 
 ## Compatibility
 
-TideMux 0.2.1 exposes OpenAI Chat Completions and Anthropic
-Messages client APIs simultaneously. Each request selects a named provider with
-`model: "REF/MODEL"`; TideMux uses that provider's configured upstream protocol
-and strips `REF/` before forwarding the model to it. Provider selection is
+TideMux exposes OpenAI Chat Completions and Anthropic Messages client APIs
+simultaneously. Each request selects a provider with a bare model ID only when
+one configured model scope matches; otherwise specify `model: "REF/MODEL"`.
+TideMux uses the provider's configured upstream protocol and strips `REF/`
+before forwarding an explicitly qualified model. Provider selection is
 independent of the client's protocol, so either client API can reach any
 provider, with conversion only when required. There is no default provider or
 model. A 429 retries on the same key for up to three total attempts, honoring
@@ -118,7 +121,7 @@ provider's key group. TideMux stops retrying once response content may have
 reached the client. Gateway auth, session limits and ledger accounting remain
 shared.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
-not certify the 0.2.1 named-provider routing. Other compatible providers can be
+not certify the 0.2.2 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.
 
 Responses API, audio and IDE extensions are outside this release's scope.
@@ -126,8 +129,9 @@ Anthropic images, documents, citations and server-tool blocks pass through on
 native Anthropic routes but cannot be converted to OpenAI Chat Completions.
 Provider-specific features without an equivalent in the selected protocol are
 reported with a field-specific error. See the
-[0.1.1 tested-client matrix](docs/client-compatibility.md) for release evidence
-and [protocol support](docs/protocols.md) for the 0.2.1 routing contract.
+[0.1.1 tested-client matrix](docs/client-compatibility.md) for historical
+release evidence and [protocol support](docs/protocols.md) for the 0.2.2
+routing contract.
 
 ## CLI design principles
 
@@ -135,7 +139,7 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.2.1 CLI; older binaries
+`tidemux gateway`. The commands below describe the 0.2.2 CLI; older binaries
 may expose a different command set.
 
 | Command | Semantics |
@@ -212,10 +216,12 @@ selection blank to allow all, or select IDs to create an allowlist. The same
 allowlist can be supplied with `provider add --model MODELS` or changed later
 with `provider update --model MODELS` or `provider models REF --only ...`;
 `provider update --model all` or `provider models REF --all` removes it.
-Provider setup does not select a default model or provider. Every client request must set `model` to
-`REF/MODEL`, using the reference printed by `provider list`; TideMux routes by
-the part before the first slash and forwards only the remainder as the upstream
-model ID. The gateway model catalog uses the same qualified IDs.
+Provider setup does not select a default model or provider. A bare model ID
+routes only if exactly one provider's configured scope can serve it; use
+`REF/MODEL` with the reference printed by `provider list` to select explicitly
+when scopes overlap. TideMux removes the first `REF/` prefix from an explicit
+route before forwarding the model ID. The gateway model catalog lists
+qualified IDs.
 `supported_models`, when configured, contains upstream model IDs without the
 provider prefix. Configuration writes are validated and atomic; credentials
 created for a provider addition are rolled back if its config write fails.
@@ -254,7 +260,8 @@ tidemux claude --model REF_FROM_LIST/model-a
 [Provider and gateway CLI](docs/provider-cli.md) ·
 [Client setup](docs/clients.md) ·
 [Agent installation and setup](docs/agent-install.md) ·
-[0.2.1 release plan](docs/release-0.2.1.md) ·
+[0.2.2 release plan](docs/release-0.2.2.md) ·
+[0.2.1 release history](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
 [Privacy](PRIVACY.md) · [Security](SECURITY.md)
