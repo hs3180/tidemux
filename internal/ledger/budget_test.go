@@ -71,6 +71,36 @@ func TestUnknownUsageBlocksFutureBudgetRequests(t *testing.T) {
 	}
 }
 
+func TestKnownBudgetCostSettlesWithoutAuditRow(t *testing.T) {
+	l, err := Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	p := BudgetPolicy{Currency: "USD", FiveHourLimit: 1, WeeklyLimit: 1, AlertThreshold: .8, Mode: "hard"}
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	if _, err := l.CheckBudget(context.Background(), "one", "provider-a", p, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RecordBudgetChargeWithCost(context.Background(), "one", "missing-audit", "provider-a", "USD", now, 1.25); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var amount float64
+	if err := l.QueryRow(context.Background(), `SELECT state,charged_amount FROM budget_charges WHERE request_id=?`, "one").Scan(&state, &amount); err != nil {
+		t.Fatal(err)
+	}
+	if state != "settled" || amount != 1.25 {
+		t.Fatalf("state=%q amount=%v", state, amount)
+	}
+	if _, err := l.CheckBudget(context.Background(), "two", "provider-a", p, false, now); err == nil || err.Error() != "budget_hard_limit" {
+		t.Fatalf("known charge was not counted: %v", err)
+	}
+	if err := l.RecordBudgetChargeWithCost(context.Background(), "bad", "missing-audit", "provider-a", "USD", now, -1); err == nil {
+		t.Fatal("negative charge cost accepted")
+	}
+}
+
 func TestBudgetSoftRequiresConfirmation(t *testing.T) {
 	l, err := Open(filepath.Join(t.TempDir(), "ledger.db"))
 	if err != nil {

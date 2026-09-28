@@ -140,6 +140,20 @@ func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, pro
 		state = "settled"
 		amount = *cost
 	}
+	return l.recordBudgetCharge(ctx, requestID, auditID, provider, currency, chargedAt, amount, state, auditMissing)
+}
+
+// RecordBudgetChargeWithCost records an already known provider charge when an
+// audit append failed after the adapter calculated its cost. It avoids turning
+// a missing audit row into unknown usage when the amount is still available.
+func (l *Ledger) RecordBudgetChargeWithCost(ctx context.Context, requestID, auditID, provider, currency string, chargedAt time.Time, cost float64) error {
+	if cost < 0 || math.IsNaN(cost) || math.IsInf(cost, 0) {
+		return errors.New("invalid budget charge cost")
+	}
+	return l.recordBudgetCharge(ctx, requestID, auditID, provider, currency, chargedAt, cost, "settled", false)
+}
+
+func (l *Ledger) recordBudgetCharge(ctx context.Context, requestID, auditID, provider, currency string, chargedAt time.Time, amount float64, state string, auditMissing bool) error {
 	tx, err := l.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("record budget charge begin: %w", err)

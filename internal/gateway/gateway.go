@@ -443,9 +443,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-TideMux-Budget-Warning", "1")
 		}
 	}
-	settle := func(auditID string) {
+	settle := func(auditID string, callErr error) {
 		if reservationID != "" {
-			if err := h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now()); err != nil {
+			var err error
+			var adapterErr *adapter.CallError
+			if errors.As(callErr, &adapterErr) && adapterErr.BudgetCost != nil {
+				err = h.ledger.RecordBudgetChargeWithCost(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now(), *adapterErr.BudgetCost)
+			} else {
+				err = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now())
+			}
+			if err != nil {
 				h.blockBudget(providerName, budget.Currency)
 				log.Printf("tidemux: budget settlement unresolved reservation_id=%s audit_id=%s error=%v", reservationID, auditID, err)
 			}
@@ -471,7 +478,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		terminal, id, err := callProvider(send)
-		settle(id)
+		settle(id, err)
 		if err == nil {
 			send(id, terminal)
 			return
@@ -504,7 +511,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, id, err := callProvider(nil)
-	settle(id)
+	settle(id, err)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)
 	}
