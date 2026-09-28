@@ -1,19 +1,24 @@
-# Protocol support — 0.2.1
+# Protocol support — 0.2.2
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
 provider has one inferred or explicitly selected upstream `protocol`, its own
 `base_url`, Keychain reference, model limits and prices. There is no default
-provider or model. Every request selects a provider through its model ID:
-`REF/MODEL_ID`, where `REF` is the provider reference and `MODEL_ID` is the
-upstream model name. The gateway splits at the first slash, routes to that
-provider, and removes only the `REF/` prefix before forwarding.
+provider or model. A request may use a bare upstream model ID when exactly one
+provider's configured `supported_models` scope selects that ID. An unscoped
+provider allows every model and can therefore make a bare ID ambiguous; use
+`REF/MODEL_ID` for explicit provider selection. When a request has a known
+`REF/` prefix, the gateway routes to that provider and removes only the prefix
+before forwarding. Upstream model IDs containing slashes remain supported when
+identified by a configured scope or discovered catalog.
 
-Provider selection is independent of the client's API protocol. Either OpenAI
-or Anthropic clients can select any provider; TideMux uses the provider's
-configured upstream protocol and converts request/response semantics only when
-the client and provider protocols differ. Model, budget and timeout failures
-never cause an implicit route change. Authentication failures, rate limits and
+Provider selection is independent of the client's API protocol. Bare IDs are
+resolved against model scope across all providers; when multiple providers can
+serve an ID, the gateway returns `model_ambiguous` instead of picking one.
+Either OpenAI or Anthropic clients can select any provider; TideMux uses the
+provider's configured upstream protocol and converts request/response
+semantics only when the client and provider protocols differ. Model, budget and
+timeout failures never cause an implicit route change. Authentication failures, rate limits and
 safe pre-header transport failures may retry another key only within the
 explicitly selected provider's key group; 429 cooldowns honor `Retry-After`.
 TideMux never switches to another named provider, and no key retry occurs after
@@ -21,7 +26,7 @@ response bytes may have reached the client. Gateway authentication,
 active-session limits and the local ledger remain shared.
 
 The 0.1.x single-provider configuration remains a migration/compatibility path;
-do not rely on it as a 0.2.1 configuration guarantee.
+do not rely on it as a 0.2.2 configuration guarantee.
 
 For named providers, an explicitly configured `protocol` of `openai` or
 `anthropic` forces that upstream format and skips detection. Otherwise TideMux
@@ -29,14 +34,18 @@ sends bounded, authenticated `GET base_url/models` probes using both
 authentication shapes and checks each successful JSON response against the
 OpenAI and Anthropic model-list schemas. URL host and path names do not select a
 protocol. TideMux checks both candidates even after one schema matches; it
-starts only when exactly one protocol is confirmed. If both or neither match,
-startup reports the provider reference and the `tidemux provider update REF
---protocol openai|anthropic` recovery command. No completion or message is sent
+starts a provider only when exactly one protocol is confirmed. If both or
+neither match, that provider remains unavailable. When other providers resolve,
+the gateway starts in a degraded state, logs the provider reference and the
+`tidemux provider update REF --protocol openai|anthropic` recovery command,
+excludes the unresolved provider from model listings, and returns
+`provider_unavailable` for explicit requests to it. If no provider resolves,
+startup fails with the same recovery guidance. No completion or message is sent
 for detection. The probe has a five-second total deadline, reads at most 1 MiB
 per response, and refuses redirects so credentials cannot be forwarded. Model
 discovery then uses the resolved protocol and the same endpoint. Old `auto`
-profiles may now need an explicit protocol if their `/models` response is
-ambiguous or non-standard; detection does not rewrite the stored configuration.
+profiles may need an explicit protocol if their `/models` response is
+ambiguous or non-standard; detection does not rewrite stored configuration.
 
 | Feature | Named OpenAI provider | Named Anthropic provider |
 | --- | --- | --- |
@@ -46,8 +55,8 @@ ambiguous or non-standard; detection does not rewrite the stored configuration.
 | Upstream credential | Bearer key | `x-api-key` |
 | Upstream headers | Gateway-created auth and `X-TideMux-Session-ID` when present | Configured version, translated beta/session headers and `X-TideMux-Session-ID` when present |
 | Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
-| OpenAI client | Selected explicitly by `model: "REF/MODEL_ID"`; native when provider is OpenAI | Selected explicitly by `model: "REF/MODEL_ID"`; conversion applies |
-| Anthropic client | Selected explicitly by `model: "REF/MODEL_ID"`; conversion applies | Selected explicitly by `model: "REF/MODEL_ID"`; native when provider is Anthropic |
+| OpenAI client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is OpenAI | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies |
+| Anthropic client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is Anthropic |
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
@@ -115,7 +124,7 @@ embeddings, batches and token-counting endpoints are not implemented. These
 remain explicit boundaries; normal tested client workflows do not prove every
 client feature or every upstream model is supported. See the
 [0.1.1 client acceptance matrix](client-compatibility.md) for prior-release
-evidence; it does not certify the 0.2.1 routing model.
+evidence; it does not certify the 0.2.2 routing model.
 
 ## Streaming and errors
 

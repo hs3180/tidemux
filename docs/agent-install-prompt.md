@@ -30,9 +30,10 @@ protocol. Keep the gateway bound to loopback. Do not replace an
 existing profile, rotate keys, expose the gateway to the network or change
 provider/model scope unless I explicitly requested that action.
 
-Configure Claude Code with `tidemux claude --model REF/MODEL_ID`, Hermes with
-`tidemux hermes --model REF/MODEL_ID -- ...`, or dsh as a custom provider at
-`http://127.0.0.1:4000/v1` with model `REF/MODEL_ID` and the local gateway key.
+Configure Claude Code with `tidemux claude --model MODEL_ID`, Hermes with
+`tidemux hermes --model MODEL_ID -- ...`, or dsh as a custom provider at
+`http://127.0.0.1:4000/v1` with model `MODEL_ID` and the local gateway key.
+Use `REF/MODEL_ID` for explicit provider selection or when model scopes overlap.
 Codex may run this setup, but direct Codex model routing is unsupported because
 TideMux does not implement the Responses API. See the Codex custom-provider
 `wire_api` reference: https://developers.openai.com/codex/config-reference/.

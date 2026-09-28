@@ -285,18 +285,19 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 	if err := persistProviderAddition(path, c, before, providerName, string(setup.APIKey), store); err != nil {
 		return err
 	}
+	fmt.Fprintf(stdout, "Added provider %s (%s) at %s.\n", providerName, setup.Provider.Protocol, setup.Provider.BaseURL)
+	fmt.Fprintln(stdout, "If a TideMux gateway is already running, restart `tidemux serve` to load this provider.")
 	if reportScheduleChanged {
 		if _, err := syncReportSchedule(path, c.ReportSchedule); err != nil {
 			return fmt.Errorf("provider added, but daily notification setup failed: %w", err)
 		}
 	}
-	fmt.Fprintf(stdout, "Added provider %s (%s) at %s.\n", providerName, setup.Provider.Protocol, setup.Provider.BaseURL)
 	if len(setup.Provider.SupportedModels) > 0 {
 		fmt.Fprintf(stdout, "Allowed models: %s\n", strings.Join(setup.Provider.SupportedModels, ", "))
 	} else {
 		fmt.Fprintln(stdout, "All models are allowed. Restrict them with `tidemux provider models` if needed.")
 	}
-	fmt.Fprintf(stdout, "Select a model as %s/MODEL in client requests; list upstream model IDs with `tidemux provider models %s`.\n", providerName, providerName)
+	fmt.Fprintf(stdout, "Select a model as %s/MODEL_ID, or use bare MODEL_ID when it uniquely identifies one provider; list upstream IDs with `tidemux provider models %s`.\n", providerName, providerName)
 	return nil
 }
 

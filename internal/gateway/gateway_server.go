@@ -2,8 +2,11 @@ package gateway
 
 import (
 	"errors"
+	"log"
 	"net"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
@@ -45,9 +48,20 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		}
 	}
 	legacySingleProvider := len(c.Providers) == 0
-	providers, err := resolveProviders(c, httpClient)
+	providers, unavailableProviders, err := resolveProvidersPartial(c, httpClient)
 	if err != nil {
 		return nil, nil, err
+	}
+	unavailableNames := make([]string, 0, len(unavailableProviders))
+	for name := range unavailableProviders {
+		unavailableNames = append(unavailableNames, name)
+	}
+	sort.Strings(unavailableNames)
+	if len(unavailableProviders) == len(providers) {
+		return nil, nil, errors.New("no provider protocol could be resolved for " + strings.Join(unavailableNames, ", ") + "; set it with `tidemux provider update REF --protocol openai|anthropic`")
+	}
+	for _, name := range unavailableNames {
+		log.Printf("tidemux: provider %s unavailable because protocol:auto could not be resolved; set its protocol with `tidemux provider update %s --protocol openai|anthropic`", name, name)
 	}
 	if legacySingleProvider {
 		for _, provider := range providers {
@@ -79,13 +93,16 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
 	for name, provider := range providers {
+		if _, unavailable := unavailableProviders[name]; unavailable {
+			continue
+		}
 		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
 		if !legacySingleProvider {
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
 	}
-	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown}, func() error {
+	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()

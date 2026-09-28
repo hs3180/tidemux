@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	version = "0.2.1"
+	version = "0.2.2"
 	usage   = `usage: tidemux <command> [options]
 
 commands:
@@ -44,16 +44,18 @@ common examples:
   tidemux report schedule --time 09:00 --channel webhook
   tidemux gateway configure --listen loopback
   tidemux gateway check
-  tidemux claude --model PROVIDER/deepseek-flash
+  tidemux claude --model deepseek-flash
   tidemux serve --config /path/to/config.json
 
 Each provider uses one API protocol and endpoint, with one or more API keys
 stored in Keychain. Provider protocol is detected from bounded authenticated
 /models schema probes unless explicitly forced.
-Set each client's model to PROVIDER/MODEL (or use the client's required
---model option); TideMux strips PROVIDER/ before forwarding upstream. Provider
-selection is explicit. Key failover is limited to safe failures within that
-provider group before response content is sent; TideMux never switches providers.
+Set each client's model to the upstream model ID when one configured provider
+scope matches, or use PROVIDER/MODEL to choose explicitly when scopes overlap.
+The client protocol does not choose the provider. TideMux strips PROVIDER/
+from explicitly qualified IDs before forwarding upstream. Key failover is
+limited to safe failures within that provider group before response content is
+sent; TideMux never switches providers.
 `
 )
 

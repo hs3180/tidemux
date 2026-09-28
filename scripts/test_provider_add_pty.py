@@ -135,6 +135,7 @@ else:sys.exit(2)
             assert unlocked == (mode == "success"), "unnecessary or missing unlock prompt"
             assert endpoint_sent and key_sent and model_scope_sent and schedule_sent, "missing guided setup prompt"
             assert b"Select a model as local-provider/MODEL" in captured, "missing explicit provider/model guidance"
+            assert b"restart `tidemux serve` to load this provider" in captured, "missing running-gateway restart guidance"
             contents = config.read_text()
             assert secret.decode() not in contents
             c = json.loads(contents)

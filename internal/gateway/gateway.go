@@ -23,16 +23,17 @@ import (
 )
 
 type handler struct {
-	config        Config
-	ledger        *ledger.Ledger
-	budgetMu      sync.RWMutex
-	budgetBlocked map[string]struct{}
-	sessions      *limiter.SessionLimiter
-	providers     map[string]Provider
-	clients       map[string]*adapter.Client
-	keyPools      map[string]*providerKeyPool
-	models        map[string][]string
-	modelsKnown   map[string]bool
+	config               Config
+	ledger               *ledger.Ledger
+	budgetMu             sync.RWMutex
+	budgetBlocked        map[string]struct{}
+	sessions             *limiter.SessionLimiter
+	providers            map[string]Provider
+	clients              map[string]*adapter.Client
+	keyPools             map[string]*providerKeyPool
+	models               map[string][]string
+	modelsKnown          map[string]bool
+	unavailableProviders map[string]error
 }
 
 func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
@@ -79,6 +80,9 @@ func qualifiedModelID(providerName, model string) string {
 func (h *handler) allQualifiedModels() []string {
 	var result []string
 	for providerName := range h.providers {
+		if _, unavailable := h.unavailableProviders[providerName]; unavailable {
+			continue
+		}
 		models, _ := h.modelsForProvider(providerName)
 		for _, model := range models {
 			result = append(result, qualifiedModelID(providerName, model))
@@ -86,6 +90,57 @@ func (h *handler) allQualifiedModels() []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func (h *handler) resolveRequestModel(modelID string) (providerName, model, code string, status int) {
+	if ref, suffix, qualified := parseQualifiedModelID(modelID); qualified {
+		if _, exists := h.providers[ref]; exists {
+			return ref, suffix, "", 0
+		}
+		// An upstream model may itself contain slashes. Without a matching
+		// TideMux provider prefix, accept it only when a configured scope or a
+		// complete discovered catalog identifies the full model ID.
+		candidates := h.bareModelCandidates(modelID, true)
+		if len(candidates) == 1 {
+			return candidates[0], modelID, "", 0
+		}
+		if len(candidates) > 1 {
+			return "", "", "model_ambiguous", http.StatusBadRequest
+		}
+		return "", "", "provider_not_found", http.StatusNotFound
+	}
+
+	candidates := h.bareModelCandidates(modelID, false)
+	switch len(candidates) {
+	case 0:
+		return "", "", "model_not_found", http.StatusNotFound
+	case 1:
+		return candidates[0], modelID, "", 0
+	default:
+		return "", "", "model_ambiguous", http.StatusBadRequest
+	}
+}
+
+func (h *handler) bareModelCandidates(model string, requireKnownScope bool) []string {
+	var candidates []string
+	for name, provider := range h.providers {
+		if _, unavailable := h.unavailableProviders[name]; unavailable {
+			continue
+		}
+		if len(provider.SupportedModels) > 0 {
+			if !containsModel(provider.SupportedModels, model) {
+				continue
+			}
+		} else if requireKnownScope {
+			models, known := h.modelsForProvider(name)
+			if !known || !containsModel(models, model) {
+				continue
+			}
+		}
+		candidates = append(candidates, name)
+	}
+	sort.Strings(candidates)
+	return candidates
 }
 
 func replaceRequestModel(body []byte, model string) ([]byte, error) {
@@ -225,6 +280,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			var exists bool
 			detailProvider, exists = h.providers[providerName]
+			if exists {
+				if _, unavailable := h.unavailableProviders[providerName]; unavailable {
+					h.reject(w, r, protocol, http.StatusServiceUnavailable, "provider_unavailable", "model")
+					return
+				}
+			}
 			providerModels, _ := h.modelsForProvider(providerName)
 			if !exists || !containsModel(providerModels, modelID) {
 				h.reject(w, r, protocol, 404, "model_not_found")
@@ -297,14 +358,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
-	providerName, model, qualified := parseQualifiedModelID(qualifiedModel)
-	if !qualified {
-		h.reject(w, r, protocol, 400, "model_must_include_provider", "model")
+	providerName, model, routeError, routeStatus := h.resolveRequestModel(qualifiedModel)
+	if routeError != "" {
+		h.reject(w, r, protocol, routeStatus, routeError, "model")
 		return
 	}
 	provider, providerExists := h.providers[providerName]
+	if !providerExists {
+		h.reject(w, r, protocol, 404, "provider_not_found", "model")
+		return
+	}
+	if _, unavailable := h.unavailableProviders[providerName]; unavailable {
+		h.reject(w, r, protocol, http.StatusServiceUnavailable, "provider_unavailable", "model")
+		return
+	}
 	providerClient := h.clients[providerName]
-	if !providerExists || providerClient == nil {
+	if providerClient == nil {
 		h.reject(w, r, protocol, 404, "provider_not_found", "model")
 		return
 	}

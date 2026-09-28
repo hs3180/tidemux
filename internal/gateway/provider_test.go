@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -348,6 +349,98 @@ func TestNewHandlerAutoDetectsProviderProtocol(t *testing.T) {
 	resolved := h.(*handler).config
 	if resolved.Protocol != "anthropic" || resolved.APIVersion != defaultAnthropicAPIVersion {
 		t.Fatalf("resolved provider=%q version=%q", resolved.Protocol, resolved.APIVersion)
+	}
+}
+
+func TestNewHandlerKeepsResolvedProvidersAvailableWhenOneAutoProbeFails(t *testing.T) {
+	failedProbeCalls := 0
+	unresolved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected request to unresolved provider: %s %s", r.Method, r.URL.Path)
+		}
+		failedProbeCalls++
+		_, _ = io.WriteString(w, `{"data":[{"id":"unresolved-model"}]}`)
+	}))
+	defer unresolved.Close()
+	resolvedCalls := 0
+	resolved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"ready-model","object":"model"}]}`)
+			return
+		}
+		resolvedCalls++
+		_, _ = io.WriteString(w, responseBody("openai"))
+	}))
+	defer resolved.Close()
+
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
+	c.BaseURL = ""
+	c.Protocol = ""
+	c.APIVersion = ""
+	c.APIKey = ""
+	c.UpstreamKeychain = KeychainReference{}
+	c.Model = ""
+	c.UpstreamID = ""
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
+		"ready":      {Protocol: "openai", BaseURL: resolved.URL + "/v1", APIKey: "ready-key", UpstreamID: "ready", SupportedModels: []string{"ready-model"}, UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "ready"}},
+		"unresolved": {Protocol: "auto", BaseURL: unresolved.URL + "/v1", APIKey: "unresolved-key", UpstreamID: "unresolved", SupportedModels: []string{"unresolved-model"}, UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "unresolved"}},
+	}
+	h, closeGateway, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatalf("one unresolved provider prevented gateway startup: %v", err)
+	}
+	defer closeGateway()
+
+	models := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	models.Header.Set("Authorization", "Bearer local-secret")
+	modelsOut := httptest.NewRecorder()
+	h.ServeHTTP(modelsOut, models)
+	if modelsOut.Code != http.StatusOK || !strings.Contains(modelsOut.Body.String(), "ready/ready-model") || strings.Contains(modelsOut.Body.String(), "unresolved/unresolved-model") {
+		t.Fatalf("models status=%d body=%s", modelsOut.Code, modelsOut.Body.String())
+	}
+
+	ready := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "ready", "ready-model")))
+	ready.Header.Set("Authorization", "Bearer local-secret")
+	readyOut := httptest.NewRecorder()
+	h.ServeHTTP(readyOut, ready)
+	if readyOut.Code != http.StatusOK || resolvedCalls != 1 {
+		t.Fatalf("resolved provider status=%d calls=%d body=%s", readyOut.Code, resolvedCalls, readyOut.Body.String())
+	}
+
+	blocked := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "unresolved", "unresolved-model")))
+	blocked.Header.Set("Authorization", "Bearer local-secret")
+	blockedOut := httptest.NewRecorder()
+	h.ServeHTTP(blockedOut, blocked)
+	if blockedOut.Code != http.StatusServiceUnavailable || !strings.Contains(blockedOut.Body.String(), "provider_unavailable") {
+		t.Fatalf("unresolved provider status=%d body=%s", blockedOut.Code, blockedOut.Body.String())
+	}
+	if failedProbeCalls != 2 {
+		t.Fatalf("failed protocol probe calls=%d, want two auth shapes", failedProbeCalls)
+	}
+}
+
+func TestNewHandlerRejectsWhenAllNamedProvidersFailAutoProbe(t *testing.T) {
+	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"not":"a recognized model catalog"}`)
+	}))
+	defer probe.Close()
+	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
+	c.BaseURL = ""
+	c.Protocol = ""
+	c.APIVersion = ""
+	c.APIKey = ""
+	c.UpstreamKeychain = KeychainReference{}
+	c.Model = ""
+	c.UpstreamID = ""
+	c.ModelCapabilities = ModelCapabilities{}
+	c.Prices = nil
+	c.Providers = map[string]Provider{
+		"unresolved": {Protocol: "auto", BaseURL: probe.URL + "/v1", APIKey: "provider-key", UpstreamID: "unresolved", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "unresolved"}},
+	}
+	if _, _, err := NewHandler(c, nil); err == nil || !strings.Contains(err.Error(), "no provider protocol could be resolved for unresolved") || !strings.Contains(err.Error(), "tidemux provider update REF --protocol") {
+		t.Fatalf("handler error=%v, want actionable all-providers-failed error", err)
 	}
 }
 

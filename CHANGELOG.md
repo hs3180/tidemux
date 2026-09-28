@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.2 — 2026-09-29
+
+- Route bare upstream model IDs when exactly one configured provider scope can
+  serve them. Return `model_ambiguous` rather than choosing when scopes overlap;
+  preserve explicit `REF/MODEL` routing and cross-protocol conversion.
+- Keep the gateway available for resolved providers when an `auto` protocol
+  probe cannot classify another provider. Log a provider-specific recovery
+  command, exclude the unresolved provider from listings and return
+  `provider_unavailable` for its explicit routes. Fail startup if none resolve.
+- Tell users to restart a running gateway after `provider add` so the new
+  provider is available.
+- Ship the post-v0.2.1 budget recovery command and the known-cost settlement
+  fix for audit append failures.
+- Update provider, protocol, agent, install and rollback documentation for the
+  expanded 0.2.1 delivery goal and the immutable v0.2.2 release.
+
 ## 0.2.1 — 2026-09-28
 
 - Classify provider errors by exact, per-provider code mappings and return

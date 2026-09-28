@@ -126,13 +126,13 @@ func TestIndependentProvidersRouteByQualifiedModelAndDiscoverModels(t *testing.T
 			t.Fatalf("%s request status=%d body=%s", test.protocol, out.Code, out.Body.String())
 		}
 	}
-	t.Run("unqualified model is rejected", func(t *testing.T) {
+	t.Run("bare model is ambiguous across unscoped providers", func(t *testing.T) {
 		body := strings.Replace(requestBody("openai"), "legacy/custom-model", "custom-model", 1)
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer local-secret")
 		out := httptest.NewRecorder()
 		h.ServeHTTP(out, req)
-		if out.Code != http.StatusBadRequest || !strings.Contains(out.Body.String(), "model_must_include_provider") {
+		if out.Code != http.StatusBadRequest || !strings.Contains(out.Body.String(), "model_ambiguous") {
 			t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
 		}
 	})
@@ -180,6 +180,131 @@ func TestIndependentProvidersRouteByQualifiedModelAndDiscoverModels(t *testing.T
 			t.Fatalf("restricted model status=%d calls=%d/%d body=%s", deniedOut.Code, openAICalls, callsBefore, deniedOut.Body.String())
 		}
 	})
+}
+
+func TestBareModelIDsRouteByUniqueScopeForBothClientProtocols(t *testing.T) {
+	providerCalls := map[string]int{"openai": 0, "anthropic": 0}
+	providerModels := map[string]string{"openai": "openai-only", "anthropic": "vendor/anthropic-only"}
+	newProvider := func(name, protocol, key string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				if protocol == "openai" {
+					_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"`+providerModels[name]+`","object":"model"}]}`)
+				} else {
+					_, _ = io.WriteString(w, `{"data":[{"id":"`+providerModels[name]+`","type":"model"}],"has_more":false}`)
+				}
+				return
+			}
+			providerCalls[name]++
+			wantPath := "/v1/chat/completions"
+			if protocol == "anthropic" {
+				wantPath = "/v1/messages"
+				if r.Header.Get("x-api-key") != key {
+					t.Errorf("Anthropic provider auth=%q", r.Header.Get("x-api-key"))
+				}
+			} else if r.Header.Get("Authorization") != "Bearer "+key {
+				t.Errorf("OpenAI provider auth=%q", r.Header.Get("Authorization"))
+			}
+			if r.URL.Path != wantPath {
+				t.Errorf("%s provider path=%q, want %q", protocol, r.URL.Path, wantPath)
+			}
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"model":"`+providerModels[name]+`"`) {
+				t.Errorf("forwarded model does not match the upstream ID: %s", body)
+			}
+			_, _ = io.WriteString(w, responseBody(protocol))
+		}))
+	}
+	openAI := newProvider("openai", "openai", "openai-key")
+	defer openAI.Close()
+	anthropic := newProvider("anthropic", "anthropic", "anthropic-key")
+	defer anthropic.Close()
+
+	config := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://legacy.example/v1")
+	config.BaseURL = ""
+	config.Protocol = ""
+	config.APIVersion = ""
+	config.APIKey = ""
+	config.UpstreamKeychain = KeychainReference{}
+	config.Model = ""
+	config.UpstreamID = ""
+	config.ModelCapabilities = ModelCapabilities{}
+	config.Prices = nil
+	config.Providers = map[string]Provider{
+		"openai-main":    {Protocol: "openai", BaseURL: openAI.URL + "/v1", APIKey: "openai-key", UpstreamID: "openai", SupportedModels: []string{providerModels["openai"]}, UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "openai"}},
+		"anthropic-main": {Protocol: "anthropic", BaseURL: anthropic.URL + "/v1", APIKey: "anthropic-key", UpstreamID: "anthropic", SupportedModels: []string{providerModels["anthropic"]}, UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "anthropic"}},
+	}
+	h, closeGateway, err := NewHandler(config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGateway()
+
+	for _, clientProtocol := range []string{"openai", "anthropic"} {
+		for _, providerName := range []string{"openai-main", "anthropic-main"} {
+			model := providerModels[strings.TrimSuffix(providerName, "-main")]
+			path := "/v1/chat/completions"
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(bareRequestBodyFor(clientProtocol, model)))
+			if clientProtocol == "anthropic" {
+				path = "/v1/messages"
+				req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(bareRequestBodyFor(clientProtocol, model)))
+				req.Header.Set("x-api-key", "local-secret")
+				req.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
+			} else {
+				req.Header.Set("Authorization", "Bearer local-secret")
+			}
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			if out.Code != http.StatusOK {
+				t.Fatalf("%s client -> %s provider status=%d body=%s", clientProtocol, providerName, out.Code, out.Body.String())
+			}
+		}
+	}
+	if providerCalls["openai"] != 2 || providerCalls["anthropic"] != 2 {
+		t.Fatalf("provider calls=%v, want two routed calls each", providerCalls)
+	}
+	unknown := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(bareRequestBodyFor("openai", "unknown-model")))
+	unknown.Header.Set("Authorization", "Bearer local-secret")
+	unknownOut := httptest.NewRecorder()
+	h.ServeHTTP(unknownOut, unknown)
+	if unknownOut.Code != http.StatusNotFound || !strings.Contains(unknownOut.Body.String(), "model_not_found") {
+		t.Fatalf("unknown bare model status=%d body=%s", unknownOut.Code, unknownOut.Body.String())
+	}
+	if providerCalls["openai"] != 2 || providerCalls["anthropic"] != 2 {
+		t.Fatalf("unknown bare model reached an upstream: %v", providerCalls)
+	}
+
+	ambiguous := config
+	ambiguous.LedgerPath = filepath.Join(t.TempDir(), "ambiguous-ledger.db")
+	openAIConfig := ambiguous.Providers["openai-main"]
+	openAIConfig.SupportedModels = []string{"shared-model"}
+	ambiguous.Providers["openai-main"] = openAIConfig
+	anthropicConfig := ambiguous.Providers["anthropic-main"]
+	anthropicConfig.SupportedModels = []string{"shared-model"}
+	ambiguous.Providers["anthropic-main"] = anthropicConfig
+	ambiguousHandler, closeAmbiguous, err := NewHandler(ambiguous, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAmbiguous()
+	before := map[string]int{"openai": providerCalls["openai"], "anthropic": providerCalls["anthropic"]}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(bareRequestBodyFor("openai", "shared-model")))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	out := httptest.NewRecorder()
+	ambiguousHandler.ServeHTTP(out, req)
+	if out.Code != http.StatusBadRequest || !strings.Contains(out.Body.String(), "model_ambiguous") {
+		t.Fatalf("ambiguous bare model status=%d body=%s", out.Code, out.Body.String())
+	}
+	if providerCalls["openai"] != before["openai"] || providerCalls["anthropic"] != before["anthropic"] {
+		t.Fatalf("ambiguous model reached an upstream: before=%v after=%v", before, providerCalls)
+	}
+}
+
+func bareRequestBodyFor(protocol, model string) string {
+	if protocol == "anthropic" {
+		return `{"model":"` + model + `","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`
+	}
+	return `{"model":"` + model + `","messages":[{"role":"user","content":"hello"}]}`
 }
 
 func TestMultipleSameProtocolProvidersRequireExplicitModelRouting(t *testing.T) {
@@ -287,7 +412,7 @@ func otherProviderName(name string) string {
 	return "primary"
 }
 
-func TestSingleLegacyProviderRequiresQualifiedModelAcrossClientProtocols(t *testing.T) {
+func TestSingleLegacyProviderRoutesBareModelAcrossClientProtocols(t *testing.T) {
 	var providerPath, providerAuth, providerBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -313,7 +438,7 @@ func TestSingleLegacyProviderRequiresQualifiedModelAcrossClientProtocols(t *test
 	}
 	defer closeGateway()
 
-	body := strings.Replace(requestBody("anthropic"), "custom-model", "openai-model", 1)
+	body := strings.Replace(requestBody("anthropic"), "legacy/custom-model", "openai-model", 1)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 	req.Header.Set("x-api-key", "local-secret")
 	req.Header.Set("anthropic-version", defaultAnthropicAPIVersion)
