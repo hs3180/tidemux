@@ -84,6 +84,32 @@ external client transcript.
   model ID (or `REF/MODEL_ID` if scopes overlap), and the local TideMux gateway
   key. The user should enter that key directly into dsh's credential UI from
   their local terminal; the agent must not read or relay it.
+
+  **If the custom model is missing from dsh's model picker:** this picker issue
+  was reproduced in dsh v0.2.0-rc.1 after saving the provider, fetching models,
+  choosing “Add selected” and restarting. Do not claim TideMux has fixed the
+  dsh UI. A mock-backed Web UI request was verified after setting dsh's default
+  model in the active profile patch. For `dsh web`, open
+  `$DSH_HOME/profiles/web/cordis.patch.yml` (for another profile, use its name)
+  and merge this entry into the existing YAML list without replacing other
+  settings:
+
+  ```yaml
+  - id: agent-default-model
+    name: '@deepseek-ai/dsh-agent-default-model'
+    config:
+      provider: tidemux
+      model: MODEL_ID
+  ```
+
+  Replace `tidemux` with the Provider ID created in dsh and `MODEL_ID` with the
+  selected model; use `REF/MODEL_ID` if TideMux has overlapping model scopes.
+  Keep the TideMux gateway key in dsh's credential UI, not in this file. Create
+  a new dsh session to use the new default; an existing session may retain its
+  selected model. dsh documents this file as the active profile's live config
+  and says model changes apply without restarting the server. See its
+  [model configuration guide](https://deepseek-harness.github.io/deepseek-harness/en/guide/providers)
+  and [`agent-default-model` config](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/agent-default-model/README.md).
 - **Codex:** Codex can perform TideMux installation and setup as an agent.
   Direct Codex-to-TideMux model routing is not supported: the
   [Codex configuration reference](https://developers.openai.com/codex/config-reference/)
