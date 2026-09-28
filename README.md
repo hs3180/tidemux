@@ -154,6 +154,7 @@ may expose a different command set.
 | `tidemux provider pricing set REF MODEL --input-cache-hit RATE --input-cache-miss RATE --output RATE [other options]` | Set or replace all required per-million-token rates for one model; incomplete rate sets are rejected. |
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
 | `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
+| `tidemux provider budget reset REF --window 5h (or 7d)` | Reset only that provider's selected rolling budget window. Stop the gateway before reset, then restart it; request audit and billing history remain intact. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
 
 Provider identity does not depend on a user-chosen name. TideMux creates and

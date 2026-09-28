@@ -1,9 +1,12 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1186,6 +1189,70 @@ func TestBudgetRejectsUnpricedRequestedModel(t *testing.T) {
 		t.Fatalf("upstream calls=%d", calls)
 	}
 }
+
+func TestBudgetSettlementFailureIsLoggedAndBlocksFurtherRequests(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			calls++
+		}
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer up.Close()
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL), "openai-main")
+	provider := c.Providers["openai-main"]
+	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 5, WeeklyLimit: 8, AlertThreshold: .8, Mode: "hard"}
+	c.Providers["openai-main"] = provider
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	triggerDB, err := sql.Open("sqlite", c.LedgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := triggerDB.Exec(`CREATE TRIGGER fail_budget_settlement BEFORE UPDATE ON budget_charges BEGIN SELECT RAISE(FAIL,'injected settlement failure'); END`); err != nil {
+		triggerDB.Close()
+		t.Fatal(err)
+	}
+	if err := triggerDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	gatewayHandler := h.(*handler)
+	previousLogWriter := log.Writer()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousLogWriter)
+
+	budgetRequest := `{"model":"openai-main/custom-model","messages":[{"role":"user","content":"hello"}]}`
+	first := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(budgetRequest))
+	first.Header.Set("Authorization", "Bearer local-secret")
+	firstOut := httptest.NewRecorder()
+	gatewayHandler.ServeHTTP(firstOut, first)
+	if firstOut.Code != http.StatusOK {
+		t.Fatalf("first status=%d body=%s", firstOut.Code, firstOut.Body.String())
+	}
+	if !strings.Contains(logs.String(), "budget settlement unresolved") || !strings.Contains(logs.String(), "injected settlement failure") {
+		t.Fatalf("budget settlement failure was not logged: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "provider-secret") || strings.Contains(logs.String(), "local-secret") || strings.Contains(logs.String(), "hello") {
+		t.Fatalf("budget settlement diagnostic exposed credentials or request content: %s", logs.String())
+	}
+
+	second := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(budgetRequest))
+	second.Header.Set("Authorization", "Bearer local-secret")
+	secondOut := httptest.NewRecorder()
+	gatewayHandler.ServeHTTP(secondOut, second)
+	if secondOut.Code != http.StatusTooManyRequests || !strings.Contains(secondOut.Body.String(), "budget_usage_unknown") {
+		t.Fatalf("second status=%d body=%s", secondOut.Code, secondOut.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls=%d want 1", calls)
+	}
+}
+
 func TestRedirectDoesNotLeakCredentials(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("redirect followed") }))
 	defer target.Close()

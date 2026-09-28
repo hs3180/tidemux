@@ -17,6 +17,8 @@
 - Preserve documented Anthropic image, document, citation and server-tool
   blocks on native Anthropic routes; return precise errors for unsupported
   cross-protocol content.
+- Keep provider budgets fail-closed when audit or settlement persistence fails;
+  log safe causes and add `tidemux provider budget reset REF --window 5h|7d`.
 - For rollback to 0.2.0, remove any newly added `error_code_mappings` from the
   config before reinstalling 0.2.0; the older binary does not recognize that
   field.

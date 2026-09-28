@@ -43,6 +43,9 @@ func providerCommand(args []string, stdout, stderr *os.File) error {
 	case "pricing":
 		return providerPricing(args[1:], stdout, stderr)
 	case "budget":
+		if len(args) > 1 && args[1] == "reset" {
+			return providerBudgetResetCommand(args[2:], stdout, stderr)
+		}
 		return providerBudgetCommand(args[1:], os.Stdin, stdout, stderr)
 	case "error-map":
 		return providerErrorMapCommand(args[1:], stdout, stderr)

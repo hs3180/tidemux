@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
@@ -22,14 +23,16 @@ import (
 )
 
 type handler struct {
-	config      Config
-	ledger      *ledger.Ledger
-	sessions    *limiter.SessionLimiter
-	providers   map[string]Provider
-	clients     map[string]*adapter.Client
-	keyPools    map[string]*providerKeyPool
-	models      map[string][]string
-	modelsKnown map[string]bool
+	config        Config
+	ledger        *ledger.Ledger
+	budgetMu      sync.RWMutex
+	budgetBlocked map[string]struct{}
+	sessions      *limiter.SessionLimiter
+	providers     map[string]Provider
+	clients       map[string]*adapter.Client
+	keyPools      map[string]*providerKeyPool
+	models        map[string][]string
+	modelsKnown   map[string]bool
 }
 
 func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
@@ -37,6 +40,24 @@ func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
 		return provider.SupportedModels, true
 	}
 	return h.models[providerName], h.modelsKnown[providerName]
+}
+
+func budgetBlockKey(provider, currency string) string { return provider + "\x00" + currency }
+
+func (h *handler) blockBudget(provider, currency string) {
+	h.budgetMu.Lock()
+	defer h.budgetMu.Unlock()
+	if h.budgetBlocked == nil {
+		h.budgetBlocked = map[string]struct{}{}
+	}
+	h.budgetBlocked[budgetBlockKey(provider, currency)] = struct{}{}
+}
+
+func (h *handler) isBudgetBlocked(provider, currency string) bool {
+	h.budgetMu.RLock()
+	defer h.budgetMu.RUnlock()
+	_, blocked := h.budgetBlocked[budgetBlockKey(provider, currency)]
+	return blocked
 }
 
 func parseQualifiedModelID(value string) (providerName, model string, ok bool) {
@@ -400,6 +421,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.reject(w, r, protocol, 503, "budget_pricing_unconfigured")
 			return
 		}
+		if h.isBudgetBlocked(providerName, budget.Currency) {
+			h.reject(w, r, protocol, 429, "budget_usage_unknown")
+			return
+		}
 		reservationID, err = newRequestID()
 		if err != nil {
 			h.reject(w, r, protocol, 500, "request_id_failed")
@@ -420,7 +445,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	settle := func(auditID string) {
 		if reservationID != "" {
-			_ = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now())
+			if err := h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now()); err != nil {
+				h.blockBudget(providerName, budget.Currency)
+				log.Printf("tidemux: budget settlement unresolved reservation_id=%s audit_id=%s error=%v", reservationID, auditID, err)
+			}
 		}
 	}
 	if mode.Stream {

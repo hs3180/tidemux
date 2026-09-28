@@ -2,11 +2,23 @@ package ledger
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"time"
+)
+
+var (
+	ErrBudgetAuditMissing = errors.New("budget_audit_missing")
+)
+
+type BudgetWindow string
+
+const (
+	BudgetWindowFiveHour BudgetWindow = "5h"
+	BudgetWindowSevenDay BudgetWindow = "7d"
 )
 
 // BudgetPolicy is deliberately currency-scoped. TideMux never converts an
@@ -54,9 +66,37 @@ func (l *Ledger) CheckBudget(ctx context.Context, requestID, provider string, p 
 		return BudgetDecision{}, err
 	}
 	defer tx.Rollback()
+	var fiveHourReset, weeklyReset sql.NullInt64
+	for _, item := range []struct {
+		window string
+		target *sql.NullInt64
+	}{{"5h", &fiveHourReset}, {"7d", &weeklyReset}} {
+		err = tx.QueryRowContext(ctx, `SELECT reset_at_ms FROM budget_resets WHERE provider_scope=? AND window_key=?`, provider, item.window).Scan(item.target)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return BudgetDecision{}, err
+		}
+	}
+	if fiveHourReset.Valid && fiveHourReset.Int64 >= fiveHourStart {
+		fiveHourStart = fiveHourReset.Int64 + 1
+	}
+	if weeklyReset.Valid && weeklyReset.Int64 >= weeklyStart {
+		weeklyStart = weeklyReset.Int64 + 1
+	}
 	var unknown int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM budget_charges WHERE (provider_scope=? OR provider_scope='') AND currency=? AND charged_at_ms>=? AND state='unknown'`, provider, p.Currency, weeklyStart).Scan(&unknown); err != nil {
-		return BudgetDecision{}, err
+	unknownWindows := []string{}
+	unknownArgs := []any{provider, p.Currency}
+	if p.FiveHourLimit > 0 {
+		unknownWindows = append(unknownWindows, `(charged_at_ms>=? AND charged_at_ms<=?)`)
+		unknownArgs = append(unknownArgs, fiveHourStart, nowMS)
+	}
+	if p.WeeklyLimit > 0 {
+		unknownWindows = append(unknownWindows, `(charged_at_ms>=? AND charged_at_ms<=?)`)
+		unknownArgs = append(unknownArgs, weeklyStart, nowMS)
+	}
+	if len(unknownWindows) > 0 {
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM budget_charges WHERE (provider_scope=? OR provider_scope='') AND currency=? AND state='unknown' AND (`+strings.Join(unknownWindows, ` OR `)+`)`, unknownArgs...).Scan(&unknown); err != nil {
+			return BudgetDecision{}, err
+		}
 	}
 	if unknown > 0 {
 		return BudgetDecision{}, errors.New("budget_usage_unknown")
@@ -91,7 +131,8 @@ func (l *Ledger) CheckBudget(ctx context.Context, requestID, provider string, p 
 func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, provider, currency string, chargedAt time.Time) error {
 	var cost *float64
 	err := l.db.QueryRowContext(ctx, `SELECT estimated_cost FROM request_audit WHERE id=?`, auditID).Scan(&cost)
-	if err != nil && !strings.Contains(err.Error(), "no rows") {
+	auditMissing := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !auditMissing {
 		return err
 	}
 	state, amount := "unknown", 0.0
@@ -99,18 +140,39 @@ func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, pro
 		state = "settled"
 		amount = *cost
 	}
-	result, err := l.db.ExecContext(ctx, `UPDATE budget_charges SET audit_id=?,charged_at_ms=?,provider_scope=?,currency=?,charged_amount=?,state=? WHERE request_id=?`, auditID, chargedAt.UnixMilli(), provider, currency, amount, state, requestID)
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("record budget charge begin: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE budget_charges SET audit_id=?,charged_at_ms=?,provider_scope=?,currency=?,charged_amount=?,state=? WHERE request_id=?`, auditID, chargedAt.UnixMilli(), provider, currency, amount, state, requestID)
 	if err != nil {
 		return fmt.Errorf("record budget charge: %w", err)
 	}
 	if affected, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("record budget charge result: %w", err)
 	} else if affected == 0 {
-		if _, err := l.db.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,provider_scope,currency,charged_amount,state) VALUES (?,?,?,?,?,?,?)`, requestID, auditID, chargedAt.UnixMilli(), provider, currency, amount, state); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO budget_charges (request_id,audit_id,charged_at_ms,provider_scope,currency,charged_amount,state) VALUES (?,?,?,?,?,?,?)`, requestID, auditID, chargedAt.UnixMilli(), provider, currency, amount, state); err != nil {
 			return fmt.Errorf("record budget charge insert: %w", err)
 		}
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("record budget charge commit: %w", err)
+	}
+	if auditMissing {
+		return ErrBudgetAuditMissing
+	}
 	return nil
+}
+
+// ResetProviderBudget starts a fresh rolling window for one provider.
+func (l *Ledger) ResetProviderBudget(ctx context.Context, provider string, window BudgetWindow, resetAt time.Time) error {
+	if strings.TrimSpace(provider) == "" || (window != BudgetWindowFiveHour && window != BudgetWindowSevenDay) {
+		return errors.New("provider and budget window (5h or 7d) are required")
+	}
+	_, err := l.db.ExecContext(ctx, `INSERT INTO budget_resets (provider_scope,window_key,reset_at_ms) VALUES (?,?,?)
+		ON CONFLICT(provider_scope,window_key) DO UPDATE SET reset_at_ms=excluded.reset_at_ms`, provider, string(window), resetAt.UnixMilli())
+	return err
 }
 
 func ratio(value, limit float64) float64 {

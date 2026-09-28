@@ -102,7 +102,7 @@ func (l *Ledger) initBudget(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	hasProviderScope := false
+	columns := map[string]bool{}
 	for rows.Next() {
 		var cid, notNull, primaryKey int
 		var name, kind string
@@ -111,9 +111,7 @@ func (l *Ledger) initBudget(ctx context.Context) error {
 			rows.Close()
 			return err
 		}
-		if name == "provider_scope" {
-			hasProviderScope = true
-		}
+		columns[name] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -122,10 +120,15 @@ func (l *Ledger) initBudget(ctx context.Context) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if !hasProviderScope {
+	if !columns["provider_scope"] {
 		if _, err := l.db.ExecContext(ctx, `ALTER TABLE budget_charges ADD COLUMN provider_scope TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
+	}
+	if _, err := l.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS budget_resets (
+ provider_scope TEXT NOT NULL, window_key TEXT NOT NULL CHECK(window_key IN ('5h','7d')),
+ reset_at_ms INTEGER NOT NULL, PRIMARY KEY(provider_scope,window_key));`); err != nil {
+		return err
 	}
 	if _, err := l.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS budget_charge_provider_period ON budget_charges(provider_scope,currency,charged_at_ms)`); err != nil {
 		return err
