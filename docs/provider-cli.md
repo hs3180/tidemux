@@ -239,6 +239,17 @@ Older daily/monthly budget fields cannot be translated to rolling windows; this
 command replaces them with the newly configured provider policy (or removes
 them with `--disable`).
 
+To start one of a provider's budget windows over, stop the gateway and run:
+
+```sh
+tidemux provider budget reset REF --window 5h
+tidemux provider budget reset REF --window 7d
+```
+
+The reset applies only to that provider and window. The other window and the
+request audit/billing history remain unchanged. Restart the gateway after the
+reset.
+
 ## Gateway-wide settings
 
 Run without options for a short guided setup, or specify only the settings to

@@ -11,6 +11,7 @@ keeping the named-provider boundary introduced in 0.2.0.
 | P0 | [#47](https://github.com/hs3180/tidemux/issues/47) | Configure mappings per provider; retry HTTP 429 on the same key for up to three total attempts while honoring bounded `Retry-After` waits, then return the normalized rate-limit error without switching keys or providers. |
 | P0 | [#51](https://github.com/hs3180/tidemux/issues/51) | Identify protocols from authenticated model-list response shapes; retain explicit overrides and fail clearly on ambiguous/unknown schemas. |
 | P0 | [#54](https://github.com/hs3180/tidemux/issues/54) | Preserve documented Anthropic Messages content blocks and citations on native Anthropic routes; return a precise field path when a block cannot be translated to OpenAI. |
+| P0 | [#57](https://github.com/hs3180/tidemux/issues/57) | Keep budget enforcement fail-closed on audit/settlement write failures; expose safe diagnostics and a provider-scoped reset for the rolling 5h or 7d budget window. |
 | P1 | [#38](https://github.com/hs3180/tidemux/issues/38) | Document repeatable install and setup workflows for Claude Code, Codex, Hermes and dsh, including local credential handling and client compatibility limits. |
 
 Defer #52, #53, #32, #40, #41, #37, #16, #17 and #8. Remove #6 from the old 0.2.0
@@ -35,9 +36,10 @@ milestone and defer it to its own future plan. These items are outside the
 1. Confirm the release base is the published v0.2.0 commit, map every open
    issue and pull request to this scope or an explicit deferral, and move #6
    off the 0.2.0 milestone.
-2. Complete error mapping, rate-limit retries, schema-based protocol detection
-   and native Anthropic content preservation. Cover both client protocols and
-   both upstream protocols, safe mapped stream errors, cancellation and
+2. Complete error mapping, rate-limit retries, schema-based protocol detection,
+   native Anthropic content preservation and safe budget settlement recovery.
+   Cover both client protocols and both upstream protocols, safe mapped stream
+   errors, cancellation, fault-injected audit/settlement failures and
    field-specific cross-protocol errors.
 3. Complete the #38 guide and copyable prompt. Check fresh install, upgrade and
    repeated setup paths; document direct dsh, Claude and Hermes configuration

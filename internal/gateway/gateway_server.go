@@ -85,7 +85,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
 	}
-	return &handler{config: c, ledger: l, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown}, func() error {
+	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()

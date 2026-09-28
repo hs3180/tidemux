@@ -281,6 +281,22 @@ It is not a reserve and does not count toward the amount. If the process exits
 before settlement, restart converts the pending attempt to `unknown`, so the
 request cannot disappear from budget accounting.
 
+If request-audit persistence or budget settlement fails, TideMux writes the
+local error cause and request/reservation IDs to `serve.log`; it never logs
+request or response bodies or credentials. An unresolved charge remains
+fail-closed. To start one provider's 5h or 7d budget window over, stop the
+gateway and reset that window:
+
+```sh
+tidemux provider budget reset REF --window 5h
+tidemux provider budget reset REF --window 7d
+```
+
+The reset applies only to the selected provider and window. Charges remain in
+the request audit and billing history; they stop counting toward that budget
+window from the reset time forward. The other budget window keeps its current
+usage. Restart the gateway after resetting before sending new requests.
+
 When provider usage is missing, TideMux can make a local content estimate if a
 pricing entry is configured. Provider usage always takes precedence. For a
 known session, the longest common normalized input prefix is priced as cache-hit

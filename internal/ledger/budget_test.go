@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,8 +63,8 @@ func TestUnknownUsageBlocksFutureBudgetRequests(t *testing.T) {
 	defer l.Close()
 	p := BudgetPolicy{Currency: "USD", FiveHourLimit: 10, WeeklyLimit: 10, AlertThreshold: .8, Mode: "hard"}
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-	if err := l.RecordBudgetCharge(context.Background(), "one", "missing-audit", "provider-a", "USD", now); err != nil {
-		t.Fatal(err)
+	if err := l.RecordBudgetCharge(context.Background(), "one", "missing-audit", "provider-a", "USD", now); !errors.Is(err, ErrBudgetAuditMissing) {
+		t.Fatalf("expected missing-audit diagnostic, got %v", err)
 	}
 	if _, err := l.CheckBudget(context.Background(), "two", "provider-a", p, false, now); err == nil || err.Error() != "budget_usage_unknown" {
 		t.Fatalf("err=%v", err)

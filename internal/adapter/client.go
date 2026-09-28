@@ -153,6 +153,10 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			}
 		}
 		if e := c.Ledger.AppendAudit(a); e != nil {
+			// Audit data is already bounded metadata (never request content or
+			// credentials), so the local service log can preserve the write cause
+			// and request ID needed to diagnose a conservative budget hold.
+			log.Printf("tidemux: request audit append failed request_id=%s error=%v", id, e)
 			response = nil
 			err = &CallError{Status: 500, Code: "audit_failed_do_not_retry_blindly"}
 		}

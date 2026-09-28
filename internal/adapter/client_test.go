@@ -1,9 +1,11 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -496,9 +498,20 @@ func TestSuccessfulQueueAndAuditFailure(t *testing.T) {
 		t.Fatalf("queue %+v", rows)
 	}
 	l.Close()
-	_, _, err = c.Call(context.Background(), []byte(`{}`), "m")
+	previousLogWriter := log.Writer()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousLogWriter)
+	c.APIKey = "private-key-marker"
+	_, requestID, err := c.Call(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"private-request-marker"}]}`), "m")
 	if err == nil || err.Error() != "audit_failed_do_not_retry_blindly" {
 		t.Fatalf("audit failure %v", err)
+	}
+	if !strings.Contains(logs.String(), "request audit append failed") || !strings.Contains(logs.String(), "request_id="+requestID) || !strings.Contains(logs.String(), "database is closed") {
+		t.Fatalf("missing safe audit-write diagnostic: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "private-key-marker") || strings.Contains(logs.String(), "private-request-marker") {
+		t.Fatalf("audit-write diagnostic exposed credential or request content: %s", logs.String())
 	}
 }
 
