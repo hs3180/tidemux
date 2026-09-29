@@ -281,11 +281,14 @@ It is not a reserve and does not count toward the amount. If the process exits
 before settlement, restart converts the pending attempt to `unknown`, so the
 request cannot disappear from budget accounting.
 
-If request-audit persistence or budget settlement fails, TideMux writes the
-local error cause and request/reservation IDs to `serve.log`; it never logs
-request or response bodies or credentials. An unresolved charge remains
-fail-closed. To start one provider's 5h or 7d budget window over, stop the
-gateway and reset that window:
+If request validation or protocol conversion proves that no upstream request
+was attempted, TideMux releases its pending budget reservation. If a request
+may have reached the provider and its usage or settlement is unresolved,
+TideMux keeps the charge fail-closed. When audit persistence or settlement
+fails, it writes the local error cause and request/reservation IDs to
+`serve.log`; it never logs request or response bodies or credentials. To start
+one provider's 5h or 7d budget window over, stop the gateway and reset that
+window:
 
 ```sh
 tidemux provider budget reset REF --window 5h
