@@ -223,7 +223,10 @@ func (h *handler) failUpstream(w http.ResponseWriter, callErr *adapter.CallError
 		h.fail(w, callErr.Status, callErr.Code, protocol, callErr.Param)
 		return
 	}
-	status, _, _, _ := callErr.Category.ClientError(protocol)
+	status := callErr.Status
+	if status < 400 || status > 599 {
+		status, _, _, _ = callErr.Category.ClientError(protocol)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(mappedUpstreamErrorPayload(callErr, protocol))

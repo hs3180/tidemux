@@ -96,6 +96,44 @@ func TestRateLimitRetriesSameCandidateWithOneAuditRecord(t *testing.T) {
 	}
 }
 
+func TestMappedRateLimitCategoryRetriesOnMappedProviderStatus(t *testing.T) {
+	var calls []string
+	var waits []time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Header.Get("Authorization"))
+		if len(calls) == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"error":{"code":"provider_throttled"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"chat1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	client, l := newCandidateTestClient(t, upstream.Client())
+	defer l.Close()
+	client.BaseURL = upstream.URL + "/v1"
+	client.ErrorCodeMappings = []ProviderErrorMapping{{UpstreamCode: "provider_throttled", HTTPStatus: http.StatusForbidden, Category: ProviderErrorRateLimited}}
+	client.waitRateLimit = func(_ context.Context, delay time.Duration) error {
+		waits = append(waits, delay)
+		return nil
+	}
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
+	failedCallbacks := 0
+	response, _, err := client.CallFromKeyCandidates("openai", context.Background(), body, "m", nil, CallOptions{}, []string{"key-a", "key-b"}, KeyCandidateCallbacks{
+		Failed: func(index int, callErr *CallError) (bool, time.Duration) {
+			failedCallbacks++
+			if index != 0 || callErr.Category != ProviderErrorRateLimited || callErr.UpstreamStatus != http.StatusForbidden {
+				t.Fatalf("rate-limit callback index=%d error=%+v", index, callErr)
+			}
+			return true, 0
+		},
+	})
+	if err != nil || len(response) == 0 || len(calls) != 2 || calls[0] != "Bearer key-a" || calls[1] != "Bearer key-a" || failedCallbacks != 1 || len(waits) != 1 || waits[0] != time.Second {
+		t.Fatalf("err=%v calls=%v failed callbacks=%d waits=%v response=%s", err, calls, failedCallbacks, waits, response)
+	}
+}
+
 func TestAnthropicKeyCandidatesFailOverWithXAPIKey(t *testing.T) {
 	var calls []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
