@@ -71,6 +71,44 @@ func TestUnknownUsageBlocksFutureBudgetRequests(t *testing.T) {
 	}
 }
 
+func TestReleaseBudgetReservationRemovesOnlyPendingCharge(t *testing.T) {
+	l, err := Open(filepath.Join(t.TempDir(), "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	p := BudgetPolicy{Currency: "USD", FiveHourLimit: 10, WeeklyLimit: 10, AlertThreshold: .8, Mode: "hard"}
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	if _, err := l.CheckBudget(context.Background(), "not-sent", "provider-a", p, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.ReleaseBudgetReservation(context.Background(), "not-sent"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := l.QueryRow(context.Background(), `SELECT COUNT(*) FROM budget_charges WHERE request_id=?`, "not-sent").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("released reservation rows=%d", count)
+	}
+	if _, err := l.CheckBudget(context.Background(), "next", "provider-a", p, false, now); err != nil {
+		t.Fatalf("released reservation blocked a later request: %v", err)
+	}
+	if err := l.ReleaseBudgetReservation(context.Background(), "next"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RecordBudgetCharge(context.Background(), "unknown", "missing-audit", "provider-a", "USD", now); !errors.Is(err, ErrBudgetAuditMissing) {
+		t.Fatalf("expected unknown charge to remain fail-closed, got %v", err)
+	}
+	if err := l.ReleaseBudgetReservation(context.Background(), "unknown"); err == nil {
+		t.Fatal("released a non-pending unknown charge")
+	}
+	if _, err := l.CheckBudget(context.Background(), "after-unknown", "provider-a", p, false, now); err == nil || err.Error() != "budget_usage_unknown" {
+		t.Fatalf("unknown usage did not remain fail-closed: %v", err)
+	}
+}
+
 func TestKnownBudgetCostSettlesWithoutAuditRow(t *testing.T) {
 	l, err := Open(filepath.Join(t.TempDir(), "ledger.db"))
 	if err != nil {

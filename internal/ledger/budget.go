@@ -126,6 +126,28 @@ func (l *Ledger) CheckBudget(ctx context.Context, requestID, provider string, p 
 	return BudgetDecision{Warning: warning}, nil
 }
 
+// ReleaseBudgetReservation removes a request reservation when the caller can
+// prove that no provider request was dispatched. A missing or already-settled
+// reservation is an error so callers fail closed instead of hiding ledger
+// inconsistencies.
+func (l *Ledger) ReleaseBudgetReservation(ctx context.Context, requestID string) error {
+	if strings.TrimSpace(requestID) == "" {
+		return errors.New("invalid budget reservation")
+	}
+	result, err := l.db.ExecContext(ctx, `DELETE FROM budget_charges WHERE request_id=? AND state='pending'`, requestID)
+	if err != nil {
+		return fmt.Errorf("release budget reservation: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("release budget reservation result: %w", err)
+	}
+	if affected != 1 {
+		return errors.New("budget reservation is not pending")
+	}
+	return nil
+}
+
 // RecordBudgetCharge records actual usage. Unknown usage is never replaced by
 // a guessed amount; it blocks later budget requests in the active window.
 func (l *Ledger) RecordBudgetCharge(ctx context.Context, requestID, auditID, provider, currency string, chargedAt time.Time) error {

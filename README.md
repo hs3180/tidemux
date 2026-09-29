@@ -260,6 +260,7 @@ tidemux claude --model REF_FROM_LIST/model-a
 [Provider and gateway CLI](docs/provider-cli.md) ·
 [Client setup](docs/clients.md) ·
 [Agent installation and setup](docs/agent-install.md) ·
+[Runtime JSON logs](docs/runtime-logging.md) ·
 [0.2.2 release plan](docs/release-0.2.2.md) ·
 [0.2.1 release history](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·

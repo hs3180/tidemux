@@ -2,7 +2,7 @@ package gateway
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"sort"
@@ -12,10 +12,18 @@ import (
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 // NewHandler resolves providers and initializes the gateway's shared resources.
 func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, error) {
+	return NewHandlerWithLogger(c, httpClient, nil)
+}
+
+// NewHandlerWithLogger resolves providers and initializes shared resources
+// with a caller-owned structured runtime logger.
+func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger) (http.Handler, func() error, error) {
+	logger = observability.LoggerOrDiscard(logger)
 	if err := c.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -61,7 +69,12 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		return nil, nil, errors.New("no provider protocol could be resolved for " + strings.Join(unavailableNames, ", ") + "; set it with `tidemux provider update REF --protocol openai|anthropic`")
 	}
 	for _, name := range unavailableNames {
-		log.Printf("tidemux: provider %s unavailable because protocol:auto could not be resolved; set its protocol with `tidemux provider update %s --protocol openai|anthropic`", name, name)
+		logger.Warn("provider protocol could not be resolved",
+			slog.Int("schema_version", observability.SchemaVersion),
+			slog.String("event", "provider_unavailable"),
+			slog.String("provider_ref", name),
+			slog.String("recovery_command", "tidemux provider update REF --protocol openai|anthropic"),
+		)
 	}
 	if legacySingleProvider {
 		for _, provider := range providers {
@@ -78,7 +91,7 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 	if err != nil {
 		return nil, nil, errors.New("cannot open ledger")
 	}
-	stopReconciliation := startStatementSync(c, l)
+	stopReconciliation := startStatementSync(c, l, logger)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
 	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second
 	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions, idleTTL)
@@ -96,13 +109,13 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 		if _, unavailable := unavailableProviders[name]; unavailable {
 			continue
 		}
-		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
 		if !legacySingleProvider {
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
 	}
-	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders}, func() error {
+	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()
@@ -110,7 +123,14 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 }
 
 func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() error, error) {
-	h, closeLedger, err := NewHandler(c, client)
+	return OpenWithLogger(c, client, nil)
+}
+
+// OpenWithLogger opens the gateway server and routes all runtime diagnostics
+// through the provided structured logger.
+func OpenWithLogger(c Config, client *http.Client, logger *slog.Logger) (net.Listener, *http.Server, func() error, error) {
+	logger = observability.LoggerOrDiscard(logger)
+	h, closeLedger, err := NewHandlerWithLogger(c, client, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -119,5 +139,5 @@ func Open(c Config, client *http.Client) (net.Listener, *http.Server, func() err
 		closeLedger()
 		return nil, nil, nil, errors.New("cannot bind configured listener")
 	}
-	return listener, &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}, func() error { listener.Close(); return closeLedger() }, nil
+	return listener, &http.Server{Handler: h, ErrorLog: observability.HTTPServerErrorLogger(logger), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}, func() error { listener.Close(); return closeLedger() }, nil
 }
