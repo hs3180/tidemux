@@ -77,11 +77,24 @@ func TestCrossProtocolAnthropicDocumentHasPreciseUnsupportedPath(t *testing.T) {
 	}
 }
 
-func TestCrossProtocolAnthropicContextManagementHasPreciseUnsupportedPath(t *testing.T) {
-	body := []byte(`{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"continue"}],"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}}`)
-	_, _, _, err := PrepareRequestWithWarnings("anthropic", "openai", body, "", 0)
-	if err == nil || err.Error() != "unsupported_request_feature" || ValidationParameter(err) != "context_management" {
-		t.Fatalf("err=%v param=%q", err, ValidationParameter(err))
+func TestCrossProtocolAnthropicContextManagementIsForwardedWithoutFieldLoss(t *testing.T) {
+	body := []byte(`{"model":"m","max_tokens":4096,"messages":[{"role":"user","content":"continue"}],"thinking":{"type":"enabled","budget_tokens":1024},"context_management":{"edits":[{"type":"compact_20260112","trigger":{"type":"input_tokens","value":50000},"future_option":{"retain":true}}]}}`)
+	converted, _, warnings, err := PrepareRequestWithWarnings("anthropic", "openai", body, "", 0)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("warnings=%v err=%v", warnings, err)
+	}
+	var got, want map[string]any
+	if err := json.Unmarshal(converted, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got["context_management"], want["context_management"]) {
+		t.Fatalf("context_management changed: got=%#v want=%#v body=%s", got["context_management"], want["context_management"], converted)
+	}
+	if !reflect.DeepEqual(got["thinking"], want["thinking"]) {
+		t.Fatalf("thinking extension changed: got=%#v want=%#v body=%s", got["thinking"], want["thinking"], converted)
 	}
 	native, _, warnings, err := PrepareRequestWithWarnings("anthropic", "anthropic", body, "", 0)
 	if err != nil || len(warnings) != 0 || !reflect.DeepEqual(native, body) {
