@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 func testConfig(path, url string) Config {
@@ -65,6 +65,9 @@ func TestOpenAllowsExplicitExternalListen(t *testing.T) {
 	defer closeGateway()
 	if server.Handler == nil {
 		t.Fatal("server handler is nil")
+	}
+	if server.ErrorLog == nil {
+		t.Fatal("HTTP server error logger is not configured")
 	}
 	host, _, err := net.SplitHostPort(listener.Addr().String())
 	ip := net.ParseIP(host)
@@ -367,7 +370,8 @@ func TestMappedProviderStreamErrorsUseNativeClientEnvelopeAfterOutput(t *testing
 				provider.Protocol = providerProtocol
 				provider.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "balance_low", Category: adapter.ProviderErrorInsufficientBalance}}
 				c.Providers["p"] = provider
-				h, closeDB, err := NewHandler(c, upstream.Client())
+				var logs bytes.Buffer
+				h, closeDB, err := NewHandlerWithLogger(c, upstream.Client(), observability.JSONLogger(&logs))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -390,6 +394,11 @@ func TestMappedProviderStreamErrorsUseNativeClientEnvelopeAfterOutput(t *testing
 				h.ServeHTTP(out, req)
 				if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), "event: error") || strings.Contains(out.Body.String(), "private provider account text") {
 					t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+				}
+				requestID := out.Header().Get("X-TideMux-Request-ID")
+				terminal := findRuntimeEvent(decodeRuntimeEvents(t, logs.Bytes()), "request_terminal", requestID)
+				if terminal == nil || terminal["outcome"] != "error" || terminal["http_status"] != float64(http.StatusOK) {
+					t.Fatalf("stream terminal event must preserve status 200 and error outcome: %#v; logs=%s", terminal, logs.String())
 				}
 				var envelope struct {
 					Type  string `json:"type"`
@@ -1243,7 +1252,8 @@ func TestBudgetSettlementFailureIsLoggedAndBlocksFurtherRequests(t *testing.T) {
 	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
 	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 5, WeeklyLimit: 8, AlertThreshold: .8, Mode: "hard"}
 	c.Providers["openai-main"] = provider
-	h, closeDB, err := NewHandler(c, nil)
+	var logs bytes.Buffer
+	h, closeDB, err := NewHandlerWithLogger(c, nil, observability.JSONLogger(&logs))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1260,10 +1270,6 @@ func TestBudgetSettlementFailureIsLoggedAndBlocksFurtherRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	gatewayHandler := h.(*handler)
-	previousLogWriter := log.Writer()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(previousLogWriter)
 
 	budgetRequest := `{"model":"openai-main/custom-model","messages":[{"role":"user","content":"hello"}]}`
 	first := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(budgetRequest))
@@ -1273,10 +1279,10 @@ func TestBudgetSettlementFailureIsLoggedAndBlocksFurtherRequests(t *testing.T) {
 	if firstOut.Code != http.StatusOK {
 		t.Fatalf("first status=%d body=%s", firstOut.Code, firstOut.Body.String())
 	}
-	if !strings.Contains(logs.String(), "budget settlement unresolved") || !strings.Contains(logs.String(), "injected settlement failure") {
+	if !strings.Contains(logs.String(), `"event":"budget_settlement_failure"`) || !strings.Contains(logs.String(), `"failure_code":"budget_settlement_unresolved"`) {
 		t.Fatalf("budget settlement failure was not logged: %s", logs.String())
 	}
-	if strings.Contains(logs.String(), "provider-secret") || strings.Contains(logs.String(), "local-secret") || strings.Contains(logs.String(), "hello") {
+	if strings.Contains(logs.String(), "provider-secret") || strings.Contains(logs.String(), "local-secret") || strings.Contains(logs.String(), "hello") || strings.Contains(logs.String(), "injected settlement failure") {
 		t.Fatalf("budget settlement diagnostic exposed credentials or request content: %s", logs.String())
 	}
 
@@ -1306,7 +1312,8 @@ func TestAuditAppendFailureSettlesKnownBudgetCost(t *testing.T) {
 	provider.Prices = map[string]adapter.Price{"custom-model": testPrice()}
 	provider.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: .000004, WeeklyLimit: .000004, AlertThreshold: .8, Mode: "hard"}
 	c.Providers["openai-main"] = provider
-	h, closeDB, err := NewHandler(c, nil)
+	var logs bytes.Buffer
+	h, closeDB, err := NewHandlerWithLogger(c, nil, observability.JSONLogger(&logs))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1323,10 +1330,6 @@ func TestAuditAppendFailureSettlesKnownBudgetCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	gatewayHandler := h.(*handler)
-	previousLogWriter := log.Writer()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(previousLogWriter)
 
 	body := requestBodyFor("openai", "openai-main", "custom-model")
 	send := func() *httptest.ResponseRecorder {
@@ -1340,7 +1343,7 @@ func TestAuditAppendFailureSettlesKnownBudgetCost(t *testing.T) {
 	if first.Code != http.StatusInternalServerError || !strings.Contains(first.Body.String(), "audit_failed_do_not_retry_blindly") {
 		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
 	}
-	if !strings.Contains(logs.String(), "injected audit append failure") || strings.Contains(logs.String(), "budget settlement unresolved") {
+	if !strings.Contains(logs.String(), `"event":"request_audit_write_failure"`) || strings.Contains(logs.String(), "injected audit append failure") || strings.Contains(logs.String(), `"event":"budget_settlement_failure"`) {
 		t.Fatalf("audit failure diagnostics=%s", logs.String())
 	}
 	second := send()

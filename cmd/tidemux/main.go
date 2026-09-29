@@ -8,6 +8,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/gateway"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 const (
@@ -61,7 +64,10 @@ sent; TideMux never switches providers.
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "tidemux:", err)
+		var logged *runtimeLoggedError
+		if !errors.As(err, &logged) {
+			fmt.Fprintln(os.Stderr, "tidemux:", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -135,7 +141,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, "doctor: configuration, Keychain references, and ledger directory are ready")
 		return nil
 	case "serve":
-		return serve(resolved, stdout)
+		return serve(resolved, stdout, stderr)
 	default:
 		return errors.New(usage)
 	}
@@ -161,12 +167,57 @@ func checkLedgerParent(ledgerPath string) error {
 	return nil
 }
 
-func serve(config gateway.Config, stdout *os.File) error {
-	listener, server, closeGateway, err := gateway.Open(config, nil)
+type runtimeLoggedError struct {
+	err error
+}
+
+func (e *runtimeLoggedError) Error() string { return e.err.Error() }
+func (e *runtimeLoggedError) Unwrap() error { return e.err }
+
+func serve(config gateway.Config, stdout, stderr *os.File) error {
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
+	return serveWithSignals(config, stdout, stderr, interrupt)
+}
+
+func serveWithSignals(config gateway.Config, stdout, stderr io.Writer, interrupt <-chan os.Signal) error {
+	return serveWithSignalsUsing(config, stdout, stderr, interrupt, func(server *http.Server, listener net.Listener) error {
+		return server.Serve(listener)
+	})
+}
+
+func serveWithSignalsUsing(config gateway.Config, stdout, stderr io.Writer, interrupt <-chan os.Signal, serveServer func(*http.Server, net.Listener) error) error {
+	logger := observability.JSONLogger(stderr)
+	listener, server, closeGateway, err := gateway.OpenWithLogger(config, nil, logger)
 	if err != nil {
-		return err
+		logger.Error("gateway failed to start",
+			slog.Int("schema_version", observability.SchemaVersion),
+			slog.String("event", "gateway_start"),
+			slog.String("outcome", "error"),
+			slog.String("error_code", "gateway_start_failed"),
+		)
+		fmt.Fprintf(stdout, "TideMux could not start: %v\n", err)
+		return &runtimeLoggedError{err: err}
 	}
-	defer closeGateway()
+	closedGateway := false
+	closeGatewayOnce := func() error {
+		if closedGateway {
+			return nil
+		}
+		closedGateway = true
+		return closeGateway()
+	}
+	defer func() {
+		if err := closeGatewayOnce(); err != nil {
+			logger.Error("gateway cleanup failed",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "gateway_shutdown"),
+				slog.String("outcome", "error"),
+				slog.String("error_code", "cleanup_failed"),
+			)
+		}
+	}()
 	host, _, err := net.SplitHostPort(listener.Addr().String())
 	ip := net.ParseIP(host)
 	if err != nil || ip == nil {
@@ -175,29 +226,81 @@ func serve(config gateway.Config, stdout *os.File) error {
 	if !ip.IsLoopback() {
 		fmt.Fprintf(stdout, "WARNING: external gateway access is enabled on %s; protect the network and gateway token.\n", listener.Addr())
 	}
+	logger.Info("gateway started",
+		slog.Int("schema_version", observability.SchemaVersion),
+		slog.String("event", "gateway_start"),
+		slog.String("listen_address", listener.Addr().String()),
+	)
 	fmt.Fprintf(stdout, "TideMux listening on http://%s\n", listener.Addr())
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(interrupt)
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- server.Serve(listener) }()
+	go func() { serveErr <- serveServer(server, listener) }()
 	select {
-	case signal := <-interrupt:
+	case receivedSignal := <-interrupt:
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
 			server.Close()
-			return fmt.Errorf("shutdown after %s: %w", signal, err)
+			_ = closeGatewayOnce()
+			logger.Error("gateway shutdown failed",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "gateway_shutdown"),
+				slog.String("signal", receivedSignal.String()),
+				slog.String("outcome", "error"),
+				slog.String("error_code", "shutdown_failed"),
+			)
+			return &runtimeLoggedError{err: fmt.Errorf("shutdown after %s: %w", receivedSignal, err)}
 		}
 		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+			_ = closeGatewayOnce()
+			logger.Error("gateway server stopped unexpectedly",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "unexpected_server_error"),
+				slog.String("error_class", "http_serve"),
+			)
+			return &runtimeLoggedError{err: err}
 		}
+		if err := closeGatewayOnce(); err != nil {
+			logger.Error("gateway cleanup failed",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "gateway_shutdown"),
+				slog.String("signal", receivedSignal.String()),
+				slog.String("outcome", "error"),
+				slog.String("error_code", "cleanup_failed"),
+			)
+			return &runtimeLoggedError{err: errors.New("gateway cleanup failed")}
+		}
+		logger.Info("gateway stopped",
+			slog.Int("schema_version", observability.SchemaVersion),
+			slog.String("event", "gateway_shutdown"),
+			slog.String("signal", receivedSignal.String()),
+			slog.String("outcome", "success"),
+		)
 		return nil
 	case err := <-serveErr:
 		if errors.Is(err, http.ErrServerClosed) {
+			if closeErr := closeGatewayOnce(); closeErr != nil {
+				logger.Error("gateway cleanup failed",
+					slog.Int("schema_version", observability.SchemaVersion),
+					slog.String("event", "gateway_shutdown"),
+					slog.String("outcome", "error"),
+					slog.String("error_code", "cleanup_failed"),
+				)
+				return &runtimeLoggedError{err: errors.New("gateway cleanup failed")}
+			}
+			logger.Info("gateway stopped",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "gateway_shutdown"),
+				slog.String("outcome", "success"),
+			)
 			return nil
 		}
-		return err
+		_ = closeGatewayOnce()
+		logger.Error("gateway server stopped unexpectedly",
+			slog.Int("schema_version", observability.SchemaVersion),
+			slog.String("event", "unexpected_server_error"),
+			slog.String("error_class", "http_serve"),
+		)
+		return &runtimeLoggedError{err: err}
 	}
 }
 
