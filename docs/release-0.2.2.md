@@ -24,6 +24,12 @@ patch version; it does not replace the published 0.2.1 package.
   return `provider_unavailable`, and logs give a provider-scoped explicit
   protocol command. If no provider resolves, startup fails with actionable
   diagnostics. Detection remains bounded, non-billable, and behavior-based.
+- **#53 — Claude Code context management:** Anthropic `context_management`
+  cannot be represented by OpenAI Chat Completions. Return the stable
+  `unsupported_request_feature` code and `context_management` parameter path,
+  with a field-specific message that Claude Code displays; document native
+  Anthropic routing and client-side disablement where supported. Keep native
+  Anthropic forwarding unchanged.
 - Retain and verify the already released **#31, #47, #51, and #54** behavior.
 - Complete **#38** install/config acceptance for Claude Code, Codex, Hermes and
   dsh; document the supported operation and exact evidence for each.
@@ -43,6 +49,9 @@ patch version; it does not replace the published 0.2.1 package.
 - Verify audit-append failure preserves known cost, unknown cost still fails
   closed, and the budget reset command changes only the selected provider and
   rolling window.
+- Use Claude Code with a local mock to verify native Anthropic context
+  management passes through, while the OpenAI-compatible route returns the
+  documented error and precise field path without sending the request upstream.
 - Run `gofmt`, `CGO_ENABLED=0 go test ./...`, `CGO_ENABLED=0 go vet ./...`,
   `go test -race ./...`, provider-add PTY, shell syntax, installer, client
   command and license checks.

@@ -83,7 +83,12 @@ reasoning_effort and Anthropic effort controls are not treated as interchangeabl
 without a declared mapping; cache markers have no OpenAI Chat Completions
 equivalent. An explicit Anthropic `thinking` control can pass to an Anthropic
 provider, while enabled thinking and context-management requests cannot be
-represented by an OpenAI provider and are rejected with a field path. OpenAI
+represented by an OpenAI provider and are rejected as
+`unsupported_request_feature` with the precise `param` path and a message that
+names the field and explains that the configured upstream protocol cannot
+represent it. Use an Anthropic-protocol provider for these controls; if a
+client offers a setting to disable context management, that is another option.
+Native Anthropic routes preserve the field. OpenAI
 system/developer messages that occur after conversation messages must be moved
 to Anthropic's top-level system field; this is done with a diagnostic. OpenAI
 tool `strict` settings are likewise omitted with a diagnostic when the target

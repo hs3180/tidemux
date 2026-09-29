@@ -639,6 +639,45 @@ func TestValidationErrorIdentifiesParameter(t *testing.T) {
 	}
 }
 
+func TestAnthropicContextManagementToOpenAIHasActionableErrorBeforeUpstream(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			calls++
+		}
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer up.Close()
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL), "openai-main")
+	h, closeDB, err := NewHandler(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := `{"model":"openai-main/custom-model","max_tokens":64,"messages":[{"role":"user","content":"continue"}],"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "local-secret")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != http.StatusBadRequest || calls != 0 {
+		t.Fatalf("status=%d upstream_calls=%d body=%s", out.Code, calls, out.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Param   string `json:"param"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Error.Type != "invalid_request_error" || payload.Error.Param != "context_management" || payload.Error.Message != "unsupported_request_feature: context_management cannot be represented by the configured upstream protocol" {
+		t.Fatalf("unexpected error response: %s", out.Body.String())
+	}
+}
+
 func TestCrossProtocolResponseErrorsIdentifyFinishReason(t *testing.T) {
 	for _, test := range []struct {
 		name, clientProtocol, providerProtocol, response, field string
