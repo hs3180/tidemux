@@ -550,7 +550,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if reservationID != "" {
 			var err error
 			var adapterErr *adapter.CallError
-			if errors.As(callErr, &adapterErr) && adapterErr.BudgetCost != nil {
+			if errors.As(callErr, &adapterErr) && adapterErr.UpstreamNotAttempted {
+				err = h.ledger.ReleaseBudgetReservation(context.Background(), reservationID)
+			} else if errors.As(callErr, &adapterErr) && adapterErr.BudgetCost != nil {
 				err = h.ledger.RecordBudgetChargeWithCost(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now(), *adapterErr.BudgetCost)
 			} else {
 				err = h.ledger.RecordBudgetCharge(context.Background(), reservationID, auditID, providerName, budget.Currency, time.Now())

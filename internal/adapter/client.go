@@ -38,6 +38,10 @@ type Client struct {
 type CallError struct {
 	Status int
 	Code   string
+	// UpstreamNotAttempted is true only when the adapter can prove that no
+	// request was dispatched to the provider. The gateway may then release a
+	// budget reservation instead of treating the missing usage as unknown.
+	UpstreamNotAttempted bool
 	// BudgetCost preserves a known charge when the audit row itself cannot be
 	// written. It is internal accounting data and is never sent to clients.
 	BudgetCost     *float64
@@ -104,7 +108,7 @@ func (c *Client) CallFromKeyCandidates(clientProtocol string, ctx context.Contex
 
 func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, callbacks KeyCandidateCallbacks) (response []byte, id string, err error) {
 	if err := options.Validate(clientProtocol); err != nil {
-		return nil, "", &CallError{Status: 400, Code: err.Error(), Param: ValidationParameter(err)}
+		return nil, "", &CallError{Status: 400, Code: err.Error(), Param: ValidationParameter(err), UpstreamNotAttempted: true}
 	}
 	if len(keys) == 0 {
 		keys = []string{c.APIKey}
@@ -112,13 +116,13 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	started := time.Now()
 	nonce := make([]byte, 16)
 	if _, e := rand.Read(nonce); e != nil {
-		return nil, "", &CallError{Status: 500, Code: "request_id_failed"}
+		return nil, "", &CallError{Status: 500, Code: "request_id_failed", UpstreamNotAttempted: true}
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, Model: model, Status: "error", Events: []string{}}
 	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
 	if e != nil {
-		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e)}
+		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e), UpstreamNotAttempted: true}
 	}
 	logConversionWarnings(c.Logger, clientProtocol, c.Protocol, requestWarnings)
 	if preparedModel != "" {
@@ -176,6 +180,12 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			err = callErr
 		} else {
 			auditPersisted = true
+		}
+		if err != nil {
+			var callErr *CallError
+			if errors.As(err, &callErr) {
+				callErr.UpstreamNotAttempted = !attempted
+			}
 		}
 		status := terminalHTTPStatus(clientProtocol, delivered, err)
 		errorCode := a.ErrorCode
