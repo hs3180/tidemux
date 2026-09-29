@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bytes"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -65,7 +66,7 @@ func TestRequestDropsKnownFieldsFromOtherProtocol(t *testing.T) {
 	}
 }
 
-func TestRequestDropsUnknownContentBlockFieldsRecursively(t *testing.T) {
+func TestOpenAIRequestDropsUnknownContentBlockFieldsRecursively(t *testing.T) {
 	tests := []struct {
 		protocol string
 		body     string
@@ -75,11 +76,6 @@ func TestRequestDropsUnknownContentBlockFieldsRecursively(t *testing.T) {
 			protocol: "openai",
 			body:     `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"},"client_extension":{"trace":true}}]}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"tool_choice":{"type":"function","function":{"name":"lookup","client_option":1},"future_option":true}}`,
 			want:     []string{"messages[0].content[0].cache_control", "messages[0].content[0].client_extension", "tool_choice.function.client_option", "tool_choice.future_option"},
-		},
-		{
-			protocol: "anthropic",
-			body:     `{"model":"m","max_tokens":16,"system":[{"type":"text","text":"rules","future_option":true}],"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call1","name":"lookup","input":{"n":9007199254740993},"future_option":true}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":[{"type":"text","text":"result","future_option":true}]}]}],"tool_choice":{"type":"auto","future_option":true}}`,
-			want:     []string{"messages[0].content[0].future_option", "messages[1].content[0].content[0].future_option", "system[0].future_option", "tool_choice.future_option"},
 		},
 	}
 	for _, test := range tests {
@@ -117,9 +113,35 @@ func TestNativeAnthropicContentBlocksAndCitationFieldsArePreserved(t *testing.T)
 	}
 }
 
-func TestUnsupportedAnthropicContentBlockReportsExactFieldPath(t *testing.T) {
+func TestNativeAnthropicCitationAtReportedPathAndFutureBlockArePreserved(t *testing.T) {
+	body := []byte(`{"model":"provider/model","max_tokens":64,"messages":[{"role":"user","content":"Earlier context."},{"role":"assistant","content":"Earlier answer."},{"role":"user","content":[{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Reference"}},{"type":"text","text":"Cited answer.","citations":[{"type":"char_location","cited_text":"Reference","document_index":0,"document_title":"Doc","start_char_index":0,"end_char_index":9}]},{"type":"future_block","payload":{"opaque":"preserve"}}]}]}`)
+	encoded, _, ignored, err := RequestWithWarnings("anthropic", body, "")
+	if err != nil || len(ignored) != 0 {
+		t.Fatalf("ignored=%v err=%v", ignored, err)
+	}
+	var got, want map[string]any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got["messages"], want["messages"]) {
+		t.Fatalf("native content changed:\ngot:  %#v\nwant: %#v", got["messages"], want["messages"])
+	}
+}
+
+func TestNativeAnthropicUnknownContentBlockIsPreserved(t *testing.T) {
 	body := []byte(`{"model":"provider/model","max_tokens":64,"messages":[{"role":"user","content":[{"type":"future_block","payload":"opaque"}]}]}`)
-	_, _, err := Request("anthropic", body, "")
+	encoded, _, ignored, err := RequestWithWarnings("anthropic", body, "")
+	if err != nil || len(ignored) != 0 || !bytes.Contains(encoded, []byte(`"payload":"opaque"`)) {
+		t.Fatalf("native block was not preserved: encoded=%s ignored=%v err=%v", encoded, ignored, err)
+	}
+}
+
+func TestUnsupportedAnthropicContentBlockReportsExactFieldPathOnTranslation(t *testing.T) {
+	body := []byte(`{"model":"provider/model","max_tokens":64,"messages":[{"role":"user","content":[{"type":"future_block","payload":"opaque"}]}]}`)
+	_, _, err := PrepareRequest("anthropic", "openai", body, "", 0)
 	if err == nil || err.Error() != "unsupported_request_feature" || ValidationParameter(err) != "messages[0].content[0].type" {
 		t.Fatalf("err=%v param=%q", err, ValidationParameter(err))
 	}

@@ -135,6 +135,16 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 		return false
 	}
 	for _, b := range blocks {
+		// Native Anthropic content is an extensible tagged union. Keep
+		// validating known variants locally, but let the configured Anthropic
+		// endpoint validate future block types. The raw content remains opaque
+		// and is forwarded without pruning.
+		if protocol == "anthropic" && !supportedContentBlockType(protocol, b.Type) {
+			if b.Type == "" {
+				return false
+			}
+			continue
+		}
 		if !b.CacheControl.valid() || protocol == "openai" && b.CacheControl != nil {
 			return false
 		}

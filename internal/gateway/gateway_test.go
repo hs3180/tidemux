@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -325,7 +326,7 @@ func TestNativeAnthropicDocumentAndCitationsReachProvider(t *testing.T) {
 	}
 	defer closeDB()
 
-	body := `{"model":"p/custom-model","max_tokens":64,"messages":[{"role":"user","content":[{"type":"text","text":"Use this citation.","citations":[{"type":"char_location","cited_text":"source","document_index":0,"document_title":"Reference","start_char_index":0,"end_char_index":6}]},{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Reference text"},"title":"Reference"}]}]}`
+	body := `{"model":"p/custom-model","max_tokens":64,"messages":[{"role":"user","content":"Earlier context."},{"role":"assistant","content":"Earlier answer."},{"role":"user","content":[{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Reference text"},"title":"Reference"},{"type":"text","text":"Use this citation.","citations":[{"type":"char_location","cited_text":"source","document_index":0,"document_title":"Reference","start_char_index":0,"end_char_index":6}]}]}]}`
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
 	req.Header.Set("x-api-key", "local-secret")
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -339,6 +340,23 @@ func TestNativeAnthropicDocumentAndCitationsReachProvider(t *testing.T) {
 		if !strings.Contains(forwarded, fragment) {
 			t.Fatalf("native provider request lost %s: %s", fragment, forwarded)
 		}
+	}
+	var incoming, sent map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(forwarded), &sent); err != nil {
+		t.Fatal(err)
+	}
+	var incomingMessages, sentMessages any
+	if err := json.Unmarshal(incoming["messages"], &incomingMessages); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(sent["messages"], &sentMessages); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sentMessages, incomingMessages) {
+		t.Fatalf("native messages changed before upstream:\ngot:  %#v\nwant: %#v", sentMessages, incomingMessages)
 	}
 }
 
