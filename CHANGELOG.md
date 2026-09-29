@@ -13,11 +13,24 @@
   provider is available.
 - Ship the post-v0.2.1 budget recovery command and the known-cost settlement
   fix for audit append failures.
-- Report Anthropic `context_management` sent to an OpenAI provider as the
-  explicit `unsupported_request_feature` error with its field path; document
-  the native Anthropic route and client-side workaround.
-- Update provider, protocol, agent, install and rollback documentation for the
-  expanded 0.2.1 delivery goal and the immutable v0.2.2 release.
+- Preserve valid native Anthropic Messages content blocks and citation metadata
+  instead of rejecting the request locally or pruning supported fields.
+- Release a pending budget reservation when request validation or protocol
+  conversion proves no provider request was sent; keep uncertain attempted
+  requests fail-closed.
+- Complete provider error classification for billing, permissions, policy,
+  invalid requests and model access; retain compatible upstream 4xx statuses.
+  Keep 429 retries bounded to the selected provider, honor cancellation, and
+  never retry once response output may have reached the client.
+- Forward Anthropic `context_management` to the configured upstream without
+  local rejection or silent omission; preserve native Anthropic compaction
+  responses and their round-trip data.
+- Emit privacy-bounded JSON Lines runtime events to stderr from `serve`, with
+  request-ID-correlated terminal and local-rejection summaries, lifecycle and
+  background-task events, and human-readable CLI output on stdout. External
+  collection remains operator-managed.
+- Update provider, protocol, install and rollback documentation for the 0.2.2
+  carry-forward scope while keeping the published v0.2.1 package unchanged.
 
 ## 0.2.1 — 2026-09-28
 
@@ -36,8 +49,6 @@
 - Preserve documented Anthropic image, document, citation and server-tool
   blocks on native Anthropic routes; return precise errors for unsupported
   cross-protocol content.
-- Keep provider budgets fail-closed when audit or settlement persistence fails;
-  log safe causes and add `tidemux provider budget reset REF --window 5h|7d`.
 - For rollback to 0.2.0, remove any newly added `error_code_mappings` from the
   config before reinstalling 0.2.0; the older binary does not recognize that
   field.
