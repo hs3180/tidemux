@@ -212,6 +212,8 @@ func openAIRequestConversionLosses(input Input) []string {
 type translatedOpenAIRequest struct {
 	Model             string          `json:"model"`
 	Messages          []Message       `json:"messages"`
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	Thinking          *Thinking       `json:"thinking,omitempty"`
 	MaxTokens         *int64          `json:"max_tokens,omitempty"`
 	Stream            bool            `json:"stream,omitempty"`
 	Temperature       *float64        `json:"temperature,omitempty"`
@@ -241,23 +243,19 @@ func translateAnthropicRequestWithWarnings(data []byte, defaultModel string) ([]
 	}
 	warnings = append(warnings, anthropicConversionLosses(in)...)
 	warnings = sortedUniqueStrings(warnings)
-	if in.ContextManagement != nil {
-		return nil, "", warnings, validationError("unsupported_request_feature", "context_management")
-	}
-	if in.Thinking != nil && in.Thinking.Type != "disabled" {
-		return nil, "", warnings, validationError("thinking", "thinking")
-	}
 	system, messages, err := translateAnthropicMessages(in.System, in.Messages)
 	if err != nil {
 		return nil, "", warnings, err
 	}
 	out := translatedOpenAIRequest{
-		Model:       in.Model,
-		Messages:    messages,
-		MaxTokens:   in.MaxTokens,
-		Stream:      in.Stream,
-		Temperature: in.Temperature,
-		TopP:        in.TopP,
+		Model:             in.Model,
+		Messages:          messages,
+		ContextManagement: in.ContextManagement,
+		Thinking:          in.Thinking,
+		MaxTokens:         in.MaxTokens,
+		Stream:            in.Stream,
+		Temperature:       in.Temperature,
+		TopP:              in.TopP,
 	}
 	if system != "" {
 		out.Messages = append([]Message{{Role: "system", Content: json.RawMessage(strconv.Quote(system))}}, out.Messages...)
