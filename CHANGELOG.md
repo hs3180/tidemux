@@ -13,6 +13,9 @@
   provider is available.
 - Ship the post-v0.2.1 budget recovery command and the known-cost settlement
   fix for audit append failures.
+- Report Anthropic `context_management` sent to an OpenAI provider as the
+  explicit `unsupported_request_feature` error with its field path; document
+  the native Anthropic route and client-side workaround.
 - Update provider, protocol, agent, install and rollback documentation for the
   expanded 0.2.1 delivery goal and the immutable v0.2.2 release.
 

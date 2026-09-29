@@ -77,6 +77,18 @@ func TestCrossProtocolAnthropicDocumentHasPreciseUnsupportedPath(t *testing.T) {
 	}
 }
 
+func TestCrossProtocolAnthropicContextManagementHasPreciseUnsupportedPath(t *testing.T) {
+	body := []byte(`{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"continue"}],"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}}`)
+	_, _, _, err := PrepareRequestWithWarnings("anthropic", "openai", body, "", 0)
+	if err == nil || err.Error() != "unsupported_request_feature" || ValidationParameter(err) != "context_management" {
+		t.Fatalf("err=%v param=%q", err, ValidationParameter(err))
+	}
+	native, _, warnings, err := PrepareRequestWithWarnings("anthropic", "anthropic", body, "", 0)
+	if err != nil || len(warnings) != 0 || !reflect.DeepEqual(native, body) {
+		t.Fatalf("native context management changed: warnings=%v err=%v body=%s", warnings, err, native)
+	}
+}
+
 func TestCrossProtocolRequestLossIsReportedAndNativeRequestIsPreserved(t *testing.T) {
 	openAIRequest := []byte(`{"model":"m","messages":[{"role":"user","content":"think carefully"}],"max_completion_tokens":64,"reasoning_effort":"high"}`)
 	converted, _, warnings, err := PrepareRequestWithWarnings("openai", "anthropic", openAIRequest, "", 0)

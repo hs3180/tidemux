@@ -183,14 +183,18 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 	if len(param) > 0 {
 		field = param[0]
 	}
+	message := code
+	if code == "unsupported_request_feature" && field != "" {
+		message = "unsupported_request_feature: " + field + " cannot be represented by the configured upstream protocol"
+	}
 	if protocol == "anthropic" {
-		detail := map[string]any{"type": kind, "message": code}
+		detail := map[string]any{"type": kind, "message": message}
 		if field != "" {
 			detail["param"] = field
 		}
 		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": detail})
 	} else {
-		detail := map[string]any{"message": code, "type": kind, "code": code, "param": nil}
+		detail := map[string]any{"message": message, "type": kind, "code": code, "param": nil}
 		if field != "" {
 			detail["param"] = field
 		}

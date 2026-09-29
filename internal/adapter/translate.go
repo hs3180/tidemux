@@ -242,7 +242,7 @@ func translateAnthropicRequestWithWarnings(data []byte, defaultModel string) ([]
 	warnings = append(warnings, anthropicConversionLosses(in)...)
 	warnings = sortedUniqueStrings(warnings)
 	if in.ContextManagement != nil {
-		return nil, "", warnings, validationError("context_management", "context_management")
+		return nil, "", warnings, validationError("unsupported_request_feature", "context_management")
 	}
 	if in.Thinking != nil && in.Thinking.Type != "disabled" {
 		return nil, "", warnings, validationError("thinking", "thinking")
