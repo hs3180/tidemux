@@ -128,11 +128,49 @@ func providerStreamError(body []byte, stream streamErrorContext) *CallError {
 		response.StatusCode = stream.response.StatusCode
 		response.Header = stream.response.Header
 	}
+	if status > 0 {
+		response.StatusCode = status
+	}
 	return mappedProviderError(response, category, providerCode)
 }
 
+func mappedHTTPStatus(category ProviderErrorCategory, upstreamStatus int) int {
+	status, _, _, _ := category.ClientError("openai")
+	if upstreamStatus < 400 || upstreamStatus > 499 {
+		return status
+	}
+	switch category {
+	case ProviderErrorInsufficientBalance:
+		if upstreamStatus == 402 || upstreamStatus == 403 {
+			return upstreamStatus
+		}
+	case ProviderErrorAuthentication:
+		if upstreamStatus == 401 || upstreamStatus == 403 {
+			return upstreamStatus
+		}
+	case ProviderErrorPermissionDenied:
+		if upstreamStatus == 403 {
+			return upstreamStatus
+		}
+	case ProviderErrorPolicyDenied:
+		if upstreamStatus == 400 || upstreamStatus == 403 {
+			return upstreamStatus
+		}
+	case ProviderErrorInvalidRequest:
+		if upstreamStatus == 400 || upstreamStatus == 422 {
+			return upstreamStatus
+		}
+	case ProviderErrorModelNotFound:
+		if upstreamStatus == 400 || upstreamStatus == 404 {
+			return upstreamStatus
+		}
+	}
+	return status
+}
+
 func mappedProviderError(resp *http.Response, category ProviderErrorCategory, providerCode string) *CallError {
-	status, code, _, _ := category.ClientError("openai")
+	_, code, _, _ := category.ClientError("openai")
+	status := mappedHTTPStatus(category, resp.StatusCode)
 	result := &CallError{Status: status, Code: code, ProviderCode: providerCode, Category: category, UpstreamStatus: resp.StatusCode}
 	if category == ProviderErrorRateLimited {
 		result.RateLimited = true

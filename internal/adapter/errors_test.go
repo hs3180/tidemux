@@ -91,6 +91,8 @@ func TestConfiguredProviderErrorsRequireExactCodeAndScope(t *testing.T) {
 		{UpstreamCode: "payment_required", Category: ProviderErrorInsufficientBalance},
 		{UpstreamCode: "key_limited", HTTPStatus: 429, Category: ProviderErrorRateLimited},
 		{UpstreamCode: "bad_key", HTTPStatus: 403, Category: ProviderErrorAuthentication},
+		{UpstreamCode: "policy_blocked", HTTPStatus: 403, Category: ProviderErrorPolicyDenied},
+		{UpstreamCode: "model_forbidden", HTTPStatus: 403, Category: ProviderErrorPermissionDenied},
 	}
 	tests := []struct {
 		name      string
@@ -98,25 +100,50 @@ func TestConfiguredProviderErrorsRequireExactCodeAndScope(t *testing.T) {
 		body      string
 		want      ProviderErrorCategory
 		wantCode  string
+		wantHTTP  int
 		wantRetry bool
 	}{
-		{name: "mapped billing code", status: 403, body: `{"error":{"code":"payment_required","message":"SECRET billing text"}}`, want: ProviderErrorInsufficientBalance, wantCode: "payment_required"},
-		{name: "status-qualified rate limit", status: 429, body: `{"error":{"code":"key_limited"}}`, want: ProviderErrorRateLimited, wantCode: "key_limited", wantRetry: true},
-		{name: "mapped authentication retains key retry", status: 403, body: `{"error":{"code":"bad_key"}}`, want: ProviderErrorAuthentication, wantCode: "bad_key", wantRetry: true},
-		{name: "same code at a different status remains generic", status: 403, body: `{"error":{"code":"key_limited"}}`, wantRetry: true},
-		{name: "unmapped message does not imply balance", status: 403, body: `{"error":{"message":"insufficient balance"}}`, wantRetry: true},
+		{name: "mapped billing code", status: 403, body: `{"error":{"code":"payment_required","message":"SECRET billing text"}}`, want: ProviderErrorInsufficientBalance, wantCode: "payment_required", wantHTTP: 403},
+		{name: "status-qualified rate limit", status: 429, body: `{"error":{"code":"key_limited"}}`, want: ProviderErrorRateLimited, wantCode: "key_limited", wantHTTP: 429, wantRetry: true},
+		{name: "mapped authentication retains key retry", status: 403, body: `{"error":{"code":"bad_key"}}`, want: ProviderErrorAuthentication, wantCode: "bad_key", wantHTTP: 403, wantRetry: true},
+		{name: "policy rejection is not balance exhaustion", status: 403, body: `{"error":{"code":"policy_blocked","message":"SECRET policy details"}}`, want: ProviderErrorPolicyDenied, wantCode: "policy_blocked", wantHTTP: 403},
+		{name: "model permission is not balance exhaustion", status: 403, body: `{"error":{"code":"model_forbidden"}}`, want: ProviderErrorPermissionDenied, wantCode: "model_forbidden", wantHTTP: 403},
+		{name: "same code at a different status remains generic", status: 403, body: `{"error":{"code":"key_limited"}}`, wantHTTP: 502, wantRetry: true},
+		{name: "unmapped message does not imply balance", status: 403, body: `{"error":{"message":"insufficient balance"}}`, wantHTTP: 502, wantRetry: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			resp := &http.Response{StatusCode: test.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(test.body))}
 			e := upstreamError(resp, mappings...)
-			if e.Category != test.want || e.ProviderCode != test.wantCode || e.Retryable != test.wantRetry {
+			if e.Category != test.want || e.ProviderCode != test.wantCode || e.Status != test.wantHTTP || e.Retryable != test.wantRetry {
 				t.Fatalf("error=%+v", e)
 			}
 			if strings.Contains(e.Error(), "SECRET") {
 				t.Fatal("provider message leaked through error")
 			}
 		})
+	}
+}
+
+func TestProviderErrorStatusSpecificMappingOverridesUnqualifiedRule(t *testing.T) {
+	mappings := []ProviderErrorMapping{
+		{UpstreamCode: "shared_code", Category: ProviderErrorInsufficientBalance},
+		{UpstreamCode: "shared_code", HTTPStatus: 403, Category: ProviderErrorPolicyDenied},
+	}
+	for _, test := range []struct {
+		status   int
+		want     ProviderErrorCategory
+		wantCode string
+	}{
+		{status: 403, want: ProviderErrorPolicyDenied, wantCode: "upstream_policy_denied"},
+		{status: 402, want: ProviderErrorInsufficientBalance, wantCode: "provider_insufficient_balance"},
+		{status: 404, want: ProviderErrorInsufficientBalance, wantCode: "provider_insufficient_balance"},
+	} {
+		response := &http.Response{StatusCode: test.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"code":"shared_code"}}`))}
+		callErr := upstreamError(response, mappings...)
+		if callErr.Category != test.want || callErr.Code != test.wantCode {
+			t.Fatalf("status=%d call error=%+v", test.status, callErr)
+		}
 	}
 }
 

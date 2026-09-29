@@ -59,13 +59,26 @@ func TestProviderErrorMapAddListRemove(t *testing.T) {
 	if len(loaded.Providers["p"].ErrorCodeMappings) != 1 || loaded.Providers["p"].ErrorCodeMappings[0] != want[0] {
 		t.Fatalf("mappings=%+v", loaded.Providers["p"].ErrorCodeMappings)
 	}
+	if err := providerErrorMapCommand([]string{"add", "--code", "policy_blocked", "--status", "403", "--category", "policy_denied", "p", "--config", path}, stdout, stderr); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mappings := loaded.Providers["p"].ErrorCodeMappings; len(mappings) != 2 || mappings[1] != (adapter.ProviderErrorMapping{UpstreamCode: "policy_blocked", HTTPStatus: 403, Category: adapter.ProviderErrorPolicyDenied}) {
+		t.Fatalf("policy mapping was not persisted: %+v", mappings)
+	}
 	if err := providerErrorMapCommand([]string{"list", "--config", path, "p"}, stdout, stderr); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(readOutput(), "balance_low\t402\tinsufficient_balance") {
+	if output := readOutput(); !strings.Contains(output, "balance_low\t402\tinsufficient_balance") || !strings.Contains(output, "policy_blocked\t403\tpolicy_denied") {
 		t.Fatalf("list output=%q", readOutput())
 	}
 	if err := providerErrorMapCommand([]string{"remove", "--code", "balance_low", "--status", "402", "--config", path, "p"}, stdout, stderr); err != nil {
+		t.Fatal(err)
+	}
+	if err := providerErrorMapCommand([]string{"remove", "--code", "policy_blocked", "--status", "403", "--config", path, "p"}, stdout, stderr); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err = gateway.LoadConfig(path)

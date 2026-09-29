@@ -15,6 +15,7 @@ const (
 	ProviderErrorRateLimited         ProviderErrorCategory = "rate_limited"
 	ProviderErrorAuthentication      ProviderErrorCategory = "authentication"
 	ProviderErrorPermissionDenied    ProviderErrorCategory = "permission_denied"
+	ProviderErrorPolicyDenied        ProviderErrorCategory = "policy_denied"
 	ProviderErrorInvalidRequest      ProviderErrorCategory = "invalid_request"
 	ProviderErrorModelNotFound       ProviderErrorCategory = "model_not_found"
 )
@@ -35,10 +36,10 @@ func (m ProviderErrorMapping) Validate() error {
 		return errors.New("http_status must be 400..599 when supplied")
 	}
 	switch m.Category {
-	case ProviderErrorInsufficientBalance, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound:
+	case ProviderErrorInsufficientBalance, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound:
 		return nil
 	default:
-		return errors.New("category must be insufficient_balance, rate_limited, authentication, permission_denied, invalid_request or model_not_found")
+		return errors.New("category must be insufficient_balance, rate_limited, authentication, permission_denied, policy_denied, invalid_request or model_not_found")
 	}
 }
 
@@ -99,6 +100,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		code = "upstream_authentication_failed"
 	case ProviderErrorPermissionDenied:
 		code = "upstream_permission_denied"
+	case ProviderErrorPolicyDenied:
+		code = "upstream_policy_denied"
 	case ProviderErrorInvalidRequest:
 		code = "upstream_invalid_request"
 	case ProviderErrorModelNotFound:
@@ -115,6 +118,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		message = "The provider rejected its credentials. Check the API key configured for this provider."
 	case ProviderErrorPermissionDenied:
 		message = "The provider denied access to this model or operation. Check the provider-side permissions."
+	case ProviderErrorPolicyDenied:
+		message = "The provider blocked this request under its usage or content policy."
 	case ProviderErrorInvalidRequest:
 		message = "The provider rejected the request as invalid."
 	case ProviderErrorModelNotFound:
@@ -132,6 +137,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 			kind = "authentication_error"
 		case ProviderErrorPermissionDenied:
 			kind = "permission_error"
+		case ProviderErrorPolicyDenied:
+			kind = "permission_error"
 		case ProviderErrorInvalidRequest:
 			kind = "invalid_request_error"
 		case ProviderErrorModelNotFound:
@@ -146,6 +153,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		case ProviderErrorAuthentication:
 			kind = "authentication_error"
 		case ProviderErrorPermissionDenied:
+			kind = "permission_error"
+		case ProviderErrorPolicyDenied:
 			kind = "permission_error"
 		case ProviderErrorInvalidRequest:
 			kind = "invalid_request_error"
@@ -164,6 +173,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		status = 502
 	case ProviderErrorPermissionDenied:
 		status = 502
+	case ProviderErrorPolicyDenied:
+		status = 403
 	case ProviderErrorInvalidRequest:
 		status = 400
 	case ProviderErrorModelNotFound:

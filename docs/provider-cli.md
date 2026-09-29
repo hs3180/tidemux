@@ -212,11 +212,13 @@ tidemux provider error-map remove REF --code key_throttled --status 429
 exact code-and-status entry wins over the same code's unqualified entry;
 duplicate code/status pairs are rejected. Valid categories are
 `insufficient_balance`, `rate_limited`, `authentication`, `permission_denied`,
-`invalid_request`, and `model_not_found`. Provider messages are never inspected
-to infer a category or returned to the client. The response includes the
-protocol-native envelope, a safe explanation, a stable TideMux code, and the
-upstream code if it contains only safe ASCII characters. Rate-limit mappings
-use the same bounded retry policy as HTTP 429.
+`policy_denied`, `invalid_request`, and `model_not_found`. Provider messages are
+never inspected to infer a category or returned to the client. The response
+includes the protocol-native envelope, a safe actionable explanation, a stable
+TideMux code, and the upstream code if it contains only safe ASCII characters.
+Mapped errors retain the upstream 4xx status when it agrees with the mapped
+category; rate-limit mappings always use HTTP 429. Rate-limit mappings use the
+same bounded retry policy as HTTP 429.
 
 ## Provider budget
 

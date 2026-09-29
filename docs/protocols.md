@@ -149,6 +149,11 @@ match, optional HTTP status conditions take precedence over unqualified rules,
 and arbitrary provider message text is never used to infer billing or policy
 errors. Mapped failures use protocol-native error envelopes, stable public
 codes, and safe guidance; a safe provider code is included when available.
+Mapped errors retain a compatible upstream 4xx status where that preserves the
+meaning of the classification; rate limits normalize to 429. Exact mappings
+can distinguish balance, authentication, permission, policy, malformed
+request, and model-access failures without treating every 403 as a billing
+problem.
 
 TideMux retries HTTP 429 on the same selected key and provider at most three
 total attempts, following `Retry-After` seconds or HTTP-date values. Invalid or
