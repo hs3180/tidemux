@@ -55,6 +55,23 @@ func responseBody(protocol string) string {
 	return `{"id":"chat1","object":"chat.completion","model":"custom-model","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`
 }
 
+func waitForInitialStatementSync(t *testing.T, l *ledger.Ledger) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var attemptedAt int64
+		err := l.QueryRow(context.Background(), `SELECT last_attempt_ms FROM statement_sync WHERE id=1`).Scan(&attemptedAt)
+		if err == nil && attemptedAt > 0 {
+			return
+		}
+		if err != nil && err != sql.ErrNoRows {
+			t.Fatalf("read initial statement-sync status: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("initial statement sync did not finish")
+}
+
 func TestOpenAllowsExplicitExternalListen(t *testing.T) {
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://example.com/v1")
 	c.ListenAddr = "0.0.0.0:0"
@@ -1258,6 +1275,8 @@ func TestBudgetSettlementFailureIsLoggedAndBlocksFurtherRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeDB()
+	gatewayHandler := h.(*handler)
+	waitForInitialStatementSync(t, gatewayHandler.ledger)
 	triggerDB, err := sql.Open("sqlite", c.LedgerPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1269,7 +1288,6 @@ func TestBudgetSettlementFailureIsLoggedAndBlocksFurtherRequests(t *testing.T) {
 	if err := triggerDB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	gatewayHandler := h.(*handler)
 
 	budgetRequest := `{"model":"openai-main/custom-model","messages":[{"role":"user","content":"hello"}]}`
 	first := httptest.NewRequest("POST", endpoint("openai"), strings.NewReader(budgetRequest))
@@ -1318,6 +1336,8 @@ func TestAuditAppendFailureSettlesKnownBudgetCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeDB()
+	gatewayHandler := h.(*handler)
+	waitForInitialStatementSync(t, gatewayHandler.ledger)
 	triggerDB, err := sql.Open("sqlite", c.LedgerPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1329,7 +1349,6 @@ func TestAuditAppendFailureSettlesKnownBudgetCost(t *testing.T) {
 	if err := triggerDB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	gatewayHandler := h.(*handler)
 
 	body := requestBodyFor("openai", "openai-main", "custom-model")
 	send := func() *httptest.ResponseRecorder {
