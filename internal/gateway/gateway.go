@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -20,6 +20,7 @@ import (
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 type handler struct {
@@ -34,6 +35,25 @@ type handler struct {
 	models               map[string][]string
 	modelsKnown          map[string]bool
 	unavailableProviders map[string]error
+	logger               *slog.Logger
+}
+
+type requestLogContextKey struct{}
+
+type requestLogContext struct {
+	started     time.Time
+	providerRef string
+	model       string
+}
+
+func withRequestLogDetails(r *http.Request, providerRef, model string) *http.Request {
+	details, _ := r.Context().Value(requestLogContextKey{}).(requestLogContext)
+	if details.started.IsZero() {
+		details.started = time.Now()
+	}
+	details.providerRef = providerRef
+	details.model = model
+	return r.WithContext(context.WithValue(r.Context(), requestLogContextKey{}, details))
 }
 
 func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
@@ -256,6 +276,7 @@ func (h *handler) protocolForRequest(r *http.Request) string {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = withRequestLogDetails(r, "", "")
 	protocol := h.protocolForRequest(r)
 	a := sha256.Sum256([]byte(r.Header.Get("Authorization")))
 	b := sha256.Sum256([]byte("Bearer " + h.config.AccessToken))
@@ -356,13 +377,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, qualifiedModel, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, "")
 	if len(ignoredFields) > 0 {
-		log.Printf("tidemux: ignored unsupported request fields protocol=%s fields=%q", protocol, ignoredFields)
+		observability.LoggerOrDiscard(h.logger).Warn("request contained unsupported extension fields",
+			slog.Int("schema_version", observability.SchemaVersion),
+			slog.String("event", "request_extension_fields_ignored"),
+			slog.String("protocol", protocol),
+			slog.Int("field_count", len(ignoredFields)),
+		)
 	}
 	if err != nil {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
+	r = withRequestLogDetails(r, "", qualifiedModel)
 	providerName, model, routeError, routeStatus := h.resolveRequestModel(qualifiedModel)
+	if providerName != "" {
+		r = withRequestLogDetails(r, providerName, model)
+	}
 	if routeError != "" {
 		h.reject(w, r, protocol, routeStatus, routeError, "model")
 		return
@@ -529,7 +559,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if err != nil {
 				h.blockBudget(providerName, budget.Currency)
-				log.Printf("tidemux: budget settlement unresolved reservation_id=%s audit_id=%s error=%v", reservationID, auditID, err)
+				observability.LoggerOrDiscard(h.logger).Error("budget settlement unresolved",
+					slog.Int("schema_version", observability.SchemaVersion),
+					slog.String("event", "budget_settlement_failure"),
+					slog.String("request_id", auditID),
+					slog.String("provider_ref", providerName),
+					slog.String("failure_code", "budget_settlement_unresolved"),
+				)
 			}
 		}
 	}
@@ -632,6 +668,7 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 	}
 	id := hex.EncodeToString(nonce)
 	w.Header().Set("X-TideMux-Request-ID", id)
+	details, _ := r.Context().Value(requestLogContextKey{}).(requestLogContext)
 	method := r.Method
 	if method != "GET" && method != "POST" {
 		method = "OTHER"
@@ -645,8 +682,24 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 	case "/v1/models", "/models":
 		endpoint = "models"
 	}
-	if err := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: time.Now().UnixMilli(), Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code}); err != nil {
-		h.fail(w, 500, "local_diagnostic_failed", protocol)
+	diagnosticErr := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: time.Now().UnixMilli(), Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code})
+	if diagnosticErr != nil {
+		status = http.StatusInternalServerError
+		code = "local_diagnostic_failed"
+	}
+	latency := int64(0)
+	if !details.started.IsZero() {
+		latency = time.Since(details.started).Milliseconds()
+	}
+	observability.RequestSummary{
+		Event: "local_rejection", RequestID: id, Protocol: protocol,
+		Endpoint: endpoint, ProviderRef: details.providerRef, Model: details.model,
+		Outcome: "rejected", ErrorCode: code, HTTPStatus: status,
+		LatencyMS: latency, QueueTimeMS: 0, UpstreamAttempted: false,
+		RecordPersisted: diagnosticErr == nil,
+	}.Log(h.logger)
+	if diagnosticErr != nil {
+		h.fail(w, status, code, protocol)
 		return
 	}
 	h.fail(w, status, code, protocol, param...)

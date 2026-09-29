@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 func TestProviderErrorMappingsAreValidatedAndRoundTrip(t *testing.T) {
@@ -359,7 +361,7 @@ func TestNewHandlerKeepsResolvedProvidersAvailableWhenOneAutoProbeFails(t *testi
 			t.Errorf("unexpected request to unresolved provider: %s %s", r.Method, r.URL.Path)
 		}
 		failedProbeCalls++
-		_, _ = io.WriteString(w, `{"data":[{"id":"unresolved-model"}]}`)
+		_, _ = io.WriteString(w, `{"notice":"probe-body-sensitive-marker","data":[{"id":"unresolved-model"}]}`)
 	}))
 	defer unresolved.Close()
 	resolvedCalls := 0
@@ -387,11 +389,18 @@ func TestNewHandlerKeepsResolvedProvidersAvailableWhenOneAutoProbeFails(t *testi
 		"ready":      {Protocol: "openai", BaseURL: resolved.URL + "/v1", APIKey: "ready-key", UpstreamID: "ready", SupportedModels: []string{"ready-model"}, UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "ready"}},
 		"unresolved": {Protocol: "auto", BaseURL: unresolved.URL + "/v1", APIKey: "unresolved-key", UpstreamID: "unresolved", SupportedModels: []string{"unresolved-model"}, UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "unresolved"}},
 	}
-	h, closeGateway, err := NewHandler(c, nil)
+	var logs bytes.Buffer
+	h, closeGateway, err := NewHandlerWithLogger(c, nil, observability.JSONLogger(&logs))
 	if err != nil {
 		t.Fatalf("one unresolved provider prevented gateway startup: %v", err)
 	}
 	defer closeGateway()
+	if !strings.Contains(logs.String(), `"event":"provider_unavailable"`) || !strings.Contains(logs.String(), `"provider_ref":"unresolved"`) || !strings.Contains(logs.String(), "tidemux provider update REF --protocol") {
+		t.Fatalf("missing structured provider recovery event: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "probe-body-sensitive-marker") || strings.Contains(logs.String(), "unresolved-key") {
+		t.Fatalf("provider probe event exposed sensitive data: %s", logs.String())
+	}
 
 	models := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	models.Header.Set("Authorization", "Bearer local-secret")

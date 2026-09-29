@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptrace"
@@ -18,11 +18,14 @@ import (
 
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 type Client struct {
 	Limits                                          Limits
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
+	ProviderRef                                     string
+	Logger                                          *slog.Logger
 	MaxOutputTokens                                 int64
 	Prices                                          map[string]Price
 	ErrorCodeMappings                               []ProviderErrorMapping
@@ -121,7 +124,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	if e != nil {
 		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e), UpstreamNotAttempted: true}
 	}
-	logConversionWarnings(clientProtocol, c.Protocol, requestWarnings)
+	logConversionWarnings(c.Logger, clientProtocol, c.Protocol, requestWarnings)
 	if preparedModel != "" {
 		model = preparedModel
 		a.Model = model
@@ -132,6 +135,8 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}
 	var observed bytes.Buffer
 	attempted := false
+	delivered := false
+	auditPersisted := false
 	localEstimate := func(response []byte) {
 		if !priced || a.EstimatedCost != nil {
 			return
@@ -160,10 +165,12 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			}
 		}
 		if e := c.Ledger.AppendAudit(a); e != nil {
-			// Audit data is already bounded metadata (never request content or
-			// credentials), so the local service log can preserve the write cause
-			// and request ID needed to diagnose a conservative budget hold.
-			log.Printf("tidemux: request audit append failed request_id=%s error=%v", id, e)
+			observability.LoggerOrDiscard(c.Logger).Error("request audit append failed",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "request_audit_write_failure"),
+				slog.String("request_id", id),
+				slog.String("failure_code", "audit_write_failed"),
+			)
 			response = nil
 			callErr := &CallError{Status: 500, Code: "audit_failed_do_not_retry_blindly"}
 			if a.EstimatedCost != nil {
@@ -171,6 +178,8 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 				callErr.BudgetCost = &cost
 			}
 			err = callErr
+		} else {
+			auditPersisted = true
 		}
 		if err != nil {
 			var callErr *CallError
@@ -178,6 +187,30 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 				callErr.UpstreamNotAttempted = !attempted
 			}
 		}
+		status := terminalHTTPStatus(clientProtocol, delivered, err)
+		errorCode := a.ErrorCode
+		if err != nil {
+			var callErr *CallError
+			if errors.As(err, &callErr) {
+				errorCode = callErr.Code
+			} else {
+				errorCode = "internal_error"
+			}
+		}
+		outcome := a.Status
+		if outcome == "ok" {
+			outcome = "success"
+		} else if outcome != "error" && outcome != "canceled" {
+			outcome = "error"
+		}
+		observability.RequestSummary{
+			Event: "request_terminal", RequestID: id,
+			Protocol: clientProtocol, ProviderProtocol: c.Protocol,
+			Endpoint: requestEndpoint(clientProtocol), ProviderRef: c.ProviderRef,
+			Model: a.Model, Outcome: outcome, ErrorCode: errorCode,
+			HTTPStatus: status, LatencyMS: a.LatencyMS, QueueTimeMS: a.QueueMS,
+			UpstreamAttempted: attempted, RecordPersisted: auditPersisted,
+		}.Log(c.Logger)
 	}()
 	admission, e := c.Gate.Acquire(ctx)
 	a.QueueMS = admission.QueueWait.Milliseconds()
@@ -201,7 +234,6 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}()
 	var data []byte
 	var usage TokenUsage
-	delivered := false
 	for candidateIndex, key := range keys {
 		// Empty entries are used to mark cooled candidates only when the pool
 		// readiness callback is active. Keep the single-client path's historical
@@ -363,11 +395,42 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func logConversionWarnings(clientProtocol, providerProtocol string, fields []string) {
+func logConversionWarnings(logger *slog.Logger, clientProtocol, providerProtocol string, fields []string) {
 	if len(fields) == 0 {
 		return
 	}
-	log.Printf("tidemux: cross-protocol conversion omitted fields client_protocol=%s provider_protocol=%s fields=%q", clientProtocol, providerProtocol, sortedUniqueStrings(append([]string(nil), fields...)))
+	observability.LoggerOrDiscard(logger).Warn("protocol conversion omitted unsupported fields",
+		slog.Int("schema_version", observability.SchemaVersion),
+		slog.String("event", "protocol_conversion_omitted_fields"),
+		slog.String("client_protocol", clientProtocol),
+		slog.String("provider_protocol", providerProtocol),
+		slog.Int("field_count", len(sortedUniqueStrings(append([]string(nil), fields...)))),
+	)
+}
+
+func requestEndpoint(clientProtocol string) string {
+	if clientProtocol == "anthropic" {
+		return "messages"
+	}
+	return "chat_completions"
+}
+
+func terminalHTTPStatus(clientProtocol string, delivered bool, err error) int {
+	if err == nil || delivered {
+		return http.StatusOK
+	}
+	var callErr *CallError
+	if !errors.As(err, &callErr) {
+		return http.StatusInternalServerError
+	}
+	status := callErr.Status
+	if callErr.Category != "" && (status < 400 || status > 599) {
+		status, _, _, _ = callErr.Category.ClientError(clientProtocol)
+	}
+	if status < 100 || status > 599 {
+		return http.StatusInternalServerError
+	}
+	return status
 }
 
 func canFailover(callErr *CallError, hasNext, delivered bool, ctx context.Context) bool {
@@ -450,7 +513,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 			data, err = translator.terminal(data)
 		}
 		if translator != nil {
-			logConversionWarnings(clientProtocol, c.Protocol, translator.warnings())
+			logConversionWarnings(c.Logger, clientProtocol, c.Protocol, translator.warnings())
 		}
 		if err != nil {
 			var conversion *TranslationError
@@ -474,7 +537,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 	}
 	var responseWarnings []string
 	data, responseWarnings, err = TranslateResponseWithWarnings(c.Protocol, clientProtocol, data, model)
-	logConversionWarnings(clientProtocol, c.Protocol, responseWarnings)
+	logConversionWarnings(c.Logger, clientProtocol, c.Protocol, responseWarnings)
 	if err != nil {
 		var conversion *TranslationError
 		if errors.As(err, &conversion) {

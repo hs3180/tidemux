@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -484,7 +484,8 @@ func TestSuccessfulQueueAndAuditFailure(t *testing.T) {
 		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer up.Close()
-	c := Client{Protocol: "openai", BaseURL: up.URL, APIKey: "test", Upstream: "test", Ledger: l, Gate: g}
+	var logs bytes.Buffer
+	c := Client{Protocol: "openai", BaseURL: up.URL, APIKey: "test", Upstream: "test", Ledger: l, Gate: g, Logger: observability.JSONLogger(&logs)}
 	g.Acquire(context.Background())
 	done := make(chan error, 1)
 	go func() { _, _, e := c.Call(context.Background(), []byte(`{}`), "m"); done <- e }()
@@ -498,19 +499,15 @@ func TestSuccessfulQueueAndAuditFailure(t *testing.T) {
 		t.Fatalf("queue %+v", rows)
 	}
 	l.Close()
-	previousLogWriter := log.Writer()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(previousLogWriter)
 	c.APIKey = "private-key-marker"
 	_, requestID, err := c.Call(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"private-request-marker"}]}`), "m")
 	if err == nil || err.Error() != "audit_failed_do_not_retry_blindly" {
 		t.Fatalf("audit failure %v", err)
 	}
-	if !strings.Contains(logs.String(), "request audit append failed") || !strings.Contains(logs.String(), "request_id="+requestID) || !strings.Contains(logs.String(), "database is closed") {
+	if !strings.Contains(logs.String(), `"event":"request_audit_write_failure"`) || !strings.Contains(logs.String(), `"request_id":"`+requestID+`"`) || !strings.Contains(logs.String(), `"failure_code":"audit_write_failed"`) {
 		t.Fatalf("missing safe audit-write diagnostic: %s", logs.String())
 	}
-	if strings.Contains(logs.String(), "private-key-marker") || strings.Contains(logs.String(), "private-request-marker") {
+	if strings.Contains(logs.String(), "private-key-marker") || strings.Contains(logs.String(), "private-request-marker") || strings.Contains(logs.String(), "database is closed") {
 		t.Fatalf("audit-write diagnostic exposed credential or request content: %s", logs.String())
 	}
 }

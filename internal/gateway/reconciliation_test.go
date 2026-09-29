@@ -1,16 +1,20 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hs3180/tidemux/internal/ledger"
+	"github.com/hs3180/tidemux/internal/observability"
 )
 
 const statementCSV = "period_start,period_end,currency,amount,request_id,model\n1,1000,USD,2,request,m\n"
@@ -154,6 +158,41 @@ func TestStatementSyncUnavailableDirectoryDoesNotBlockGateway(t *testing.T) {
 	}
 	defer l.Close()
 	waitForSync(t, l, func(s ledger.StatementSync) bool { return s.Failures > 0 && s.LastSuccessMS == nil })
+}
+
+func TestStatementSyncFailureLogsBoundedPrivacySafeSummary(t *testing.T) {
+	dir := t.TempDir()
+	l, err := ledger.Open(filepath.Join(dir, "ledger.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	privatePath := filepath.Join(dir, "statement-path-sensitive-marker")
+	if err := os.WriteFile(privatePath, []byte("statement-content-sensitive-marker"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	reporter := &statementSyncReporter{logger: observability.JSONLogger(&logs)}
+	for i := 0; i < 3; i++ {
+		syncStatementsWithReporter(context.Background(), l, privatePath, reporter)
+	}
+	lines := bytes.Count(logs.Bytes(), []byte("\n"))
+	if lines != 1 {
+		t.Fatalf("repeated failures should be throttled to one summary per minute; lines=%d logs=%s", lines, logs.String())
+	}
+	var event map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &event); err != nil {
+		t.Fatalf("invalid statement sync JSON event: %v: %s", err, logs.String())
+	}
+	if event["event"] != "statement_sync_failure" || event["failure_count"] != float64(1) || event["status_write_failed"] != false {
+		t.Fatalf("unexpected statement sync event: %#v", event)
+	}
+	if strings.Contains(logs.String(), "statement-path-sensitive-marker") || strings.Contains(logs.String(), "statement-content-sensitive-marker") {
+		t.Fatalf("statement sync event exposed a path or file content: %s", logs.String())
+	}
+	if reporter.suppressed != 2 {
+		t.Fatalf("suppressed scan count=%d want 2", reporter.suppressed)
+	}
 }
 
 func TestSlowStatementImportLeavesTimeForRequestAuditing(t *testing.T) {
