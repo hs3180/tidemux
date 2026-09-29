@@ -267,6 +267,58 @@ func TestClientLaunchKeepsBareModelID(t *testing.T) {
 	}
 }
 
+func TestClientLaunchersUseUniqueBareModelProviderScope(t *testing.T) {
+	capabilities := gateway.ModelCapabilities{ContextTokens: 65536, MaxOutputTokens: 8192}
+	config := gateway.Config{Providers: map[string]gateway.Provider{
+		"glm":       {Protocol: "anthropic", SupportedModels: []string{"glm-5.3"}, ModelCapabilities: capabilities},
+		"secondary": {Protocol: "openai", SupportedModels: []string{"other-model"}, ModelCapabilities: gateway.ModelCapabilities{ContextTokens: 32768, MaxOutputTokens: 4096}},
+	}}
+	model := "glm-5.3"
+	for _, name := range []string{"claude", "kilo", "hermes"} {
+		t.Run(name, func(t *testing.T) {
+			providerRef, err := resolveClientProvider(config, model, []string{"glm/glm-5.3", "secondary/other-model"})
+			if err != nil || providerRef != "glm" {
+				t.Fatalf("bare model resolved to provider %q, %v; want glm", providerRef, err)
+			}
+			state := filepath.Join(t.TempDir(), name)
+			env, _, err := clientLaunch(name, "http://127.0.0.1:8787", model, state, "", config.Providers[providerRef].ModelCapabilities)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "claude":
+				if env["ANTHROPIC_MODEL"] != model {
+					t.Fatalf("Claude changed the bare model ID: %#v", env)
+				}
+			case "kilo":
+				var data map[string]any
+				if err := json.Unmarshal([]byte(env["KILO_CONFIG_CONTENT"]), &data); err != nil {
+					t.Fatal(err)
+				}
+				provider := data["provider"].(map[string]any)["tidemux-local"].(map[string]any)
+				models := provider["models"].(map[string]any)
+				limits := models[model].(map[string]any)["limit"].(map[string]any)
+				if data["model"] != "tidemux-local/"+model || limits["context"] != float64(65536) || limits["output"] != float64(8192) {
+					t.Fatalf("Kilo did not use the selected provider's model and limits: %s", env["KILO_CONFIG_CONTENT"])
+				}
+			case "hermes":
+				encoded, err := os.ReadFile(filepath.Join(state, "config.yaml"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var data map[string]any
+				if err := json.Unmarshal(encoded, &data); err != nil {
+					t.Fatal(err)
+				}
+				modelConfig := data["model"].(map[string]any)
+				if modelConfig["default"] != model || modelConfig["context_length"] != float64(65536) {
+					t.Fatalf("Hermes did not use the selected provider's model and context: %s", encoded)
+				}
+			}
+		})
+	}
+}
+
 func TestClientReceivesDeclaredContext(t *testing.T) {
 	for _, name := range []string{"kilo", "hermes"} {
 		state := t.TempDir()
