@@ -62,9 +62,11 @@ func ignoredRequestFields(data []byte, input Input) []string {
 }
 
 // discardForeignProtocolFields removes modeled fields that belong only to the
-// other wire protocol and prunes unknown content-block fields before decoding
-// into the shared request type. Filtering raw JSON first ensures a malformed
-// foreign field cannot turn an otherwise valid request into a type error.
+// other wire protocol and prunes OpenAI content-block fields before decoding
+// into the shared request type. Native Anthropic blocks remain opaque so newer
+// tagged-union variants and fields can reach the configured endpoint intact.
+// Filtering raw JSON first ensures a malformed foreign field cannot turn an
+// otherwise valid request into a type error.
 func discardForeignProtocolFields(data []byte, protocol string) ([]byte, []string, error) {
 	var object map[string]json.RawMessage
 	if err := LenientJSON(data, &object); err != nil {
@@ -80,7 +82,7 @@ func discardForeignProtocolFields(data []byte, protocol string) ([]byte, []strin
 		topLevel = []string{"user", "stream_options", "response_format", "reasoning_effort", "parallel_tool_calls", "max_completion_tokens", "stop"}
 	}
 	foreignFields = append(foreignFields, removeJSONFields(object, topLevel)...)
-	if choice, key, ok := findJSONField(object, "tool_choice"); ok {
+	if choice, key, ok := findJSONField(object, "tool_choice"); ok && protocol == "openai" {
 		var schema reflect.Type
 		switch protocol {
 		case "openai":
@@ -106,11 +108,13 @@ func discardForeignProtocolFields(data []byte, protocol string) ([]byte, []strin
 			foreignFields = append(foreignFields, paths...)
 		}
 	}
-	contentFields, err := sanitizeRequestContent(object, protocol)
-	if err != nil {
-		return nil, nil, err
+	if protocol == "openai" {
+		contentFields, err := sanitizeRequestContent(object, protocol)
+		if err != nil {
+			return nil, nil, err
+		}
+		foreignFields = append(foreignFields, contentFields...)
 	}
-	foreignFields = append(foreignFields, contentFields...)
 
 	if protocol == "anthropic" {
 		if messages, key, ok := findJSONField(object, "messages"); ok {
