@@ -414,6 +414,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 404, "provider_not_found", "model")
 		return
 	}
+	if protocol == "anthropic" && adapter.HasAnthropicServerTools(body) && providerClient.Protocol != "anthropic" {
+		h.reject(w, r, protocol, http.StatusBadRequest, "unsupported_request_feature", "tools")
+		return
+	}
 	body, err = replaceRequestModel(body, model)
 	if err != nil {
 		h.reject(w, r, protocol, 400, "invalid_request", "model")

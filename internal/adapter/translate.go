@@ -241,6 +241,11 @@ func translateAnthropicRequestWithWarnings(data []byte, defaultModel string) ([]
 	if err := StrictJSON(validated, &in); err != nil {
 		return nil, "", warnings, errors.New("invalid_request")
 	}
+	for _, tool := range in.Tools {
+		if tool.Type != "" && tool.Type != "custom" {
+			return nil, "", warnings, validationError("unsupported_request_feature", "tools")
+		}
+	}
 	warnings = append(warnings, anthropicConversionLosses(in)...)
 	warnings = sortedUniqueStrings(warnings)
 	system, messages, err := translateAnthropicMessages(in.System, in.Messages)

@@ -3,6 +3,7 @@ package adapter
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -49,6 +50,47 @@ func TestEagerInputStreamingHintIsAcceptedAndDropped(t *testing.T) {
 	}
 	if bytes.Contains(encoded, []byte("eager_input_streaming")) {
 		t.Fatalf("client-only hint was forwarded: %s", encoded)
+	}
+}
+
+func TestAnthropicServerToolsAreAcceptedAndPreserved(t *testing.T) {
+	body := []byte(`{"model":"claude-test","max_tokens":64,"messages":[{"role":"user","content":"search"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":3,"allowed_domains":["example.com"],"user_location":{"type":"approximate","country":"US","city":"Seattle"},"provider_extension":{"mode":"fast","limits":[1,2]}}]}`)
+	encoded, model, warnings, err := RequestWithWarnings("anthropic", body, "")
+	if err != nil || model != "claude-test" {
+		t.Fatalf("model=%q warnings=%v err=%v", model, warnings, err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("forwarded server-tool fields were reported as dropped: %v", warnings)
+	}
+	var before, after map[string]any
+	if err := json.Unmarshal(body, &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &after); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before["tools"], after["tools"]) {
+		t.Fatalf("server tool changed: got=%#v want=%#v", after["tools"], before["tools"])
+	}
+}
+
+func TestAnthropicCustomToolsStillRequireObjectSchema(t *testing.T) {
+	base := `{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"tools":[%s]}`
+	for _, tool := range []string{
+		`{"type":"custom","name":"lookup"}`,
+		`{"type":"custom","name":"lookup","input_schema":[]}`,
+	} {
+		if _, _, err := Request("anthropic", []byte(fmt.Sprintf(base, tool)), ""); err == nil {
+			t.Fatalf("accepted malformed custom tool %s", tool)
+		}
+	}
+	for _, tool := range []string{
+		`{"name":"lookup","input_schema":{"type":"object"}}`,
+		`{"type":"custom","name":"lookup","input_schema":{"type":"object"}}`,
+	} {
+		if _, _, err := Request("anthropic", []byte(fmt.Sprintf(base, tool)), ""); err != nil {
+			t.Fatalf("rejected valid custom tool %s: %v", tool, err)
+		}
 	}
 }
 
