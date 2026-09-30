@@ -498,6 +498,9 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 					return &CallError{Status: 502, Code: "invalid_upstream_stream"}
 				}
 			}
+			if options.ResponseModel != "" {
+				frame = setStreamResponseModel(clientProtocol, frame, options.ResponseModel)
+			}
 			if len(frame) == 0 {
 				return nil
 			}
@@ -544,6 +547,9 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 			return nil, TokenUsage{}, &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
 		}
 		return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_response"}
+	}
+	if options.ResponseModel != "" {
+		data = setResponseModel(data, options.ResponseModel)
 	}
 	return data, usage, nil
 }

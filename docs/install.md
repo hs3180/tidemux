@@ -46,14 +46,14 @@ it. The installer does not change configuration or Keychain credentials.
 ## Upgrade and rollback
 
 The 0.3.0 candidate keeps the existing provider profiles, Keychain references,
-budgets and audit ledger. It adds optional `auto_model_chain` and `routing`
-fields; both are omitted while routing is disabled. Back up the config before
-an upgrade as part of your normal local-data practice. If you enable routing
-and later want to return to 0.2.2, clear each provider chain and disable the
-routing settings:
+budgets and audit ledger. It adds optional top-level `auto_chain` and `routing`
+fields; they are omitted while those features are disabled. Back up the config
+before an upgrade as part of your normal local-data practice. If you enable
+these features and later want to return to 0.2.2, clear the chain and disable
+the routing settings:
 
 ```sh
-tidemux provider auto-chain REF --clear
+tidemux auto-chain clear
 tidemux routing set --shared-model-strategy off --billing-exhaustion-failover=false
 ```
 
