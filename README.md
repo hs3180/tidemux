@@ -69,6 +69,10 @@ classified failure. A request without a session ID gets a new request-scoped ID
 and is treated as a new session; the next client request without an ID is also
 a new session.
 
+Shared bare model IDs remain ambiguous by default. Enable random selection
+among eligible providers with `tidemux routing set --shared-model-strategy
+random`; the setting is opt-in.
+
 ### 2. Start the gateway
 
 ```sh
@@ -150,8 +154,9 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.2.2 CLI; older binaries
-may expose a different command set.
+`tidemux gateway`. The commands below describe the 0.3.0 candidate CLI; the
+published v0.2.2 binary does not include the candidate model-chain and routing
+options.
 
 | Command | Semantics |
 | --- | --- |
@@ -170,6 +175,7 @@ may expose a different command set.
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
 | `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
 | `tidemux provider budget reset REF --window 5h (or 7d)` | Reset only that provider's selected rolling budget window. Stop the gateway before reset, then restart it; request audit and billing history remain intact. |
+| `tidemux routing show` / `tidemux routing set --shared-model-strategy off\|random` | Inspect or configure random selection for a bare model served by multiple eligible providers. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
 
 Provider identity does not depend on a user-chosen name. TideMux creates and

@@ -1,4 +1,4 @@
-# Protocol support — 0.2.2
+# Protocol support — 0.3.0 candidate
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
@@ -15,6 +15,9 @@ identified by a configured scope or discovered catalog.
 Provider selection is independent of the client's API protocol. Bare IDs are
 resolved against model scope across all providers; when multiple providers can
 serve an ID, the gateway returns `model_ambiguous` instead of picking one.
+Configure `routing.shared_model_strategy` as `random` to opt in to choosing one
+eligible provider for a shared bare model. Explicit
+`REF/MODEL_ID` requests remain pinned to their selected provider.
 Either OpenAI or Anthropic clients can select any provider; TideMux uses the
 provider's configured upstream protocol and converts request/response
 semantics only when the client and provider protocols differ. Model, budget and
@@ -57,6 +60,7 @@ ambiguous or non-standard; detection does not rewrite stored configuration.
 | Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
 | OpenAI client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is OpenAI | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies |
 | Anthropic client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is Anthropic |
+| Shared bare model | Ambiguous by default; an opt-in strategy selects one eligible provider | Same policy; native Anthropic tools restrict candidates to Anthropic upstreams |
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 

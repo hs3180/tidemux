@@ -74,6 +74,71 @@ func autoChainCommand(args []string, stdout, stderr *os.File) error {
 	}
 }
 
+func routingCommand(args []string, stdout, stderr *os.File) error {
+	if len(args) == 0 {
+		return errors.New("usage: tidemux routing <show|set> [options]")
+	}
+	action := args[0]
+	flags := flag.NewFlagSet("routing "+action, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	path := flags.String("config", defaultConfigPath(), "configuration path")
+	shared := flags.String("shared-model-strategy", "", "shared bare-model strategy: off or random")
+	if err := flags.Parse(interspersedRoutingArgs(args[1:])); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*path) == "" {
+		return errors.New("usage: tidemux routing <show|set> [--shared-model-strategy off|random] [--config PATH]")
+	}
+	c, abs, before, err := loadCommandConfig(*path)
+	if err != nil {
+		return err
+	}
+	settings := c.EffectiveRouting()
+	switch action {
+	case "show":
+		if flagWasSet(flags, "shared-model-strategy") {
+			return errors.New("routing show accepts only --config")
+		}
+		strategy := settings.SharedModelStrategy
+		if strategy == "" {
+			strategy = "off"
+		}
+		fmt.Fprintf(stdout, "Shared model strategy: %s\n", strategy)
+		return nil
+	case "set":
+		if !flagWasSet(flags, "shared-model-strategy") {
+			return errors.New("routing set requires --shared-model-strategy")
+		}
+		switch *shared {
+		case "off", "none":
+			settings.SharedModelStrategy = ""
+		case "random":
+			settings.SharedModelStrategy = *shared
+		default:
+			return errors.New("--shared-model-strategy must be off or random")
+		}
+		if settings == (gateway.RoutingConfig{}) {
+			c.Routing = nil
+		} else {
+			c.Routing = &settings
+		}
+		if err := writeCommandConfig(abs, c, before); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "Updated shared-model routing setting.")
+		return nil
+	default:
+		return errors.New("usage: tidemux routing <show|set> [options]")
+	}
+}
+
+func interspersedRoutingArgs(args []string) []string {
+	return interspersedFlagsAndPositionals(args, map[string]bool{"--config": true, "-config": true, "--shared-model-strategy": true, "-shared-model-strategy": true})
+}
+
 func interspersedFlagsAndPositionals(args []string, valueFlags map[string]bool) []string {
 	var options, positionals []string
 	for index := 0; index < len(args); index++ {

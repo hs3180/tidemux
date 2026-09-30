@@ -44,6 +44,26 @@ type Provider struct {
 	APIKeys           []string                       `json:"-"`
 }
 
+type RoutingConfig struct {
+	SharedModelStrategy string `json:"shared_model_strategy,omitempty"`
+}
+
+func (c Config) EffectiveRouting() RoutingConfig {
+	if c.Routing == nil {
+		return RoutingConfig{}
+	}
+	return *c.Routing
+}
+
+func (r RoutingConfig) Validate() error {
+	switch r.SharedModelStrategy {
+	case "", "random":
+		return nil
+	default:
+		return errors.New("routing.shared_model_strategy must be random")
+	}
+}
+
 // KeychainReferences returns the configured keys for this provider profile.
 // The singular field remains readable for existing configurations.
 func (p Provider) KeychainReferences() ([]KeychainReference, error) {
@@ -104,6 +124,7 @@ type Config struct {
 	BaseURL                         string                   `json:"base_url,omitempty"`
 	Providers                       map[string]Provider      `json:"providers,omitempty"`
 	AutoChain                       []AutoChainEntry         `json:"auto_chain,omitempty"`
+	Routing                         *RoutingConfig           `json:"routing,omitempty"`
 	Model                           string                   `json:"model,omitempty"` // deprecated field decoded from old single-provider configs; never used for routing
 	UpstreamID                      string                   `json:"upstream_id,omitempty"`
 	APIVersion                      string                   `json:"anthropic_version,omitempty"`
@@ -238,6 +259,11 @@ func (c Config) Validate() error {
 	}
 	if err := c.ReportWebhook.Validate(); err != nil {
 		return err
+	}
+	if c.Routing != nil {
+		if err := c.Routing.Validate(); err != nil {
+			return err
+		}
 	}
 	if c.ReportSchedule.Channel == "webhook" && c.ReportWebhook == (ReportWebhookConfig{}) {
 		return errors.New("webhook report schedule requires report_webhook configuration")

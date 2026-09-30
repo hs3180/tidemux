@@ -10,6 +10,7 @@
   Stable session IDs stay pinned; requests without IDs receive request-scoped
   IDs and count as new sessions. Classified failures advance the preferred
   entry for new sessions without switching models within a request.
+- Add opt-in random routing for shared bare model IDs.
 
 ## 0.2.2 — 2026-09-29
 

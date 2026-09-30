@@ -30,6 +30,7 @@ type handler struct {
 	budgetBlocked        map[string]struct{}
 	sessions             *limiter.SessionLimiter
 	autoChain            *autoChainState
+	randomIndex          func(int) int
 	providers            map[string]Provider
 	clients              map[string]*adapter.Client
 	keyPools             map[string]*providerKeyPool
@@ -113,7 +114,7 @@ func (h *handler) allQualifiedModels() []string {
 	return result
 }
 
-func (h *handler) resolveRequestModel(modelID string) (providerName, model, code string, status int) {
+func (h *handler) resolveRequestModel(modelID, clientProtocol string, body []byte) (providerName, model, code string, status int) {
 	if ref, suffix, qualified := parseQualifiedModelID(modelID); qualified {
 		if _, exists := h.providers[ref]; exists {
 			if suffix == "auto" {
@@ -124,25 +125,9 @@ func (h *handler) resolveRequestModel(modelID string) (providerName, model, code
 		// An upstream model may itself contain slashes. Without a matching
 		// TideMux provider prefix, accept it only when a configured scope or a
 		// complete discovered catalog identifies the full model ID.
-		candidates := h.bareModelCandidates(modelID, true)
-		if len(candidates) == 1 {
-			return candidates[0], modelID, "", 0
-		}
-		if len(candidates) > 1 {
-			return "", "", "model_ambiguous", http.StatusBadRequest
-		}
-		return "", "", "provider_not_found", http.StatusNotFound
+		return h.resolveSharedModel(modelID, true, true, clientProtocol, body)
 	}
-
-	candidates := h.bareModelCandidates(modelID, false)
-	switch len(candidates) {
-	case 0:
-		return "", "", "model_not_found", http.StatusNotFound
-	case 1:
-		return candidates[0], modelID, "", 0
-	default:
-		return "", "", "model_ambiguous", http.StatusBadRequest
-	}
+	return h.resolveSharedModel(modelID, false, false, clientProtocol, body)
 }
 
 func (h *handler) bareModelCandidates(model string, requireKnownScope bool) []string {
@@ -429,13 +414,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		providerName, model = autoSelection.provider, autoSelection.model
 		options.ResponseModel = model
 	} else {
-		providerName, model, routeError, routeStatus = h.resolveRequestModel(qualifiedModel)
+		providerName, model, routeError, routeStatus = h.resolveRequestModel(qualifiedModel, protocol, body)
 	}
 	if providerName != "" {
 		r = withRequestLogDetails(r, providerName, model)
 	}
 	if routeError != "" {
-		h.reject(w, r, protocol, routeStatus, routeError, "model")
+		parameter := "model"
+		if routeError == "unsupported_request_feature" {
+			parameter = "tools"
+		}
+		h.reject(w, r, protocol, routeStatus, routeError, parameter)
 		return
 	}
 	provider, providerExists := h.providers[providerName]

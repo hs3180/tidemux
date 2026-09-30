@@ -425,3 +425,18 @@ func TestReportScheduleValidation(t *testing.T) {
 		t.Fatal("gateway credential resolution loaded the report webhook endpoint")
 	}
 }
+
+func TestSharedModelStrategyIsOptInAndValidated(t *testing.T) {
+	config := namedProviderConfig(testConfig("l.db", "https://example.com/v1"), "main")
+	if config.EffectiveRouting() != (RoutingConfig{}) {
+		t.Fatalf("shared-model routing should default off: %+v", config.Routing)
+	}
+	config.Routing = &RoutingConfig{SharedModelStrategy: "random"}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("valid shared-model strategy rejected: %v", err)
+	}
+	config.Routing.SharedModelStrategy = "cheapest_unverified"
+	if err := config.Validate(); err == nil {
+		t.Fatal("unknown shared-model strategy accepted")
+	}
+}
