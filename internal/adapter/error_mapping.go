@@ -11,13 +11,14 @@ import (
 type ProviderErrorCategory string
 
 const (
-	ProviderErrorInsufficientBalance ProviderErrorCategory = "insufficient_balance"
-	ProviderErrorRateLimited         ProviderErrorCategory = "rate_limited"
-	ProviderErrorAuthentication      ProviderErrorCategory = "authentication"
-	ProviderErrorPermissionDenied    ProviderErrorCategory = "permission_denied"
-	ProviderErrorPolicyDenied        ProviderErrorCategory = "policy_denied"
-	ProviderErrorInvalidRequest      ProviderErrorCategory = "invalid_request"
-	ProviderErrorModelNotFound       ProviderErrorCategory = "model_not_found"
+	ProviderErrorInsufficientBalance    ProviderErrorCategory = "insufficient_balance"
+	ProviderErrorRateLimited            ProviderErrorCategory = "rate_limited"
+	ProviderErrorAuthentication         ProviderErrorCategory = "authentication"
+	ProviderErrorPermissionDenied       ProviderErrorCategory = "permission_denied"
+	ProviderErrorPolicyDenied           ProviderErrorCategory = "policy_denied"
+	ProviderErrorInvalidRequest         ProviderErrorCategory = "invalid_request"
+	ProviderErrorModelNotFound          ProviderErrorCategory = "model_not_found"
+	ProviderErrorTemporarilyUnavailable ProviderErrorCategory = "temporarily_unavailable"
 )
 
 // ProviderErrorMapping maps an exact upstream error code, optionally scoped to
@@ -36,10 +37,10 @@ func (m ProviderErrorMapping) Validate() error {
 		return errors.New("http_status must be 400..599 when supplied")
 	}
 	switch m.Category {
-	case ProviderErrorInsufficientBalance, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound:
+	case ProviderErrorInsufficientBalance, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound, ProviderErrorTemporarilyUnavailable:
 		return nil
 	default:
-		return errors.New("category must be insufficient_balance, rate_limited, authentication, permission_denied, policy_denied, invalid_request or model_not_found")
+		return errors.New("category must be insufficient_balance, rate_limited, authentication, permission_denied, policy_denied, invalid_request, model_not_found or temporarily_unavailable")
 	}
 }
 
@@ -106,6 +107,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		code = "upstream_invalid_request"
 	case ProviderErrorModelNotFound:
 		code = "provider_model_not_found"
+	case ProviderErrorTemporarilyUnavailable:
+		code = "provider_temporarily_unavailable"
 	default:
 		code = "upstream_error"
 	}
@@ -124,6 +127,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		message = "The provider rejected the request as invalid."
 	case ProviderErrorModelNotFound:
 		message = "The provider does not have access to the selected model."
+	case ProviderErrorTemporarilyUnavailable:
+		message = "The provider is temporarily unavailable. TideMux may prefer another model:auto entry for new sessions."
 	default:
 		message = "The provider request failed."
 	}
@@ -143,6 +148,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 			kind = "invalid_request_error"
 		case ProviderErrorModelNotFound:
 			kind = "not_found_error"
+		case ProviderErrorTemporarilyUnavailable:
+			kind = "api_error"
 		}
 	} else {
 		switch c {
@@ -160,6 +167,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 			kind = "invalid_request_error"
 		case ProviderErrorModelNotFound:
 			kind = "not_found_error"
+		case ProviderErrorTemporarilyUnavailable:
+			kind = "server_error"
 		default:
 			kind = "api_error"
 		}
@@ -179,6 +188,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		status = 400
 	case ProviderErrorModelNotFound:
 		status = 404
+	case ProviderErrorTemporarilyUnavailable:
+		status = 503
 	default:
 		status = 502
 	}

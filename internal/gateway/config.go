@@ -19,6 +19,13 @@ type KeychainReference struct {
 	Account string `json:"account"`
 }
 
+// AutoChainEntry identifies one provider/model pair in the instance-wide
+// model:auto fallback chain.
+type AutoChainEntry struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
 // Provider is a named, single-protocol upstream API profile. APIKey is
 // populated only after resolving its Keychain reference and is never serialized.
 type Provider struct {
@@ -96,6 +103,7 @@ type Config struct {
 	Protocol                        string                   `json:"protocol,omitempty"` // resolved provider protocol; empty/auto means detect; legacy values remain supported
 	BaseURL                         string                   `json:"base_url,omitempty"`
 	Providers                       map[string]Provider      `json:"providers,omitempty"`
+	AutoChain                       []AutoChainEntry         `json:"auto_chain,omitempty"`
 	Model                           string                   `json:"model,omitempty"` // deprecated field decoded from old single-provider configs; never used for routing
 	UpstreamID                      string                   `json:"upstream_id,omitempty"`
 	APIVersion                      string                   `json:"anthropic_version,omitempty"`
@@ -110,6 +118,8 @@ type Config struct {
 	AccessToken                     string                   `json:"-"`
 	ReportWebhookURL                string                   `json:"-"`
 }
+
+const maxAutoChainEntries = 64
 
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
@@ -327,6 +337,31 @@ func (c Config) Validate() error {
 				if err := provider.Budget.Validate(); err != nil {
 					return errors.New("providers." + name + ".budget: " + err.Error())
 				}
+			}
+		}
+	}
+	if len(c.AutoChain) > 0 {
+		if len(c.Providers) == 0 {
+			return errors.New("auto_chain requires named providers")
+		}
+		if len(c.AutoChain) > maxAutoChainEntries {
+			return errors.New("auto_chain may contain at most 64 entries")
+		}
+		seenEntries := make(map[AutoChainEntry]struct{}, len(c.AutoChain))
+		for _, entry := range c.AutoChain {
+			provider, ok := c.Providers[entry.Provider]
+			if !ok {
+				return errors.New("auto_chain entries must name configured providers")
+			}
+			if entry.Model == "" || entry.Model != strings.TrimSpace(entry.Model) || entry.Model == "auto" {
+				return errors.New("auto_chain models must be non-empty model IDs other than auto")
+			}
+			if _, exists := seenEntries[entry]; exists {
+				return errors.New("auto_chain must not contain duplicate provider/model entries")
+			}
+			seenEntries[entry] = struct{}{}
+			if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, entry.Model) {
+				return errors.New("auto_chain models must be present in their provider supported_models")
 			}
 		}
 	}

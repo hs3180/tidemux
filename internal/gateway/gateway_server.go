@@ -100,6 +100,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		_ = l.Close()
 		return nil, nil, err
 	}
+	autoChain := newAutoChainState(c.AutoChain, idleTTL)
 	cache := adapter.NewPromptCache()
 	clients := make(map[string]*adapter.Client, len(providers))
 	keyPools := make(map[string]*providerKeyPool, len(providers))
@@ -115,7 +116,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
 	}
-	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
+	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
 		stopReconciliation()
 		sessions.Close()
 		return l.Close()

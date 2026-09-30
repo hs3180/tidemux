@@ -3,7 +3,8 @@
 The 0.2.2 CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
-retained. This guide describes the current release CLI.
+retained. This guide describes the current release CLI and labels commands
+that are only available in the 0.3.0 candidate.
 
 ## Add a provider
 
@@ -212,13 +213,16 @@ tidemux provider error-map remove REF --code key_throttled --status 429
 exact code-and-status entry wins over the same code's unqualified entry;
 duplicate code/status pairs are rejected. Valid categories are
 `insufficient_balance`, `rate_limited`, `authentication`, `permission_denied`,
-`policy_denied`, `invalid_request`, and `model_not_found`. Provider messages are
-never inspected to infer a category or returned to the client. The response
+`policy_denied`, `invalid_request`, `model_not_found`, and
+`temporarily_unavailable`. Provider messages are never inspected to infer a
+category or returned to the client. The response
 includes the protocol-native envelope, a safe actionable explanation, a stable
 TideMux code, and the upstream code if it contains only safe ASCII characters.
 Mapped errors retain the upstream 4xx status when it agrees with the mapped
-category; rate-limit mappings always use HTTP 429. Rate-limit mappings use the
-same bounded retry policy as HTTP 429.
+category; rate-limit mappings always use HTTP 429 and temporarily-unavailable
+mappings use HTTP 503. Rate-limit mappings use the same bounded retry policy as
+HTTP 429. A temporarily-unavailable mapping can advance `model:auto` to the
+next preferred chain entry for new sessions before any response is sent.
 
 ## Provider budget
 
@@ -257,6 +261,32 @@ tidemux provider budget reset REF --window 7d
 The reset applies only to that provider and window. The other window and the
 request audit/billing history remain unchanged. Restart the gateway after the
 reset.
+
+## Model fallback (0.3.0 candidate)
+
+One auto chain belongs to a TideMux instance. Each ordered entry names a
+provider and model, so the chain can cross provider boundaries:
+
+```sh
+tidemux auto-chain show
+tidemux auto-chain set fast model-fast reliable model-capable
+tidemux auto-chain clear
+```
+
+Request `model:auto` to use the chain. A stable `X-TideMux-Session-ID` or
+Anthropic `metadata.user_id` pins the session to its selected provider/model,
+including after a failure. Classified safe failures before response output
+advance the preferred entry for new sessions only; TideMux does not switch
+models within a request or an existing session. After Disclaude `/reset`, a
+new session can use the next entry. If a request has no session ID, TideMux
+generates a request-scoped ID and treats every such request as a new session.
+Session bindings and preferred-entry progress are in memory: stale bindings
+expire after 24 hours, and a gateway restart begins at the first entry. Restart
+a running gateway after changing the chain.
+
+Provider-qualified `REF/auto` is not used with the instance-wide chain. Clear
+the chain before rolling a config back to v0.2.2 because that version does not
+recognize the `auto_chain` field.
 
 ## Gateway-wide settings
 

@@ -22,8 +22,8 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-Homebrew installs the current published release. The quick start below uses
-the 0.2.2 provider and gateway commands.
+Homebrew installs the current published release, v0.2.2. This source branch
+contains the 0.3.0 candidate; `auto-chain` is not in the published binary yet.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -31,7 +31,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.2.2 CLI**.
+This walkthrough describes the **0.3.0 candidate CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -57,6 +57,17 @@ configured scope matches it; use `REF/MODEL` to select a provider explicitly
 when scopes overlap. `/v1/models` lists qualified IDs. If you add a provider
 while the gateway is running, restart `tidemux serve` before using it. To
 configure just one protocol, add only its endpoint.
+
+Set one instance-wide ordered provider/model chain, then request `model:auto`:
+
+```sh
+tidemux auto-chain set fast model-fast reliable model-capable
+```
+
+Stable session IDs stay pinned to the selected pair, including after a
+classified failure. A request without a session ID gets a new request-scoped ID
+and is treated as a new session; the next client request without an ID is also
+a new session.
 
 ### 2. Start the gateway
 

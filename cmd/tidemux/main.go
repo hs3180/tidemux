@@ -23,13 +23,14 @@ import (
 )
 
 const (
-	version = "0.2.2"
+	version = "0.3.0"
 	usage   = `usage: tidemux <command> [options]
 
 commands:
   serve       start the local gateway
   doctor      check the configuration, Keychain and local state directory
   provider    add, inspect, edit and reset budgets for upstream providers
+  auto-chain  configure the instance-wide ordered provider/model fallback chain
   gateway     configure settings or check the running gateway
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
@@ -58,7 +59,9 @@ scope matches, or use PROVIDER/MODEL to choose explicitly when scopes overlap.
 The client protocol does not choose the provider. TideMux strips PROVIDER/
 from explicitly qualified IDs before forwarding upstream. Key failover is
 limited to safe failures within that provider group before response content is
-sent; TideMux never switches providers.
+sent. Configure the instance-wide chain with tidemux auto-chain set, then
+request model:auto; after a classified failure, only new sessions can select
+the next provider/model. A stable session stays pinned to its original pair.
 `
 )
 
@@ -82,6 +85,9 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "provider" {
 		return providerCommand(args[1:], stdout, stderr)
+	}
+	if command == "auto-chain" {
+		return autoChainCommand(args[1:], stdout, stderr)
 	}
 	if command == "gateway" {
 		return gatewayCommand(args[1:], stdout, stderr)

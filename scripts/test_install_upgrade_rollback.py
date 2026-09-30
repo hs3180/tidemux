@@ -99,20 +99,29 @@ def check_rollback_config(candidate_binary, baseline_binary, root):
     }
     config_path = root / "config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
-    run_config_command(candidate_binary, "provider", "auto-chain", "provider-a", "--models", "model-one,model-two", "--config", str(config_path))
+    run_config_command(
+        candidate_binary, "auto-chain", "set", "provider-a", "model-one",
+        "provider-a", "model-two", "--config", str(config_path),
+    )
     run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "random", "--billing-exhaustion-failover=true", "--config", str(config_path))
     run_config_command(candidate_binary, "provider", "error-map", "add", "provider-a", "--code", "upstream_busy", "--status", "503", "--category", "temporarily_unavailable", "--config", str(config_path))
     enabled = json.loads(config_path.read_text(encoding="utf-8"))
-    if (enabled["providers"]["provider-a"].get("auto_model_chain") != ["model-one", "model-two"]
-            or "routing" not in enabled
-            or enabled["providers"]["provider-a"].get("error_code_mappings", [{}])[0].get("category") != "temporarily_unavailable"):
+    expected_auto_chain = [
+        {"provider": "provider-a", "model": "model-one"},
+        {"provider": "provider-a", "model": "model-two"},
+    ]
+    if (
+        enabled.get("auto_chain") != expected_auto_chain
+        or "routing" not in enabled
+        or enabled["providers"]["provider-a"].get("error_code_mappings", [{}])[0].get("category") != "temporarily_unavailable"
+    ):
         raise RuntimeError("candidate did not persist the optional 0.3.0 routing settings")
 
-    run_config_command(candidate_binary, "provider", "auto-chain", "provider-a", "--clear", "--config", str(config_path))
+    run_config_command(candidate_binary, "auto-chain", "clear", "--config", str(config_path))
     run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "off", "--billing-exhaustion-failover=false", "--config", str(config_path))
     run_config_command(candidate_binary, "provider", "error-map", "remove", "provider-a", "--code", "upstream_busy", "--status", "503", "--config", str(config_path))
     rolled_back = json.loads(config_path.read_text(encoding="utf-8"))
-    if "routing" in rolled_back or "auto_model_chain" in rolled_back["providers"]["provider-a"]:
+    if "routing" in rolled_back or "auto_chain" in rolled_back:
         raise RuntimeError("candidate rollback commands left 0.3.0 routing fields in the config")
     run_config_command(baseline_binary, "provider", "list", "--config", str(config_path))
 

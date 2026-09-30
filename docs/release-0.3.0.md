@@ -6,9 +6,9 @@ assets, update the Homebrew tap, or announce availability.
 
 Baseline: published v0.2.2, tag `v0.2.2`, source commit
 `9223e0a802d7e15780ff189eaf0093e338121189`. The candidate keeps the existing
-JSON config and SQLite ledger formats. The optional `auto_model_chain` field
-and top-level `routing` field are omitted until configured; their disabled
-defaults remain readable by v0.2.2.
+JSON config and SQLite ledger formats. The optional top-level `auto_chain`
+field and `routing` field are omitted until configured; their disabled defaults
+remain readable by v0.2.2.
 
 ## 0.2.2 carry-forward audit
 
@@ -40,11 +40,14 @@ acceptance text and release checks. The `0.2.2` milestone was closed with all
   `tools` before dispatch. See `internal/adapter/tools_test.go`,
   `internal/gateway/tools_test.go` and
   `scripts/test_anthropic_server_tools_package.py`.
-- **[#40](https://github.com/hs3180/tidemux/issues/40): ordered `model:auto`
-  chains.** Configure one chain per provider with `provider auto-chain`; only
-  `auto` requests advance. Model-not-found, temporarily-unavailable,
-  insufficient-balance and pre-header transport classifications can advance
-  before output. Explicit model IDs stay pinned; output ends all retries.
+- **[#40](https://github.com/hs3180/tidemux/issues/40): one ordered,
+  instance-wide `model:auto` chain.** Configure cross-provider provider/model
+  pairs with `tidemux auto-chain`. Stable session IDs stay pinned to one pair;
+  requests without an ID get a request-scoped ID and count as new sessions.
+  Model-not-found, temporarily-unavailable, insufficient-balance and
+  pre-header transport classifications can advance the preferred pair for new
+  sessions before output. A request never switches pairs after a failure;
+  explicit model IDs stay pinned and output ends all retries.
 - **[#41](https://github.com/hs3180/tidemux/issues/41): shared-model choice.**
   `routing.shared_model_strategy` is opt-in (`random` or `price_priority`).
   Eligible providers must match the model scope, cooldown and request protocol
@@ -66,12 +69,12 @@ the features, use these commands to revert the config before replacing the
 binary with v0.2.2:
 
 ```sh
-tidemux provider auto-chain REF --clear
+tidemux auto-chain clear
 tidemux routing set --shared-model-strategy off --billing-exhaustion-failover=false
 ```
 
-Clear every provider's chain. The rollback commands remove the new fields from
-the config; v0.2.2 uses the same Keychain references and ledger. If any
+The rollback commands remove the new fields from the config; v0.2.2 uses the
+same Keychain references and ledger. If any
 provider error map uses the new `temporarily_unavailable` category, remove that
 mapping with `tidemux provider error-map remove REF --code CODE [--status STATUS]`
 before starting v0.2.2, which does not recognize that category.

@@ -6,6 +6,10 @@
   `web_search_20250305` without requiring a custom-tool `input_schema`, and
   preserve provider-specific fields on native Anthropic routes. Reject
   unsupported cross-protocol use with an actionable `tools` error.
+- Add one instance-wide ordered `model:auto` chain of provider/model pairs.
+  Stable session IDs stay pinned; requests without IDs receive request-scoped
+  IDs and count as new sessions. Classified failures advance the preferred
+  entry for new sessions without switching models within a request.
 
 ## 0.2.2 — 2026-09-29
 

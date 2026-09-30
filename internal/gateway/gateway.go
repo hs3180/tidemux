@@ -29,6 +29,7 @@ type handler struct {
 	budgetMu             sync.RWMutex
 	budgetBlocked        map[string]struct{}
 	sessions             *limiter.SessionLimiter
+	autoChain            *autoChainState
 	providers            map[string]Provider
 	clients              map[string]*adapter.Client
 	keyPools             map[string]*providerKeyPool
@@ -115,6 +116,9 @@ func (h *handler) allQualifiedModels() []string {
 func (h *handler) resolveRequestModel(modelID string) (providerName, model, code string, status int) {
 	if ref, suffix, qualified := parseQualifiedModelID(modelID); qualified {
 		if _, exists := h.providers[ref]; exists {
+			if suffix == "auto" {
+				return "", "", "auto_chain_requires_unqualified_model", http.StatusBadRequest
+			}
 			return ref, suffix, "", 0
 		}
 		// An upstream model may itself contain slashes. Without a matching
@@ -392,7 +396,41 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r = withRequestLogDetails(r, "", qualifiedModel)
-	providerName, model, routeError, routeStatus := h.resolveRequestModel(qualifiedModel)
+	if options.SessionID == "" {
+		options.SessionID = adapter.SessionID(protocol, body)
+	}
+	persistentSession := strings.TrimSpace(options.SessionID) != ""
+	if err := options.Validate(protocol); err != nil {
+		h.reject(w, r, protocol, 400, "invalid_session_id")
+		return
+	}
+	autoModel := qualifiedModel == "auto"
+	var autoSelection autoChainSelection
+	var providerName, model, routeError string
+	var routeStatus int
+	if autoModel {
+		if h.autoChain == nil || len(h.config.AutoChain) == 0 {
+			h.reject(w, r, protocol, http.StatusNotFound, "model_not_found", "model")
+			return
+		}
+		if !persistentSession {
+			options.SessionID, err = newRequestID()
+			if err != nil {
+				h.reject(w, r, protocol, http.StatusInternalServerError, "request_id_failed")
+				return
+			}
+		}
+		var ok bool
+		autoSelection, ok = h.autoChain.selectForSession(options.SessionID, persistentSession)
+		if !ok {
+			h.reject(w, r, protocol, http.StatusServiceUnavailable, "auto_chain_exhausted", "model")
+			return
+		}
+		providerName, model = autoSelection.provider, autoSelection.model
+		options.ResponseModel = model
+	} else {
+		providerName, model, routeError, routeStatus = h.resolveRequestModel(qualifiedModel)
+	}
 	if providerName != "" {
 		r = withRequestLogDetails(r, providerName, model)
 	}
@@ -406,11 +444,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, unavailable := h.unavailableProviders[providerName]; unavailable {
+		if autoModel {
+			h.autoChain.advanceForNewSessions(autoSelection.index)
+		}
 		h.reject(w, r, protocol, http.StatusServiceUnavailable, "provider_unavailable", "model")
 		return
 	}
 	providerClient := h.clients[providerName]
 	if providerClient == nil {
+		if autoModel {
+			h.autoChain.advanceForNewSessions(autoSelection.index)
+		}
 		h.reject(w, r, protocol, 404, "provider_not_found", "model")
 		return
 	}
@@ -427,19 +471,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 404, "model_not_found")
 		return
 	}
-	if options.SessionID == "" {
-		options.SessionID = adapter.SessionID(protocol, body)
-	}
-	if err := options.Validate(protocol); err != nil {
-		h.reject(w, r, protocol, 400, "invalid_session_id")
-		return
-	}
 	var mode struct {
 		Stream bool `json:"stream"`
 	}
 	_ = json.Unmarshal(body, &mode)
-	persistentSession := strings.TrimSpace(options.SessionID) != ""
-	if h.config.MaxActiveSessions > 0 && !persistentSession {
+	if h.config.MaxActiveSessions > 0 && !persistentSession && options.SessionID == "" {
 		options.SessionID, err = newRequestID()
 		if err != nil {
 			h.reject(w, r, protocol, 500, "request_id_failed")
@@ -576,6 +612,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	advanceAutoChain := func(callErr error, delivered bool) {
+		if !autoModel || h.autoChain == nil {
+			return
+		}
+		var upstreamErr *adapter.CallError
+		if errors.As(callErr, &upstreamErr) && autoChainFailureAdvances(upstreamErr, r.Context().Err(), delivered) {
+			h.autoChain.advanceForNewSessions(autoSelection.index)
+		}
+	}
 	if mode.Stream {
 		sent := false
 		send := func(id string, frame []byte) error {
@@ -596,6 +641,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		terminal, id, err := callProvider(send)
+		if err != nil {
+			advanceAutoChain(err, sent)
+		}
 		settle(id, err)
 		if err == nil {
 			send(id, terminal)
@@ -629,6 +677,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, id, err := callProvider(nil)
+	if err != nil {
+		advanceAutoChain(err, false)
+	}
 	settle(id, err)
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)

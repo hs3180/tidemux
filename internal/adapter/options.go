@@ -13,6 +13,7 @@ const SessionIDHeader = "X-TideMux-Session-ID"
 type CallOptions struct {
 	AnthropicBeta string
 	SessionID     string
+	ResponseModel string // Optional downstream model name override for model:auto.
 }
 
 func (o CallOptions) Validate(protocol string) error {
