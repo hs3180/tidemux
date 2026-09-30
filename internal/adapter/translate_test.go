@@ -77,6 +77,14 @@ func TestCrossProtocolAnthropicDocumentHasPreciseUnsupportedPath(t *testing.T) {
 	}
 }
 
+func TestCrossProtocolAnthropicServerToolIsExplicitlyUnsupported(t *testing.T) {
+	body := []byte(`{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"search"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":3}]}`)
+	_, _, _, err := PrepareRequestWithWarnings("anthropic", "openai", body, "", 0)
+	if err == nil || err.Error() != "unsupported_request_feature" || ValidationParameter(err) != "tools" {
+		t.Fatalf("err=%v param=%q", err, ValidationParameter(err))
+	}
+}
+
 func TestCrossProtocolAnthropicContextManagementIsForwardedWithoutFieldLoss(t *testing.T) {
 	body := []byte(`{"model":"m","max_tokens":4096,"messages":[{"role":"user","content":"continue"}],"thinking":{"type":"enabled","budget_tokens":1024},"context_management":{"edits":[{"type":"compact_20260112","trigger":{"type":"input_tokens","value":50000},"future_option":{"retain":true}}]}}`)
 	converted, _, warnings, err := PrepareRequestWithWarnings("anthropic", "openai", body, "", 0)

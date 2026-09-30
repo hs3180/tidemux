@@ -98,6 +98,27 @@ func (p *providerKeyPool) CooldownAt(index int, delay time.Duration, now time.Ti
 	p.mu.Unlock()
 }
 
+func (p *providerKeyPool) CooldownAll(delay time.Duration) {
+	if p == nil || len(p.keys) == 0 {
+		return
+	}
+	now := time.Now()
+	if delay < time.Second {
+		delay = time.Second
+	}
+	if delay > 24*time.Hour {
+		delay = 24 * time.Hour
+	}
+	until := now.Add(delay)
+	p.mu.Lock()
+	for index := range p.cooldowns {
+		if until.After(p.cooldowns[index]) {
+			p.cooldowns[index] = until
+		}
+	}
+	p.mu.Unlock()
+}
+
 // CandidateReadyAt rechecks a request's failover snapshot immediately before
 // trying a later key, so concurrent failures can take effect without waiting
 // for a new request to rebuild its candidate list.

@@ -17,7 +17,7 @@ func TestStreamingGatewayAudit(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		for _, scenario := range []string{"ok", "truncated", "error", "audit-failure"} {
 			t.Run(protocol+"/"+scenario, func(t *testing.T) {
-				start := `data: {"choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}` + "\n\n"
+				start := `data: {"choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}],"model":"custom-model","usage":{"prompt_tokens":3,"completion_tokens":2}}` + "\n\n"
 				end := "data: [DONE]\n\n"
 				if protocol == "anthropic" {
 					start = `event: message_start` + "\n" + `data: {"type":"message_start","message":{"role":"assistant","usage":{"input_tokens":3,"output_tokens":1}}}` + "\n\n" + `event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}` + "\n\n"

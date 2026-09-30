@@ -23,13 +23,14 @@ import (
 )
 
 const (
-	version = "0.2.2"
+	version = "0.3.0"
 	usage   = `usage: tidemux <command> [options]
 
 commands:
   serve       start the local gateway
   doctor      check the configuration, Keychain and local state directory
   provider    add, inspect, edit and reset budgets for upstream providers
+  routing     configure shared-model selection and billing failover
   gateway     configure settings or check the running gateway
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
@@ -53,12 +54,12 @@ common examples:
 Each provider uses one API protocol and endpoint, with one or more API keys
 stored in Keychain. Provider protocol is detected from bounded authenticated
 /models schema probes unless explicitly forced.
-Set each client's model to the upstream model ID when one configured provider
+Set each client's model to an upstream model ID when one configured provider
 scope matches, or use PROVIDER/MODEL to choose explicitly when scopes overlap.
 The client protocol does not choose the provider. TideMux strips PROVIDER/
-from explicitly qualified IDs before forwarding upstream. Key failover is
-limited to safe failures within that provider group before response content is
-sent; TideMux never switches providers.
+from explicitly qualified IDs before forwarding upstream. Configure an ordered
+provider auto-chain for model:auto; shared-model routing and billing-exhaustion
+failover are disabled by default.
 `
 )
 
@@ -82,6 +83,9 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "provider" {
 		return providerCommand(args[1:], stdout, stderr)
+	}
+	if command == "routing" {
+		return routingCommand(args[1:], stdout, stderr)
 	}
 	if command == "gateway" {
 		return gatewayCommand(args[1:], stdout, stderr)

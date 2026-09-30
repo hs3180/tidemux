@@ -1,9 +1,10 @@
 # Provider and gateway setup
 
-The 0.2.2 CLI uses resource-oriented commands. Provider setup and
+The 0.3.0 candidate CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
-retained. This guide describes the current release CLI.
+retained. The published release is still v0.2.2; use a 0.3.0 candidate binary
+to run the routing commands below.
 
 ## Add a provider
 
@@ -212,13 +213,76 @@ tidemux provider error-map remove REF --code key_throttled --status 429
 exact code-and-status entry wins over the same code's unqualified entry;
 duplicate code/status pairs are rejected. Valid categories are
 `insufficient_balance`, `rate_limited`, `authentication`, `permission_denied`,
-`policy_denied`, `invalid_request`, and `model_not_found`. Provider messages are
+`policy_denied`, `invalid_request`, `model_not_found`, and
+`temporarily_unavailable`. Provider messages are
 never inspected to infer a category or returned to the client. The response
 includes the protocol-native envelope, a safe actionable explanation, a stable
 TideMux code, and the upstream code if it contains only safe ASCII characters.
 Mapped errors retain the upstream 4xx status when it agrees with the mapped
 category; rate-limit mappings always use HTTP 429. Rate-limit mappings use the
 same bounded retry policy as HTTP 429.
+
+## Model fallback and shared-model routing
+
+An auto model chain belongs to one provider and preserves the listed order:
+
+```sh
+tidemux provider auto-chain REF
+tidemux provider auto-chain REF --models model-fast,model-capable
+tidemux provider auto-chain REF --clear
+```
+
+Use `model:auto` when exactly one provider has a configured chain, or
+`REF/auto` to select that provider explicitly. TideMux sends the actual chain
+model upstream and records it in the response path, usage, cost and audit row.
+An explicit `REF/MODEL` request stays pinned to that model. An auto chain can
+advance on an exact model-not-found or temporarily-unavailable mapping, an
+explicit insufficient-balance classification, or a transport failure proven
+to have happened before request headers were written. It never retries after
+stream output begins. HTTP 429 remains a bounded same-provider retry using
+`Retry-After`; it never selects another provider.
+
+Shared bare model IDs remain ambiguous unless a strategy is enabled:
+
+```sh
+tidemux routing show
+tidemux routing set --shared-model-strategy random
+tidemux routing set --shared-model-strategy price_priority
+tidemux routing set --shared-model-strategy off
+tidemux routing set --billing-exhaustion-failover=true
+tidemux routing set --billing-exhaustion-failover=false
+```
+
+The strategy applies to an unqualified bare model ID only. Eligible providers
+must include the model in `supported_models` when a scope is configured, be
+available and outside key cooldown, and accept the request's protocol-specific
+features. `random` selects uniformly from the eligible providers. `price_priority`
+chooses the lowest sum of input-cache-hit, input-cache-miss and output rates per
+million tokens. Every candidate must have all three rates in the same currency;
+missing or incomparable rates fail closed with `routing_price_unavailable`.
+Equal totals break ties by provider reference. A strategy and billing failover
+are both disabled by default.
+
+Cross-provider failover is a separate, explicit opt-in because it sends the
+request to another provider. It happens only when that provider profile maps an
+exact upstream code (and optional status) to `insufficient_balance`, and only
+for providers that support the same request model and protocol-specific
+features. Arbitrary 403 responses, policy errors, authentication failures,
+unmapped 5xx responses and 429 do not cross providers. TideMux tries at most
+four additional providers for one model and records each provider/model attempt
+separately. A mapped balance exhaustion cools all keys in that provider profile
+for five minutes; cooldowns reset when the gateway restarts. Budget reservations,
+usage and cost remain attached to the provider that handled each attempt.
+
+The new config fields are omitted while routing is disabled, so an untouched
+0.2.2 config remains readable by both versions. Before rolling back a config
+that uses 0.3.0 routing fields, clear each provider's auto chain and disable
+both routing options with the commands above; then install v0.2.2. The local
+ledger and Keychain entries do not need migration. Also remove any
+`temporarily_unavailable` error-code mapping first because v0.2.2 does not
+recognize that new category; list and remove mappings with
+`tidemux provider error-map list REF` and
+`tidemux provider error-map remove REF --code CODE [--status STATUS]`.
 
 ## Provider budget
 

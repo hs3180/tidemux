@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Test real 0.2.2 package installation, upgrade and rollback offline.
+"""Test release package installation, upgrade and rollback offline.
 
-Supply the locally built candidate directory and downloaded public v0.2.1
-release assets. The installer receives both versions from a mock curl command;
-no release URL is contacted.
+Supply the locally built candidate directory and public baseline release
+assets. The installer receives both versions from a mock curl command; no
+release URL is contacted.
 """
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -73,22 +74,67 @@ def check_version(binary, expected):
         raise RuntimeError(f"installed binary reports {actual!r}; expected {expected}")
 
 
+def run_config_command(binary, *args):
+    result = subprocess.run([str(binary), *args], text=True, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"{binary.name} {' '.join(args)} failed: {result.stderr or result.stdout}")
+    return result
+
+
+def check_rollback_config(candidate_binary, baseline_binary, root):
+    config = {
+        "listen_addr": "127.0.0.1:18765",
+        "max_in_flight": 1,
+        "ledger_path": str(root / "ledger.db"),
+        "access_token_keychain": {"service": "test.gateway", "account": "local"},
+        "providers": {
+            "provider-a": {
+                "protocol": "openai",
+                "base_url": "https://api.example.invalid/v1",
+                "upstream_id": "provider-a",
+                "upstream_keychain": {"service": "test.provider", "account": "provider-a"},
+                "supported_models": ["model-one", "model-two"],
+            }
+        },
+    }
+    config_path = root / "config.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    run_config_command(candidate_binary, "provider", "auto-chain", "provider-a", "--models", "model-one,model-two", "--config", str(config_path))
+    run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "random", "--billing-exhaustion-failover=true", "--config", str(config_path))
+    run_config_command(candidate_binary, "provider", "error-map", "add", "provider-a", "--code", "upstream_busy", "--status", "503", "--category", "temporarily_unavailable", "--config", str(config_path))
+    enabled = json.loads(config_path.read_text(encoding="utf-8"))
+    if (enabled["providers"]["provider-a"].get("auto_model_chain") != ["model-one", "model-two"]
+            or "routing" not in enabled
+            or enabled["providers"]["provider-a"].get("error_code_mappings", [{}])[0].get("category") != "temporarily_unavailable"):
+        raise RuntimeError("candidate did not persist the optional 0.3.0 routing settings")
+
+    run_config_command(candidate_binary, "provider", "auto-chain", "provider-a", "--clear", "--config", str(config_path))
+    run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "off", "--billing-exhaustion-failover=false", "--config", str(config_path))
+    run_config_command(candidate_binary, "provider", "error-map", "remove", "provider-a", "--code", "upstream_busy", "--status", "503", "--config", str(config_path))
+    rolled_back = json.loads(config_path.read_text(encoding="utf-8"))
+    if "routing" in rolled_back or "auto_model_chain" in rolled_back["providers"]["provider-a"]:
+        raise RuntimeError("candidate rollback commands left 0.3.0 routing fields in the config")
+    run_config_command(baseline_binary, "provider", "list", "--config", str(config_path))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--candidate-dir", required=True, type=Path, help="local release.py output directory for 0.2.2")
-    parser.add_argument("--baseline-dir", required=True, type=Path, help="directory containing public v0.2.1 SHA256SUMS and archive")
+    parser.add_argument("--candidate-dir", required=True, type=Path, help="local release.py output directory")
+    parser.add_argument("--baseline-dir", required=True, type=Path, help="directory containing baseline SHA256SUMS and archive")
+    parser.add_argument("--candidate-version", default="0.2.2", help="candidate version (default: 0.2.2)")
+    parser.add_argument("--baseline-version", default="0.2.1", help="baseline version (default: 0.2.1)")
     args = parser.parse_args()
     candidate_dir = args.candidate_dir.resolve()
     baseline_dir = args.baseline_dir.resolve()
-    candidate = find_archive(candidate_dir, "0.2.2")
-    baseline = find_archive(baseline_dir, "0.2.1")
+    candidate = find_archive(candidate_dir, args.candidate_version)
+    baseline = find_archive(baseline_dir, args.baseline_version)
     candidate_sha = verify_manifest(candidate_dir, candidate)
     baseline_sha = verify_manifest(baseline_dir, baseline)
 
     with tempfile.TemporaryDirectory(prefix="tidemux-install-upgrade-rollback.") as temporary:
         root = Path(temporary)
         releases = root / "mock-releases"
-        for version, source_dir, archive in (("0.2.1", baseline_dir, baseline), ("0.2.2", candidate_dir, candidate)):
+        for version, source_dir, archive in ((args.baseline_version, baseline_dir, baseline), (args.candidate_version, candidate_dir, candidate)):
             version_dir = releases / version
             version_dir.mkdir(parents=True)
             shutil.copyfile(source_dir / "SHA256SUMS", version_dir / "SHA256SUMS")
@@ -113,24 +159,30 @@ def main():
 
         clean_install = root / "clean install"
         clean_install.mkdir()
-        run_installer("0.2.2", clean_install, mock_bin, releases, root)
-        check_version(clean_install / "tidemux", "0.2.2")
+        run_installer(args.candidate_version, clean_install, mock_bin, releases, root)
+        check_version(clean_install / "tidemux", args.candidate_version)
 
         upgrade_install = root / "upgrade and rollback"
         upgrade_install.mkdir()
         old_binary = upgrade_install / "tidemux"
-        package_binary(baseline, "0.2.1", old_binary)
-        check_version(old_binary, "0.2.1")
-        run_installer("0.2.2", upgrade_install, mock_bin, releases, root)
-        check_version(old_binary, "0.2.2")
-        run_installer("0.2.1", upgrade_install, mock_bin, releases, root)
-        check_version(old_binary, "0.2.1")
+        baseline_binary = root / f"tidemux-{args.baseline_version}"
+        package_binary(baseline, args.baseline_version, baseline_binary)
+        shutil.copyfile(baseline_binary, old_binary)
+        old_binary.chmod(0o755)
+        check_version(old_binary, args.baseline_version)
+        run_installer(args.candidate_version, upgrade_install, mock_bin, releases, root)
+        check_version(old_binary, args.candidate_version)
+        check_rollback_config(old_binary, baseline_binary, root)
+        run_installer(args.baseline_version, upgrade_install, mock_bin, releases, root)
+        check_version(old_binary, args.baseline_version)
+        run_config_command(old_binary, "provider", "list", "--config", str(root / "config.json"))
         if list(upgrade_install.glob(".tidemux-install.*")) or list(clean_install.glob(".tidemux-install.*")):
             raise RuntimeError("installer left a temporary executable behind")
 
         print(
-            "0.2.2 clean install, 0.2.1 -> 0.2.2 upgrade, and 0.2.2 -> 0.2.1 rollback passed "
-            f"using local mock assets (v0.2.1 sha256={baseline_sha}; v0.2.2 sha256={candidate_sha})."
+            f"{args.candidate_version} clean install, {args.baseline_version} -> {args.candidate_version} upgrade, "
+            f"{args.candidate_version} -> {args.baseline_version} rollback, and config rollback passed "
+            f"using local mock assets (baseline sha256={baseline_sha}; candidate sha256={candidate_sha})."
         )
 
 

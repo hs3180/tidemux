@@ -565,7 +565,7 @@ func TestNamedProviderQualifiedModelRoutesAcrossClientProtocols(t *testing.T) {
 }
 
 func TestIndependentProvidersNativeStreamingUsesMatchingProvider(t *testing.T) {
-	openAIStream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"openai\"},\"finish_reason\":\"stop\"}]}\n\n" + "data: [DONE]\n\n"
+	openAIStream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"openai\"},\"finish_reason\":\"stop\"}],\"model\":\"custom-model\"}\n\n" + "data: [DONE]\n\n"
 	anthropicStream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"custom-model\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n" +
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"

@@ -21,7 +21,7 @@ import (
 
 func providerCommand(args []string, stdout, stderr *os.File) error {
 	if len(args) == 0 {
-		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget|error-map>")
+		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget|error-map|auto-chain>")
 	}
 	switch args[0] {
 	case "add":
@@ -49,8 +49,10 @@ func providerCommand(args []string, stdout, stderr *os.File) error {
 		return providerBudgetCommand(args[1:], os.Stdin, stdout, stderr)
 	case "error-map":
 		return providerErrorMapCommand(args[1:], stdout, stderr)
+	case "auto-chain":
+		return providerAutoChainCommand(args[1:], stdout, stderr)
 	default:
-		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget|error-map>")
+		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget|error-map|auto-chain>")
 	}
 }
 

@@ -178,7 +178,7 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 	if err := LenientJSON(filtered, &in); err != nil {
 		return nil, "", nil, validationErrorFromJSON(err)
 	}
-	warnings := ignoredRequestFields(data, in)
+	warnings := ignoredRequestFields(data, in, protocol)
 	warnings = append(warnings, foreignFields...)
 	warnings = sortedUniqueStrings(warnings)
 	if in.Model == "" {

@@ -241,6 +241,11 @@ func translateAnthropicRequestWithWarnings(data []byte, defaultModel string) ([]
 	if err := StrictJSON(validated, &in); err != nil {
 		return nil, "", warnings, errors.New("invalid_request")
 	}
+	for _, tool := range in.Tools {
+		if tool.Type != "" && tool.Type != "custom" {
+			return nil, "", warnings, validationError("unsupported_request_feature", "tools")
+		}
+	}
 	warnings = append(warnings, anthropicConversionLosses(in)...)
 	warnings = sortedUniqueStrings(warnings)
 	system, messages, err := translateAnthropicMessages(in.System, in.Messages)
@@ -1086,7 +1091,7 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 		if json.Unmarshal(object["message"], &message) != nil {
 			return nil, errors.New("invalid_upstream_stream")
 		}
-		t.id, t.model = message.ID, firstNonEmpty(message.Model, t.model)
+		t.id = message.ID
 		if input, ok := anthropicInputTokens(message.Usage); ok {
 			t.inputTokens = &input
 		}
@@ -1261,9 +1266,6 @@ func (t *openAIStreamTranslator) frame(frame []byte) ([]byte, error) {
 	}
 	if chunk.ID != "" {
 		t.id = chunk.ID
-	}
-	if chunk.Model != "" {
-		t.model = chunk.Model
 	}
 	t.updateUsage(chunk.Usage)
 	var output []byte

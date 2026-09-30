@@ -39,19 +39,42 @@ func ValidationParameter(err error) string {
 		return validation.Param
 	}
 	switch errString := strings.TrimSpace(err.Error()); errString {
-	case "model", "thinking", "stream_options", "context_management", "response_format", "output_config", "parallel_tool_calls", "messages", "tools", "tool_choice", "tool_calls", "tool_call_id", "reasoning_content", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "stop_sequences", "system", "invalid_session_id", "invalid_beta_header":
+	case "model", "thinking", "stream_options", "context_management", "response_format", "output_config", "parallel_tool_calls", "messages", "tools", "tool_choice", "tool_calls", "tool_call_id", "reasoning_content", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "stop_sequences", "system", "invalid_session_id", "invalid_beta_header", "unsupported_request_feature":
 		return errString
 	default:
 		return ""
 	}
 }
 
-func ignoredRequestFields(data []byte, input Input) []string {
+func ignoredRequestFields(data []byte, input Input, protocol string) []string {
 	var value any
 	if json.Unmarshal(data, &value) != nil {
 		return nil
 	}
 	fields := collectUnknownFields(value, reflect.TypeOf(Input{}), "")
+	if protocol == "anthropic" {
+		preserved := make(map[string]struct{})
+		for index, tool := range input.Tools {
+			if tool.Type == "" || tool.Type == "custom" {
+				continue
+			}
+			preserved[fmt.Sprintf("tools[%d]", index)] = struct{}{}
+		}
+		filtered := fields[:0]
+		for _, field := range fields {
+			drop := false
+			for prefix := range preserved {
+				if strings.HasPrefix(field, prefix+".") {
+					drop = true
+					break
+				}
+			}
+			if !drop {
+				filtered = append(filtered, field)
+			}
+		}
+		fields = filtered
+	}
 	for index, tool := range input.Tools {
 		if tool.EagerInputStreaming != nil {
 			fields = append(fields, fmt.Sprintf("tools[%d].eager_input_streaming", index))

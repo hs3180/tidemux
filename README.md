@@ -22,8 +22,9 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-Homebrew installs the current published release. The quick start below uses
-the 0.2.2 provider and gateway commands.
+Homebrew installs the current published release, v0.2.2. This source branch
+builds the v0.3.0 candidate; its new routing options are not part of the
+published binary yet.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -31,7 +32,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.2.2 CLI**.
+This walkthrough describes the **0.3.0 candidate CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -57,6 +58,14 @@ configured scope matches it; use `REF/MODEL` to select a provider explicitly
 when scopes overlap. `/v1/models` lists qualified IDs. If you add a provider
 while the gateway is running, restart `tidemux serve` before using it. To
 configure just one protocol, add only its endpoint.
+
+The 0.3.0 candidate also accepts Anthropic provider-hosted tools such as
+`web_search_20250305` on Anthropic upstream routes. Configure an ordered model
+chain with `tidemux provider auto-chain REF --models MODEL_A,MODEL_B`; then use
+`model:auto` (or `REF/auto`) to request that chain. Shared bare model IDs remain
+ambiguous by default. `tidemux routing set --shared-model-strategy random` or
+`price_priority` opts into selection, and billing-exhaustion failover is a
+separate opt-in that requires an exact `insufficient_balance` provider mapping.
 
 ### 2. Start the gateway
 
@@ -139,8 +148,8 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.2.2 CLI; older binaries
-may expose a different command set.
+`tidemux gateway`. The commands below describe the 0.3.0 candidate CLI; the
+published v0.2.2 binary does not include the candidate routing commands.
 
 | Command | Semantics |
 | --- | --- |
@@ -159,6 +168,8 @@ may expose a different command set.
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
 | `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
 | `tidemux provider budget reset REF --window 5h (or 7d)` | Reset only that provider's selected rolling budget window. Stop the gateway before reset, then restart it; request audit and billing history remain intact. |
+| `tidemux provider auto-chain REF [--models ID[,ID...]] [--clear]` | Inspect or set the ordered models used only for `model:auto`; explicit model IDs remain pinned. |
+| `tidemux routing show` / `tidemux routing set` | Inspect and opt into shared bare-model selection or exact billing-exhaustion cross-provider failover. Both routing settings default off. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
 
 Provider identity does not depend on a user-chosen name. TideMux creates and
@@ -261,6 +272,7 @@ tidemux claude --model REF_FROM_LIST/model-a
 [Client setup](docs/clients.md) ·
 [Agent installation and setup](docs/agent-install.md) ·
 [Runtime JSON logs](docs/runtime-logging.md) ·
+[0.3.0 candidate plan](docs/release-0.3.0.md) ·
 [0.2.2 release plan](docs/release-0.2.2.md) ·
 [0.2.1 release history](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·

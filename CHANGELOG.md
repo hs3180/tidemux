@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 — release candidate
+
+- Accept and forward Anthropic provider-hosted tools such as
+  `web_search_20250305`, including provider extension fields, without requiring
+  custom-tool `input_schema`; reject unsupported cross-protocol use with a
+  field-specific error.
+- Add ordered per-provider model chains for `model:auto` and `REF/auto`, with
+  pre-response classified fallback and actual model attribution in responses,
+  usage, cost and audit records.
+- Add opt-in `random` and `price_priority` routing for shared bare model IDs.
+  Price priority requires complete, same-currency rates and has deterministic
+  provider-reference tie breaking.
+- Add opt-in cross-provider failover only for exact `insufficient_balance`
+  error mappings; arbitrary 403 responses and 429 never switch providers.
+- Keep both routing options disabled by default, omit the new routing config
+  fields unless enabled, and retain the v0.2.2 config and ledger format.
+- Add provider auto-chain and routing CLI commands plus rollback guidance.
+
 ## 0.2.2 — 2026-09-29
 
 - Route bare upstream model IDs when exactly one configured provider scope can

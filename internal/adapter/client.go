@@ -42,6 +42,10 @@ type CallError struct {
 	// request was dispatched to the provider. The gateway may then release a
 	// budget reservation instead of treating the missing usage as unknown.
 	UpstreamNotAttempted bool
+	// FailoverSafe is set only for failures whose classification proves the
+	// provider rejected the request before completing model work, or for a
+	// transport failure before request headers were written.
+	FailoverSafe bool
 	// BudgetCost preserves a known charge when the audit row itself cannot be
 	// written. It is internal accounting data and is never sent to clients.
 	BudgetCost     *float64
@@ -184,7 +188,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		if err != nil {
 			var callErr *CallError
 			if errors.As(err, &callErr) {
-				callErr.UpstreamNotAttempted = !attempted
+				if !attempted {
+					callErr.UpstreamNotAttempted = true
+				}
 			}
 		}
 		status := terminalHTTPStatus(clientProtocol, delivered, err)
@@ -473,6 +479,8 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		if !headersWritten.Load() && ctx.Err() == nil {
 			callErr.Retryable = true
 			callErr.Cooldown = 5 * time.Second
+			callErr.UpstreamNotAttempted = true
+			callErr.FailoverSafe = true
 		}
 		return nil, TokenUsage{}, callErr
 	}
@@ -497,6 +505,8 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 					}
 					return &CallError{Status: 502, Code: "invalid_upstream_stream"}
 				}
+			} else {
+				frame = setStreamResponseModel(clientProtocol, frame, model)
 			}
 			if len(frame) == 0 {
 				return nil
@@ -511,6 +521,8 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		}, streamErrorContext{response: resp, mappings: c.ErrorCodeMappings})
 		if err == nil && translator != nil {
 			data, err = translator.terminal(data)
+		} else if err == nil {
+			data = setStreamResponseModel(clientProtocol, data, model)
 		}
 		if translator != nil {
 			logConversionWarnings(c.Logger, clientProtocol, c.Protocol, translator.warnings())
@@ -545,5 +557,6 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		}
 		return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_response"}
 	}
+	data = setResponseModel(clientProtocol, data, model)
 	return data, usage, nil
 }

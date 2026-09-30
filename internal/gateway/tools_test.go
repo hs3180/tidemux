@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -139,4 +140,82 @@ func TestAnthropicToolContinuationThroughOpenAIProvider(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("provider calls=%d want 2", calls)
 	}
+}
+
+func TestNativeAnthropicServerToolIsForwardedUnchanged(t *testing.T) {
+	const toolDefinition = `{"type":"web_search_20250305","name":"web_search","max_uses":3,"allowed_domains":["example.com"],"user_location":{"type":"approximate","country":"US","city":"Seattle"},"provider_extension":{"mode":"fast","limits":[1,2]}}`
+	var received []byte
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			io.WriteString(w, `{"data":[{"id":"claude-test","type":"model"}],"has_more":false}`)
+			return
+		}
+		received, _ = io.ReadAll(r.Body)
+		io.WriteString(w, responseBody("anthropic"))
+	}))
+	defer up.Close()
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/v1"), "anthropic-main")
+	provider := c.Providers["anthropic-main"]
+	provider.Protocol = "anthropic"
+	provider.SupportedModels = []string{"claude-test"}
+	c.Providers["anthropic-main"] = provider
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := `{"model":"anthropic-main/claude-test","max_tokens":64,"messages":[{"role":"user","content":"search"}],"tools":[` + toolDefinition + `]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "local-secret")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+	}
+	var got struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(received, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tools) != 1 || !jsonEqual(got.Tools[0], json.RawMessage(toolDefinition)) {
+		t.Fatalf("server tool changed in upstream request: %s", received)
+	}
+}
+
+func TestCrossProtocolAnthropicServerToolReturnsActionableError(t *testing.T) {
+	posts := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+			return
+		}
+		posts++
+		io.WriteString(w, responseBody("openai"))
+	}))
+	defer up.Close()
+	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL+"/v1"), "openai-main")
+	provider := c.Providers["openai-main"]
+	provider.SupportedModels = []string{"custom-model"}
+	c.Providers["openai-main"] = provider
+	h, closeDB, err := NewHandler(c, up.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	body := `{"model":"openai-main/custom-model","max_tokens":64,"messages":[{"role":"user","content":"search"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":3}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "local-secret")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	if out.Code != http.StatusBadRequest || !strings.Contains(out.Body.String(), "unsupported_request_feature") || !strings.Contains(out.Body.String(), "tools cannot be represented") || posts != 0 {
+		t.Fatalf("status=%d posts=%d body=%s", out.Code, posts, out.Body.String())
+	}
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	var left, right any
+	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
 }

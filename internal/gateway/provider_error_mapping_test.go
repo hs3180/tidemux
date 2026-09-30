@@ -125,6 +125,7 @@ func TestMapped429RetriesOnlySelectedProviderProfile(t *testing.T) {
 	providerB.APIKey = "provider-secret-b"
 	c.Providers["provider-a"] = providerA
 	c.Providers["provider-b"] = providerB
+	c.Routing = &RoutingConfig{BillingExhaustionFailover: true}
 	h, closeDB, err := NewHandler(c, nil)
 	if err != nil {
 		t.Fatal(err)
