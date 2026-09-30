@@ -52,7 +52,11 @@ def build_artifacts(dest,commit,version,build_id):
         with tarfile.open(asset,'w:gz') as archive:archive.add(stage,arcname=stage.name)
         for name in ['sbom.spdx.json','BUILD.txt']:shutil.copyfile(stage/name,dest/name)
     sha=digest(asset)
-    formula=f'''class Tidemux < Formula
+    formula=f'''# typed: strict
+# frozen_string_literal: true
+
+# Homebrew formula for the TideMux local API gateway.
+class Tidemux < Formula
   desc "Local OpenAI and Anthropic compatible API gateway"
   homepage "https://github.com/hs3180/tidemux"
   url "https://github.com/hs3180/tidemux/releases/download/v{version}/{asset.name}"
