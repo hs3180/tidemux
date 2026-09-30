@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+- Accept Anthropic provider-hosted tool definitions such as
+  `web_search_20250305` without requiring a custom-tool `input_schema`, and
+  preserve provider-specific fields on native Anthropic routes. Reject
+  unsupported cross-protocol use with an actionable `tools` error.
+
 ## 0.2.2 — 2026-09-29
 
 - Route bare upstream model IDs when exactly one configured provider scope can

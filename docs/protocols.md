@@ -122,9 +122,11 @@ Unknown request fields are ignored with a gateway log warning. Unknown config
 fields, duplicate JSON keys, multiple JSON documents, malformed tool envelopes
 and invalid beta headers are rejected.
 Native Anthropic routes preserve documented image, document, citation and
-server-tool content blocks for the upstream to validate. TideMux does not
-translate these blocks to OpenAI Chat Completions; a cross-protocol request
-receives a field-specific unsupported-feature error. Audio, Responses API,
+server-tool content blocks for the upstream to validate. Provider-hosted tools
+such as `web_search_20250305` may omit `input_schema`; their provider-specific
+fields are forwarded on native Anthropic routes. TideMux does not translate
+these tools to OpenAI Chat Completions; a cross-protocol request receives a
+field-specific unsupported-feature error. Audio, Responses API,
 embeddings, batches and token-counting endpoints are not implemented. These
 remain explicit boundaries; normal tested client workflows do not prove every
 client feature or every upstream model is supported. See the

@@ -15,14 +15,78 @@ type Function struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 type Tool struct {
-	Type                string          `json:"type,omitempty"`
-	Function            *Function       `json:"function,omitempty"`
-	Name                string          `json:"name,omitempty"`
-	Description         string          `json:"description,omitempty"`
-	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
-	CacheControl        *CacheControl   `json:"cache_control,omitempty"`
-	EagerInputStreaming *bool           `json:"eager_input_streaming,omitempty"`
+	Type                string                     `json:"type,omitempty"`
+	Function            *Function                  `json:"function,omitempty"`
+	Name                string                     `json:"name,omitempty"`
+	Description         string                     `json:"description,omitempty"`
+	InputSchema         json.RawMessage            `json:"input_schema,omitempty"`
+	CacheControl        *CacheControl              `json:"cache_control,omitempty"`
+	EagerInputStreaming *bool                      `json:"eager_input_streaming,omitempty"`
+	Extensions          map[string]json.RawMessage `json:"-"`
 }
+
+// HasAnthropicServerTools reports whether an Anthropic request requires a
+// provider that natively accepts provider-hosted tool definitions.
+func HasAnthropicServerTools(data []byte) bool {
+	var request struct {
+		Tools []Tool `json:"tools"`
+	}
+	if json.Unmarshal(data, &request) != nil {
+		return false
+	}
+	for _, tool := range request.Tools {
+		if tool.Type != "" && tool.Type != "custom" {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Tool) UnmarshalJSON(data []byte) error {
+	type wireTool Tool
+	var decoded wireTool
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	known := map[string]struct{}{
+		"type": {}, "function": {}, "name": {}, "description": {}, "input_schema": {},
+		"cache_control": {}, "eager_input_streaming": {},
+	}
+	*t = Tool(decoded)
+	for key, value := range fields {
+		if _, ok := known[strings.ToLower(key)]; ok {
+			continue
+		}
+		if t.Extensions == nil {
+			t.Extensions = make(map[string]json.RawMessage)
+		}
+		t.Extensions[key] = append(json.RawMessage(nil), value...)
+	}
+	return nil
+}
+
+func (t Tool) MarshalJSON() ([]byte, error) {
+	type wireTool Tool
+	encoded, err := json.Marshal(wireTool(t))
+	if err != nil || t.Type == "" || t.Type == "custom" || len(t.Extensions) == 0 {
+		return encoded, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	for key, value := range t.Extensions {
+		if _, exists := fields[key]; !exists {
+			fields[key] = value
+		}
+	}
+	return json.Marshal(fields)
+}
+
 type ToolCall struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
@@ -53,7 +117,11 @@ func validTools(protocol string, tools []Tool) bool {
 				return false
 			}
 		} else {
-			if t.Type != "" && t.Type != "custom" || t.Function != nil || strings.TrimSpace(t.Name) == "" || !object(t.InputSchema) || !t.CacheControl.valid() {
+			if t.Type == "" || t.Type == "custom" {
+				if t.Function != nil || strings.TrimSpace(t.Name) == "" || !object(t.InputSchema) || !t.CacheControl.valid() {
+					return false
+				}
+			} else if t.Function != nil || strings.TrimSpace(t.Name) == "" || !t.CacheControl.valid() {
 				return false
 			}
 		}
