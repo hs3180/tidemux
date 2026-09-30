@@ -158,9 +158,10 @@ upstream model name (which may itself contain slashes). The client protocol does
 not choose a provider. TideMux strips only the first `REF/` prefix before
 forwarding an explicitly qualified request. Either client protocol can target
 any provider; cross-protocol conversion is applied when needed. Provider
-failures do not trigger a retry on another provider. Removal asks for
-confirmation; non-interactive removal requires `--yes`. A Keychain item is
-removed only when no remaining provider references it.
+failures do not trigger a retry on another provider by default. The opt-in
+billing-exhaustion setting is described below. Removal asks for confirmation;
+non-interactive removal requires `--yes`. A Keychain item is removed only when
+no remaining provider references it.
 
 With no scope option, `provider models` queries and prints the authenticated
 model catalog when the endpoint exposes a complete, recognizable list. Use
@@ -287,6 +288,28 @@ a running gateway after changing the chain.
 Provider-qualified `REF/auto` is not used with the instance-wide chain. Clear
 the chain before rolling a config back to v0.2.2 because that version does not
 recognize the `auto_chain` field.
+
+## Billing exhaustion failover (0.3.0 candidate)
+
+Cross-provider failover is disabled by default. Enable it to try another
+provider for the same model after an exact upstream error code maps to
+`insufficient_balance`:
+
+```sh
+tidemux routing show
+tidemux routing set --billing-exhaustion-failover true
+tidemux routing set --billing-exhaustion-failover false
+```
+
+The alternate must support the requested model. For Anthropic server-hosted
+tools, it must also use the Anthropic protocol. TideMux tries at most four
+alternates, keeps usage and budget records attributed to each provider, and
+places the exhausted provider's keys on a five-minute cooldown. Other 403s,
+429s, arbitrary upstream errors and model or budget failures do not cause a
+provider switch. `model:auto` remains governed by its session-aware chain: a
+failure does not switch the provider/model within that request or its existing
+session. After `/reset`, the client's new session may select the next chain
+entry. Turn the setting off with the command above to roll back.
 
 ## Gateway-wide settings
 

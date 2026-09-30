@@ -130,7 +130,9 @@ without trying another key or provider. Eligible 401/403 and transport failures
 before request headers are written can still fail over within the selected
 provider's key group. TideMux stops retrying once response content may have
 reached the client. Gateway auth, session limits and ledger accounting remain
-shared.
+shared. Cross-provider billing failover is disabled by default; when enabled,
+it applies only to an exact `insufficient_balance` classification and keeps
+the requested model unchanged.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
 not certify the 0.2.2 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.
@@ -150,8 +152,9 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.2.2 CLI; older binaries
-may expose a different command set.
+`tidemux gateway`. The commands below describe the 0.3.0 candidate CLI; the
+published v0.2.2 binary does not include the candidate model-chain and routing
+options.
 
 | Command | Semantics |
 | --- | --- |
@@ -171,6 +174,7 @@ may expose a different command set.
 | `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
 | `tidemux provider budget reset REF --window 5h (or 7d)` | Reset only that provider's selected rolling budget window. Stop the gateway before reset, then restart it; request audit and billing history remain intact. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
+| `tidemux routing show` / `tidemux routing set --billing-exhaustion-failover true\|false` | Inspect or opt in to same-model provider failover after an `insufficient_balance` error. |
 
 Provider identity does not depend on a user-chosen name. TideMux creates and
 prints a stable reference derived from the endpoint; `--name` optionally

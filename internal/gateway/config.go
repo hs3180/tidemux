@@ -104,6 +104,7 @@ type Config struct {
 	BaseURL                         string                   `json:"base_url,omitempty"`
 	Providers                       map[string]Provider      `json:"providers,omitempty"`
 	AutoChain                       []AutoChainEntry         `json:"auto_chain,omitempty"`
+	Routing                         *RoutingConfig           `json:"routing,omitempty"`
 	Model                           string                   `json:"model,omitempty"` // deprecated field decoded from old single-provider configs; never used for routing
 	UpstreamID                      string                   `json:"upstream_id,omitempty"`
 	APIVersion                      string                   `json:"anthropic_version,omitempty"`
@@ -118,6 +119,19 @@ type Config struct {
 	AccessToken                     string                   `json:"-"`
 	ReportWebhookURL                string                   `json:"-"`
 }
+
+type RoutingConfig struct {
+	BillingExhaustionFailover bool `json:"billing_exhaustion_failover,omitempty"`
+}
+
+func (c Config) EffectiveRouting() RoutingConfig {
+	if c.Routing == nil {
+		return RoutingConfig{}
+	}
+	return *c.Routing
+}
+
+func (r RoutingConfig) Validate() error { return nil }
 
 const maxAutoChainEntries = 64
 
@@ -238,6 +252,11 @@ func (c Config) Validate() error {
 	}
 	if err := c.ReportWebhook.Validate(); err != nil {
 		return err
+	}
+	if c.Routing != nil {
+		if err := c.Routing.Validate(); err != nil {
+			return err
+		}
 	}
 	if c.ReportSchedule.Channel == "webhook" && c.ReportWebhook == (ReportWebhookConfig{}) {
 		return errors.New("webhook report schedule requires report_webhook configuration")
