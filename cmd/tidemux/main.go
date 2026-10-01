@@ -31,6 +31,7 @@ commands:
   doctor      check the configuration, Keychain and local state directory
   provider    add, inspect, edit and reset budgets for upstream providers
   auto-chain  configure the instance-wide ordered provider/model fallback chain
+  routing     configure routing and billing failover
   gateway     configure settings or check the running gateway
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
@@ -88,6 +89,9 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "auto-chain" {
 		return autoChainCommand(args[1:], stdout, stderr)
+	}
+	if command == "routing" {
+		return routingCommand(args[1:], stdout, stderr)
 	}
 	if command == "gateway" {
 		return gatewayCommand(args[1:], stdout, stderr)

@@ -10,6 +10,9 @@
   Stable session IDs stay pinned; requests without IDs receive request-scoped
   IDs and count as new sessions. Classified failures advance the preferred
   entry for new sessions without switching models within a request.
+- Add opt-in same-model provider failover for errors exactly mapped to
+  `insufficient_balance`; keep billing and usage records attributed per
+  provider and cool down the exhausted provider's keys for five minutes.
 
 ## 0.2.2 — 2026-09-29
 

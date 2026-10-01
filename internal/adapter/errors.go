@@ -172,6 +172,9 @@ func mappedProviderError(resp *http.Response, category ProviderErrorCategory, pr
 	_, code, _, _ := category.ClientError("openai")
 	status := mappedHTTPStatus(category, resp.StatusCode)
 	result := &CallError{Status: status, Code: code, ProviderCode: providerCode, Category: category, UpstreamStatus: resp.StatusCode}
+	if category == ProviderErrorInsufficientBalance {
+		result.FailoverSafe = true
+	}
 	if category == ProviderErrorRateLimited {
 		result.RateLimited = true
 		result.Retryable = true
