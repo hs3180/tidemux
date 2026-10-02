@@ -1,19 +1,30 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 — release candidate
 
-- Accept Anthropic provider-hosted tool definitions such as
-  `web_search_20250305` without requiring a custom-tool `input_schema`, and
-  preserve provider-specific fields on native Anthropic routes. Reject
-  unsupported cross-protocol use with an actionable `tools` error.
-- Add one instance-wide ordered `model:auto` chain of provider/model pairs.
-  Stable session IDs stay pinned; requests without IDs receive request-scoped
-  IDs and count as new sessions. Classified failures advance the preferred
-  entry for new sessions without switching models within a request.
-- Add opt-in random routing for shared bare model IDs.
-- Add opt-in same-model provider failover for errors exactly mapped to
-  `insufficient_balance`; keep billing and usage records attributed per
-  provider and cool down the exhausted provider's keys for five minutes.
+- Accept and forward Anthropic provider-hosted tools such as
+  `web_search_20250305`, including provider extension fields, without requiring
+  custom-tool `input_schema`; reject unsupported cross-protocol use with a
+  field-specific error.
+- Add one ordered instance `auto_chain` of provider/model pairs for `model:auto`.
+  Stable sessions remain pinned across failures; classified safe failures before
+  output advance only the preference for new sessions. Requests without IDs get
+  fresh request-scoped IDs. Reject `REF/auto` and attribute actual routes in
+  responses, usage, cost and audit records.
+- Add opt-in `random` and `price_priority` routing for shared bare model IDs.
+  Price priority requires complete, same-currency rates and has deterministic
+  provider-reference tie breaking.
+- Bind random shared-model routing to stable sessions with atomic first
+  selection, hashed caller/protocol/model/session keys and a 24-hour idle TTL.
+  Rebind unavailable providers before dispatch; never replay a dispatched
+  request to maintain affinity. Bindings reset on gateway restart.
+- Add opt-in cross-provider failover only for exact `insufficient_balance`
+  error mappings; arbitrary 403 responses and 429 never switch providers.
+- Keep both routing options disabled by default, omit the new routing config
+  fields unless enabled, and retain the v0.2.2 config and ledger format.
+- Add top-level auto-chain and routing CLI commands plus rollback guidance.
+- Record the selected `provider_ref` in audit JSON, distinguishing profiles
+  that share an upstream label while remaining readable by v0.2.2.
 
 ## 0.2.2 — 2026-09-29
 

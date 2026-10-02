@@ -28,10 +28,13 @@ Queued cancellation is recorded without an upstream call; request counts therefo
 must not be interpreted as a count of provider-billed requests.
 
 Each audit contains a generated request ID, timestamp, protocol, upstream label,
-model, terminal status (`ok`, `error`, `canceled`), error code, total latency,
+selected provider reference, model, terminal status (`ok`, `error`, `canceled`), error code, total latency,
 queue duration, nullable token/cache usage and estimated cost. Full detail,
 including pricing snapshots and cache counts, lives in `record_json`; frequently
 queried fields are also columns. Message bodies and credentials are not recorded.
+The optional `provider_ref` JSON field identifies profiles even when they share
+an upstream label. Historical records may omit it; SQLite columns are unchanged,
+and v0.2.2 ignores the additional JSON field when reading new records.
 
 Request and event rows commit in one SQLite transaction. Terminal writes have a
 separate five-second context so client cancellation does not abort them. If the
