@@ -13,74 +13,45 @@ import (
 )
 
 const billingExhaustionCooldown = 5 * time.Minute
-const maxBillingProviderAlternatives = 4
 
-func (h *handler) billingFailoverProviders(selectedProvider, model, clientProtocol string, body []byte, autoModel bool) []string {
-	providers := []string{selectedProvider}
-	if !h.config.EffectiveRouting().BillingExhaustionFailover || autoModel {
-		return providers
+func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, clientProtocol string, route routeStep, body []byte, options adapter.CallOptions, sink adapter.StreamSink) ([]byte, string, error, bool) {
+	if route.autoChainIndex != nil {
+		options.ResponseModel = route.model
 	}
-	requiresNativeTools := clientProtocol == "anthropic" && adapter.HasAnthropicServerTools(body)
-	seen := map[string]struct{}{selectedProvider: {}}
-	for _, name := range h.bareModelCandidates(model, true) {
-		if _, exists := seen[name]; exists || !h.providerAvailableForBillingFailover(name) {
-			continue
-		}
-		if requiresNativeTools {
-			client := h.clients[name]
-			if client == nil || client.Protocol != "anthropic" {
-				continue
-			}
-		}
-		providers = append(providers, name)
-		seen[name] = struct{}{}
-		if len(providers)-1 == maxBillingProviderAlternatives {
-			break
-		}
-	}
-	return providers
-}
-
-func (h *handler) providerAvailableForBillingFailover(providerName string) bool {
-	if _, unavailable := h.unavailableProviders[providerName]; unavailable || h.clients[providerName] == nil {
-		return false
-	}
-	pool := h.keyPools[providerName]
-	return pool == nil || pool.CooldownWaitAt(time.Now()) == 0
-}
-
-func (h *handler) callProviderCandidate(w http.ResponseWriter, r *http.Request, clientProtocol, providerName, model string, body []byte, options adapter.CallOptions, sink adapter.StreamSink) ([]byte, string, error, bool) {
-	provider, exists := h.providers[providerName]
+	provider, exists := h.providers[route.provider]
 	if !exists {
 		h.reject(w, r, clientProtocol, http.StatusNotFound, "provider_not_found", "model")
 		return nil, "", nil, true
 	}
-	if _, unavailable := h.unavailableProviders[providerName]; unavailable {
+	if _, unavailable := h.unavailableProviders[route.provider]; unavailable {
 		h.reject(w, r, clientProtocol, http.StatusServiceUnavailable, "provider_unavailable", "model")
 		return nil, "", nil, true
 	}
-	if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, model) {
+	if !h.supportScopeAllows(route.provider, route.model) {
 		h.reject(w, r, clientProtocol, http.StatusNotFound, "model_not_found")
 		return nil, "", nil, true
 	}
-	providerClient := h.clients[providerName]
+	providerClient := h.clients[route.provider]
 	if providerClient == nil {
 		h.reject(w, r, clientProtocol, http.StatusNotFound, "provider_not_found", "model")
 		return nil, "", nil, true
 	}
-	routeBody, err := replaceRequestModel(body, model)
+	routeBody, err := replaceRequestModel(body, route.model)
 	if err != nil {
 		h.reject(w, r, clientProtocol, http.StatusBadRequest, "invalid_request", "model")
 		return nil, "", nil, true
 	}
 
-	pool := h.keyPools[providerName]
+	pool := h.keyPools[route.provider]
 	var candidates []providerKeyCandidate
 	if pool != nil {
 		var retryDelay time.Duration
 		candidates, retryDelay = pool.Candidates()
 		if len(candidates) == 0 {
-			callErr := &adapter.CallError{Status: http.StatusServiceUnavailable, Code: "provider_keys_cooling_down", Cooldown: retryDelay}
+			callErr := &adapter.CallError{Status: http.StatusServiceUnavailable, Code: "provider_keys_cooling_down", Cooldown: retryDelay, UpstreamNotAttempted: true}
+			if route.sessionKey != nil {
+				return nil, "", callErr, false
+			}
 			setRetryAfterHeader(w, callErr)
 			h.reject(w, r, clientProtocol, callErr.Status, callErr.Code)
 			return nil, "", nil, true
@@ -93,15 +64,15 @@ func (h *handler) callProviderCandidate(w http.ResponseWriter, r *http.Request, 
 	}
 	reservationID := ""
 	if budget != (ledger.BudgetPolicy{}) {
-		price, priced := provider.Prices[model]
+		price, priced := provider.Prices[route.model]
 		if !priced {
-			price, priced = adapter.BuiltInPrice(provider.BaseURL, model, time.Now())
+			price, priced = adapter.BuiltInPrice(provider.BaseURL, route.model, time.Now())
 		}
 		if !priced || price.Currency != budget.Currency {
 			h.reject(w, r, clientProtocol, http.StatusServiceUnavailable, "budget_pricing_unconfigured")
 			return nil, "", nil, true
 		}
-		if h.isBudgetBlocked(providerName, budget.Currency) {
+		if h.isBudgetBlocked(route.provider, budget.Currency) {
 			h.reject(w, r, clientProtocol, http.StatusTooManyRequests, "budget_usage_unknown")
 			return nil, "", nil, true
 		}
@@ -110,7 +81,7 @@ func (h *handler) callProviderCandidate(w http.ResponseWriter, r *http.Request, 
 			h.reject(w, r, clientProtocol, http.StatusInternalServerError, "request_id_failed")
 			return nil, "", nil, true
 		}
-		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, providerName, budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
+		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, route.provider, budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
 		if err != nil {
 			code := "budget_reservation_failed"
 			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {
@@ -126,7 +97,7 @@ func (h *handler) callProviderCandidate(w http.ResponseWriter, r *http.Request, 
 
 	call := func() ([]byte, string, error) {
 		if pool == nil {
-			return providerClient.CallFrom(clientProtocol, r.Context(), routeBody, model, sink, options)
+			return providerClient.CallFrom(clientProtocol, r.Context(), routeBody, route.model, sink, options)
 		}
 		keys := make([]string, len(candidates))
 		for i, candidate := range candidates {
@@ -166,7 +137,7 @@ func (h *handler) callProviderCandidate(w http.ResponseWriter, r *http.Request, 
 				return false, pool.CooldownWaitAt(now)
 			},
 		}
-		return providerClient.CallFromKeyCandidates(clientProtocol, r.Context(), routeBody, model, sink, options, keys, callbacks)
+		return providerClient.CallFromKeyCandidates(clientProtocol, r.Context(), routeBody, route.model, sink, options, keys, callbacks)
 	}
 	response, id, callErr := call()
 	var classifiedErr *adapter.CallError
@@ -179,17 +150,17 @@ func (h *handler) callProviderCandidate(w http.ResponseWriter, r *http.Request, 
 		if errors.As(callErr, &adapterErr) && adapterErr.UpstreamNotAttempted {
 			settleErr = h.ledger.ReleaseBudgetReservation(context.Background(), reservationID)
 		} else if errors.As(callErr, &adapterErr) && adapterErr.BudgetCost != nil {
-			settleErr = h.ledger.RecordBudgetChargeWithCost(context.Background(), reservationID, id, providerName, budget.Currency, time.Now(), *adapterErr.BudgetCost)
+			settleErr = h.ledger.RecordBudgetChargeWithCost(context.Background(), reservationID, id, route.provider, budget.Currency, time.Now(), *adapterErr.BudgetCost)
 		} else {
-			settleErr = h.ledger.RecordBudgetCharge(context.Background(), reservationID, id, providerName, budget.Currency, time.Now())
+			settleErr = h.ledger.RecordBudgetCharge(context.Background(), reservationID, id, route.provider, budget.Currency, time.Now())
 		}
 		if settleErr != nil {
-			h.blockBudget(providerName, budget.Currency)
+			h.blockBudget(route.provider, budget.Currency)
 			observability.LoggerOrDiscard(h.logger).Error("budget settlement unresolved",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "budget_settlement_failure"),
 				slog.String("request_id", id),
-				slog.String("provider_ref", providerName),
+				slog.String("provider_ref", route.provider),
 				slog.String("failure_code", "budget_settlement_unresolved"),
 			)
 		}
