@@ -15,6 +15,7 @@ func TestLocalRejectionsAreCorrelatedAndSeparate(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "http://127.0.0.1:1")
 		c.Protocol = protocol
+		c.Limits.RequestBytes = 1 << 20
 		h, closeDB, err := NewHandler(c, nil)
 		if err != nil {
 			t.Fatal(err)

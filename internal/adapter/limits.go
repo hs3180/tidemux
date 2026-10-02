@@ -1,8 +1,11 @@
 package adapter
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
-// Zero values preserve the limits of existing 0.1.0 configurations.
+// Zero values select gateway defaults; explicit limits are preserved.
 type Limits struct {
 	UpstreamTimeoutSeconds int   `json:"upstream_timeout_seconds,omitempty"`
 	RequestBytes           int64 `json:"request_bytes,omitempty"`
@@ -16,7 +19,7 @@ func (l Limits) Effective() Limits {
 		l.UpstreamTimeoutSeconds = 60
 	}
 	if l.RequestBytes == 0 {
-		l.RequestBytes = 1 << 20
+		l.RequestBytes = 32 << 20
 	}
 	if l.ResponseBytes == 0 {
 		l.ResponseBytes = 8 << 20
@@ -28,6 +31,15 @@ func (l Limits) Effective() Limits {
 		l.EventBytes = 1 << 20
 	}
 	return l
+}
+
+// UpstreamTimeout gives long-running agent streams ten minutes by default.
+// An explicitly configured timeout continues to bound both response modes.
+func (l Limits) UpstreamTimeout(stream bool) time.Duration {
+	if stream && l.UpstreamTimeoutSeconds == 0 {
+		return 10 * time.Minute
+	}
+	return time.Duration(l.Effective().UpstreamTimeoutSeconds) * time.Second
 }
 
 func (l Limits) Validate() error {

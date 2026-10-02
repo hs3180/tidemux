@@ -60,6 +60,10 @@ type CallError struct {
 	RetryProvided  bool
 }
 
+// ErrServerShuttingDown identifies a gateway-initiated cancellation without
+// confusing it with client cancellation or an upstream failure.
+var ErrServerShuttingDown = errors.New("server shutting down")
+
 func (e *CallError) Error() string { return e.Code }
 
 // KeyCandidateCallbacks rechecks cooldown state before an attempt and records
@@ -151,6 +155,18 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		}
 	}
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
+			}
+			response = nil
+			err = &CallError{Status: http.StatusInternalServerError, Code: "internal_error"}
+			observability.LoggerOrDiscard(c.Logger).Error("request handler panic recovered",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "request_panic"),
+				slog.String("request_id", id),
+			)
+		}
 		if a.EstimatedCost == nil && attempted {
 			localEstimate(observed.Bytes())
 		}
@@ -165,6 +181,10 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 				a.Status = "canceled"
 				a.ErrorCode = "request_canceled"
 				err = &CallError{Status: 408, Code: "request_canceled"}
+				if errors.Is(context.Cause(ctx), ErrServerShuttingDown) {
+					a.ErrorCode = "server_shutting_down"
+					err = &CallError{Status: http.StatusServiceUnavailable, Code: a.ErrorCode}
+				}
 			}
 		}
 		if e := c.Ledger.AppendAudit(a); e != nil {
@@ -230,7 +250,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		return nil, id, &CallError{Status: 408, Code: "request_canceled"}
 	}
 	limits := c.Limits.Effective()
-	requestCtx, cancelRequest := context.WithTimeout(ctx, time.Duration(limits.UpstreamTimeoutSeconds)*time.Second)
+	requestCtx, cancelRequest := context.WithTimeout(ctx, c.Limits.UpstreamTimeout(sink != nil))
 	defer cancelRequest()
 	defer func() {
 		if err != nil && ctx.Err() == nil && requestCtx.Err() == context.DeadlineExceeded {

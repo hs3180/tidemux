@@ -83,6 +83,10 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		}
 		decision, err := h.ledger.CheckBudget(r.Context(), reservationID, route.provider, budget, r.Header.Get("X-TideMux-Budget-Confirm") == "1", time.Now())
 		if err != nil {
+			if errors.Is(context.Cause(r.Context()), adapter.ErrServerShuttingDown) {
+				h.reject(w, r, clientProtocol, http.StatusServiceUnavailable, "server_shutting_down")
+				return nil, "", nil, true
+			}
 			code := "budget_reservation_failed"
 			if err.Error() == "budget_hard_limit" || err.Error() == "budget_confirmation_required" || err.Error() == "budget_usage_unknown" {
 				code = err.Error()

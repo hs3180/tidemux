@@ -245,12 +245,19 @@ func serveWithSignalsUsing(config gateway.Config, stdout, stderr io.Writer, inte
 	fmt.Fprintf(stdout, "TideMux listening on http://%s\n", listener.Addr())
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- serveServer(server, listener) }()
-	select {
-	case receivedSignal := <-interrupt:
+	shutdown := func() error {
+		gateway.BeginShutdown(server)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			server.Close()
+			_ = server.Close()
+			return err
+		}
+		return nil
+	}
+	select {
+	case receivedSignal := <-interrupt:
+		if err := shutdown(); err != nil {
 			_ = closeGatewayOnce()
 			logger.Error("gateway shutdown failed",
 				slog.Int("schema_version", observability.SchemaVersion),
@@ -288,6 +295,15 @@ func serveWithSignalsUsing(config gateway.Config, stdout, stderr io.Writer, inte
 		)
 		return nil
 	case err := <-serveErr:
+		if shutdownErr := shutdown(); shutdownErr != nil {
+			logger.Error("gateway shutdown failed",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "gateway_shutdown"),
+				slog.String("outcome", "error"),
+				slog.String("error_code", "shutdown_failed"),
+			)
+			return &runtimeLoggedError{err: shutdownErr}
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			if closeErr := closeGatewayOnce(); closeErr != nil {
 				logger.Error("gateway cleanup failed",
