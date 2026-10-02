@@ -140,6 +140,19 @@ type Config struct {
 	ReportWebhookURL                string                   `json:"-"`
 }
 
+type RoutingConfig struct {
+	BillingExhaustionFailover bool `json:"billing_exhaustion_failover,omitempty"`
+}
+
+func (c Config) EffectiveRouting() RoutingConfig {
+	if c.Routing == nil {
+		return RoutingConfig{}
+	}
+	return *c.Routing
+}
+
+func (r RoutingConfig) Validate() error { return nil }
+
 const maxAutoChainEntries = 64
 
 func LoadConfig(path string) (Config, error) {

@@ -83,6 +83,7 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
 	shared := flags.String("shared-model-strategy", "", "shared bare-model strategy: off or random")
+	billing := flags.String("billing-exhaustion-failover", "", "enable or disable cross-provider failover on insufficient balance")
 	if err := flags.Parse(interspersedRoutingArgs(args[1:])); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -90,7 +91,7 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*path) == "" {
-		return errors.New("usage: tidemux routing <show|set> [--shared-model-strategy off|random] [--config PATH]")
+		return errors.New("usage: tidemux routing <show|set> [--shared-model-strategy off|random] [--billing-exhaustion-failover true|false] [--config PATH]")
 	}
 	c, abs, before, err := loadCommandConfig(*path)
 	if err != nil {
@@ -99,7 +100,7 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 	settings := c.EffectiveRouting()
 	switch action {
 	case "show":
-		if flagWasSet(flags, "shared-model-strategy") {
+		if flagWasSet(flags, "shared-model-strategy") || flagWasSet(flags, "billing-exhaustion-failover") {
 			return errors.New("routing show accepts only --config")
 		}
 		strategy := settings.SharedModelStrategy
@@ -107,18 +108,33 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 			strategy = "off"
 		}
 		fmt.Fprintf(stdout, "Shared model strategy: %s\n", strategy)
+		fmt.Fprintf(stdout, "Billing exhaustion failover: %t\n", settings.BillingExhaustionFailover)
 		return nil
 	case "set":
-		if !flagWasSet(flags, "shared-model-strategy") {
-			return errors.New("routing set requires --shared-model-strategy")
+		sharedSet := flagWasSet(flags, "shared-model-strategy")
+		billingSet := flagWasSet(flags, "billing-exhaustion-failover")
+		if !sharedSet && !billingSet {
+			return errors.New("routing set requires --shared-model-strategy and/or --billing-exhaustion-failover")
 		}
-		switch *shared {
-		case "off", "none":
-			settings.SharedModelStrategy = ""
-		case "random":
-			settings.SharedModelStrategy = *shared
-		default:
-			return errors.New("--shared-model-strategy must be off or random")
+		if sharedSet {
+			switch *shared {
+			case "off", "none":
+				settings.SharedModelStrategy = ""
+			case "random":
+				settings.SharedModelStrategy = *shared
+			default:
+				return errors.New("--shared-model-strategy must be off or random")
+			}
+		}
+		if billingSet {
+			switch strings.ToLower(*billing) {
+			case "true":
+				settings.BillingExhaustionFailover = true
+			case "false":
+				settings.BillingExhaustionFailover = false
+			default:
+				return errors.New("--billing-exhaustion-failover must be true or false")
+			}
 		}
 		if settings == (gateway.RoutingConfig{}) {
 			c.Routing = nil
@@ -128,7 +144,7 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 		if err := writeCommandConfig(abs, c, before); err != nil {
 			return err
 		}
-		fmt.Fprintln(stdout, "Updated shared-model routing setting.")
+		fmt.Fprintln(stdout, "Updated routing settings.")
 		return nil
 	default:
 		return errors.New("usage: tidemux routing <show|set> [options]")
@@ -136,7 +152,11 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 }
 
 func interspersedRoutingArgs(args []string) []string {
-	return interspersedFlagsAndPositionals(args, map[string]bool{"--config": true, "-config": true, "--shared-model-strategy": true, "-shared-model-strategy": true})
+	return interspersedFlagsAndPositionals(args, map[string]bool{
+		"--config": true, "-config": true,
+		"--shared-model-strategy": true, "-shared-model-strategy": true,
+		"--billing-exhaustion-failover": true, "-billing-exhaustion-failover": true,
+	})
 }
 
 func interspersedFlagsAndPositionals(args []string, valueFlags map[string]bool) []string {

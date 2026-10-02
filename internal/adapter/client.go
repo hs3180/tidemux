@@ -42,6 +42,9 @@ type CallError struct {
 	// request was dispatched to the provider. The gateway may then release a
 	// budget reservation instead of treating the missing usage as unknown.
 	UpstreamNotAttempted bool
+	// FailoverSafe marks only provider classifications that permit another
+	// provider attempt without changing the requested model.
+	FailoverSafe bool
 	// BudgetCost preserves a known charge when the audit row itself cannot be
 	// written. It is internal accounting data and is never sent to clients.
 	BudgetCost     *float64

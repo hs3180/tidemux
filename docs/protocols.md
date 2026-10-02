@@ -21,10 +21,16 @@ eligible provider for a shared bare model. Explicit
 Either OpenAI or Anthropic clients can select any provider; TideMux uses the
 provider's configured upstream protocol and converts request/response
 semantics only when the client and provider protocols differ. Model, budget and
-timeout failures never cause an implicit route change. Authentication failures, rate limits and
-safe pre-header transport failures may retry another key only within the
-explicitly selected provider's key group; 429 cooldowns honor `Retry-After`.
-TideMux never switches to another named provider, and no key retry occurs after
+timeout failures do not cause an implicit route change. Cross-provider billing
+failover is disabled by default; when enabled, it requires an exact upstream
+error code mapped to `insufficient_balance`, keeps the model unchanged and
+tries providers that advertise the same model. Requests with Anthropic
+server-hosted tools can use only Anthropic upstreams. It does not apply to
+`model:auto` requests, whose provider/model choice remains pinned for the
+request and stable session. Authentication failures, rate limits and safe
+pre-header transport failures may retry another key only within the selected
+provider's key group;
+429 cooldowns honor `Retry-After`. No key or provider retry occurs after
 response bytes may have reached the client. Gateway authentication,
 active-session limits and the local ledger remain shared.
 
