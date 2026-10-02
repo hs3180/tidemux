@@ -49,11 +49,9 @@ acceptance text and release checks. The `0.2.2` milestone was closed with all
   sessions before output. A request never switches pairs after a failure;
   explicit model IDs stay pinned and output ends all retries.
 - **[#41](https://github.com/hs3180/tidemux/issues/41): shared-model choice.**
-  `routing.shared_model_strategy` is opt-in (`random` or `price_priority`).
-  Eligible providers must match the model scope, cooldown and request protocol
-  features. Price priority compares the sum of the three per-million-token
-  rates only when every rate is present and currencies match; equal totals use
-  provider-reference order.
+  `routing.shared_model_strategy` is opt-in (`random`). Eligible providers
+  must match the model scope, cooldown and request protocol features. Random
+  selection chooses uniformly among eligible providers.
 - **[#32](https://github.com/hs3180/tidemux/issues/32): billing exhaustion
   failover.** Cross-provider attempts require the opt-in
   `routing.billing_exhaustion_failover` and an exact error-code mapping to

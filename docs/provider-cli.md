@@ -225,6 +225,23 @@ mappings use HTTP 503. Rate-limit mappings use the same bounded retry policy as
 HTTP 429. A temporarily-unavailable mapping can advance `model:auto` to the
 next preferred chain entry for new sessions before any response is sent.
 
+## Shared-model routing
+
+By default, a bare model ID supported by multiple providers returns
+`model_ambiguous`. Enable an explicit strategy to choose one eligible provider:
+
+```sh
+tidemux routing show
+tidemux routing set --shared-model-strategy random
+tidemux routing set --shared-model-strategy off
+```
+
+This applies only to unqualified bare model IDs. Explicit `REF/MODEL_ID`
+requests remain pinned. Eligible providers must be available, support the
+requested protocol features, and include the model in `supported_models` when
+they use an allowlist. `random` chooses uniformly among eligible providers.
+Native Anthropic server tools require an Anthropic upstream.
+
 ## Provider budget
 
 Budget policy and budgeted usage belong to an individual provider. Configure or

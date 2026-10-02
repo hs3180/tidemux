@@ -63,6 +63,7 @@ limited to safe failures within that provider group before response content is
 sent. Configure the instance-wide chain with tidemux auto-chain set, then
 request model:auto; after a classified failure, only new sessions can select
 the next provider/model. A stable session stays pinned to its original pair.
+Shared bare model IDs remain ambiguous unless shared-model routing is explicitly enabled.
 `
 )
 

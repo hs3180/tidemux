@@ -69,6 +69,10 @@ classified failure. A request without a session ID gets a new request-scoped ID
 and is treated as a new session; the next client request without an ID is also
 a new session.
 
+Shared bare model IDs remain ambiguous by default. Enable random selection
+among eligible providers with `tidemux routing set --shared-model-strategy
+random`; the setting is opt-in.
+
 ### 2. Start the gateway
 
 ```sh
@@ -173,6 +177,7 @@ options.
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
 | `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
 | `tidemux provider budget reset REF --window 5h (or 7d)` | Reset only that provider's selected rolling budget window. Stop the gateway before reset, then restart it; request audit and billing history remain intact. |
+| `tidemux routing show` / `tidemux routing set --shared-model-strategy off\|random` | Inspect or configure random selection for a bare model served by multiple eligible providers. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
 | `tidemux routing show` / `tidemux routing set --billing-exhaustion-failover true\|false` | Inspect or opt in to same-model provider failover after an `insufficient_balance` error. |
 
