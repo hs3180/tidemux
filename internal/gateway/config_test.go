@@ -431,12 +431,25 @@ func TestSharedModelStrategyIsOptInAndValidated(t *testing.T) {
 	if config.EffectiveRouting() != (RoutingConfig{}) {
 		t.Fatalf("shared-model routing should default off: %+v", config.Routing)
 	}
-	config.Routing = &RoutingConfig{SharedModelStrategy: "random"}
-	if err := config.Validate(); err != nil {
-		t.Fatalf("valid shared-model strategy rejected: %v", err)
-	}
-	config.Routing.SharedModelStrategy = "cheapest_unverified"
-	if err := config.Validate(); err == nil {
-		t.Fatal("unknown shared-model strategy accepted")
+	for _, billingFailover := range []bool{false, true} {
+		config.Routing = &RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: billingFailover}
+		if err := config.Validate(); err != nil {
+			t.Fatalf("valid shared-model strategy rejected with billing failover %t: %v", billingFailover, err)
+		}
+		data, err := json.Marshal(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := decodeConfig(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decoded.EffectiveRouting() != *config.Routing {
+			t.Fatalf("routing settings lost during config round trip: got %+v, want %+v", decoded.Routing, config.Routing)
+		}
+		config.Routing.SharedModelStrategy = "cheapest_unverified"
+		if err := config.Validate(); err == nil {
+			t.Fatal("unknown shared-model strategy accepted")
+		}
 	}
 }

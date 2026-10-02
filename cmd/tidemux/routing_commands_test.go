@@ -55,3 +55,48 @@ func TestRoutingCommandConfiguresSharedModelStrategy(t *testing.T) {
 		t.Fatalf("disabled routing field was not omitted: %s", data)
 	}
 }
+
+func TestRoutingCommandPreservesOtherSetting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := writeCommandConfig(path, providerBudgetTestConfig(path), nil); err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.CreateTemp(dir, "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+
+	steps := []struct {
+		name string
+		args []string
+		want gateway.RoutingConfig
+	}{
+		{"enable billing", []string{"--billing-exhaustion-failover=true"}, gateway.RoutingConfig{BillingExhaustionFailover: true}},
+		{"enable shared", []string{"--shared-model-strategy=random"}, gateway.RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true}},
+		{"disable shared", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{BillingExhaustionFailover: true}},
+		{"set both", []string{"--shared-model-strategy=random", "--billing-exhaustion-failover=false"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
+		{"reenable billing", []string{"--billing-exhaustion-failover=true"}, gateway.RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true}},
+		{"disable billing", []string{"--billing-exhaustion-failover=false"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
+		{"restore defaults", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{}},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			args := append([]string{"set", "--config", path}, step.args...)
+			if err := routingCommand(args, output, output); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := gateway.LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := loaded.EffectiveRouting(); got != step.want {
+				t.Fatalf("routing settings=%+v, want %+v", got, step.want)
+			}
+			if step.want == (gateway.RoutingConfig{}) && loaded.Routing != nil {
+				t.Fatalf("disabled routing settings were not omitted: %+v", loaded.Routing)
+			}
+		})
+	}
+}

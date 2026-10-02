@@ -44,26 +44,6 @@ type Provider struct {
 	APIKeys           []string                       `json:"-"`
 }
 
-type RoutingConfig struct {
-	SharedModelStrategy string `json:"shared_model_strategy,omitempty"`
-}
-
-func (c Config) EffectiveRouting() RoutingConfig {
-	if c.Routing == nil {
-		return RoutingConfig{}
-	}
-	return *c.Routing
-}
-
-func (r RoutingConfig) Validate() error {
-	switch r.SharedModelStrategy {
-	case "", "random":
-		return nil
-	default:
-		return errors.New("routing.shared_model_strategy must be random")
-	}
-}
-
 // KeychainReferences returns the configured keys for this provider profile.
 // The singular field remains readable for existing configurations.
 func (p Provider) KeychainReferences() ([]KeychainReference, error) {
@@ -141,7 +121,8 @@ type Config struct {
 }
 
 type RoutingConfig struct {
-	BillingExhaustionFailover bool `json:"billing_exhaustion_failover,omitempty"`
+	SharedModelStrategy       string `json:"shared_model_strategy,omitempty"`
+	BillingExhaustionFailover bool   `json:"billing_exhaustion_failover,omitempty"`
 }
 
 func (c Config) EffectiveRouting() RoutingConfig {
@@ -151,7 +132,14 @@ func (c Config) EffectiveRouting() RoutingConfig {
 	return *c.Routing
 }
 
-func (r RoutingConfig) Validate() error { return nil }
+func (r RoutingConfig) Validate() error {
+	switch r.SharedModelStrategy {
+	case "", "random":
+		return nil
+	default:
+		return errors.New("routing.shared_model_strategy must be random")
+	}
+}
 
 const maxAutoChainEntries = 64
 
