@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — release candidate
+## 0.3.0 — 2026-10-03
 
 - Raise the default request body limit to 32 MiB so image-heavy agent
   conversations can continue; report the configured byte limit on HTTP 413.

@@ -22,9 +22,8 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-Homebrew installs the current published release, v0.2.2. This source branch
-builds the v0.3.0 candidate; its new routing options are not part of the
-published binary yet.
+Homebrew installs TideMux v0.3.0, including the client reliability fixes
+and routing options documented below.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -32,7 +31,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.3.0 candidate CLI**.
+This walkthrough describes the **0.3.0 CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -59,7 +58,7 @@ when scopes overlap. `/v1/models` lists qualified IDs. If you add a provider
 while the gateway is running, restart `tidemux serve` before using it. To
 configure just one protocol, add only its endpoint.
 
-The 0.3.0 candidate also accepts Anthropic provider-hosted tools such as
+TideMux 0.3.0 also accepts Anthropic provider-hosted tools such as
 `web_search_20250305` on Anthropic upstream routes. Configure an ordered model
 chain with `tidemux auto-chain set --entries REF_A/MODEL_A,REF_B/MODEL_B`; then use
 `model:auto`. Existing auto sessions stay pinned; classified safe failures
@@ -145,7 +144,7 @@ native Anthropic routes but cannot be converted to OpenAI Chat Completions.
 Provider-specific features without an equivalent in the selected protocol are
 reported with a field-specific error. See the
 [0.1.1 tested-client matrix](docs/client-compatibility.md) for historical
-release evidence and [protocol support](docs/protocols.md) for the 0.2.2
+release evidence and [protocol support](docs/protocols.md) for the 0.3.0
 routing contract.
 
 ## CLI design principles
@@ -154,8 +153,7 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.3.0 candidate CLI; the
-published v0.2.2 binary does not include the candidate routing commands.
+`tidemux gateway`. The commands below describe the 0.3.0 CLI.
 
 | Command | Semantics |
 | --- | --- |
@@ -278,7 +276,7 @@ tidemux claude --model REF_FROM_LIST/model-a
 [Client setup](docs/clients.md) ·
 [Agent installation and setup](docs/agent-install.md) ·
 [Runtime JSON logs](docs/runtime-logging.md) ·
-[0.3.0 candidate plan](docs/release-0.3.0.md) ·
+[0.3.0 release guide](docs/release-0.3.0.md) ·
 [0.2.2 release plan](docs/release-0.2.2.md) ·
 [0.2.1 release history](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·

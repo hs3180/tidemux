@@ -1,26 +1,25 @@
-# TideMux 0.3.0 release candidate
+# TideMux 0.3.0 release guide
 
-Status: local release candidate in review. The public stable release remains
-v0.2.2. This plan does not create a v0.3.0 tag or GitHub Release, upload
-assets, update the Homebrew tap, or announce availability.
+This document records the scope and acceptance gates for v0.3.0. The release
+source commit is recorded in `BUILD.txt`, and artifact checksums are recorded in
+`SHA256SUMS`.
 
 Baseline: published v0.2.2, tag `v0.2.2`, source commit
-`9223e0a802d7e15780ff189eaf0093e338121189`. The candidate keeps the existing
+`9223e0a802d7e15780ff189eaf0093e338121189`. The release keeps the existing
 JSON config and SQLite ledger formats. The optional top-level `auto_chain` field
 and top-level `routing` field are omitted until configured; their disabled
 defaults remain readable by v0.2.2.
 
-Goal update (2026-10-02): [#91](https://github.com/hs3180/tidemux/issues/91),
-session affinity for shared-model routing, is included in the updated source.
-The earlier `b9c66c8ced30` package does not include it. Rebuild and validate the
-updated candidate before release review.
+Candidate history (2026-10-02): [#91](https://github.com/hs3180/tidemux/issues/91)
+session affinity is included in v0.3.0. The earlier `b9c66c8ced30` package was
+superseded because it did not include #91 or the current #40 session semantics.
 
-Release scope update (2026-10-02, after #96): recently reported client failures
-[#92](https://github.com/hs3180/tidemux/issues/92) and
-[#94](https://github.com/hs3180/tidemux/issues/94) are release blockers. Include
-[#90](https://github.com/hs3180/tidemux/issues/90) session-capacity retry guidance
-in the same client reliability acceptance. Milestone completion alone does not
-prove these reports are fixed or that the final release artifact is ready.
+Client reliability update (2026-10-03): merged
+[PR #97](https://github.com/hs3180/tidemux/pull/97) fixes
+[#92](https://github.com/hs3180/tidemux/issues/92) graceful shutdown,
+[#94](https://github.com/hs3180/tidemux/issues/94) large agent requests and
+[#90](https://github.com/hs3180/tidemux/issues/90) session-capacity retry guidance.
+The release acceptance below covers these fixes and long streamed generations.
 
 ## 0.2.2 carry-forward audit
 
@@ -99,7 +98,7 @@ active/queued requests; panics produce a redacted `internal_error`. Local
 session-capacity rejection exposes consistent codes and backoff guidance without
 promising one-second recovery. See [streaming and errors](protocols.md#streaming-and-errors).
 
-The candidate adds optional config fields and an optional `provider_ref` field
+The release adds optional config fields and an optional `provider_ref` field
 to new audit JSON, without changing SQLite columns or rewriting historical
 rows. The v0.2.2 billing reader accepts these new rows. With routing disabled,
 both new config fields are omitted. When enabling
@@ -117,7 +116,7 @@ provider error map uses the new `temporarily_unavailable` category, remove that
 mapping with `tidemux provider error-map remove REF --code CODE [--status STATUS]`
 before starting v0.2.2, which does not recognize that category.
 
-## Candidate acceptance gates
+## Release acceptance gates
 
 Run the complete source and package checks from the reviewed commit:
 

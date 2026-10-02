@@ -1,9 +1,7 @@
 # Installation
 
-The published TideMux v0.2.2 targets macOS 15+ on Apple Silicon. This checkout
-builds a local v0.3.0 candidate that is not published to GitHub Releases or
-Homebrew. Install your coding client separately; TideMux does not install
-Claude Code, Kilo CLI or Hermes Agent.
+TideMux v0.3.0 targets macOS 15+ on Apple Silicon. Install your coding client
+separately; TideMux does not install Claude Code, Kilo CLI or Hermes Agent.
 
 ## Homebrew (recommended)
 
@@ -21,12 +19,12 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Install without Homebrew
 
-Install the currently published version, 0.2.2:
+Install the published version, 0.3.0:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.2.2/scripts/install.sh -o /tmp/tidemux-install.sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.0/scripts/install.sh -o /tmp/tidemux-install.sh
 less /tmp/tidemux-install.sh
-TIDEMUX_VERSION=0.2.2 sh /tmp/tidemux-install.sh
+TIDEMUX_VERSION=0.3.0 sh /tmp/tidemux-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -34,10 +32,9 @@ The installer verifies the archive's SHA256 checksum and installs the binary in
 `~/.local/bin` without sudo. Add the PATH line to `~/.zshrc` for new terminals.
 Reinstalling preserves your configuration and Keychain credentials.
 
-For a local 0.3.0 candidate, extract the archive under `dist/` and run the
-included `tidemux` binary directly. The candidate formula and archive are
-review artifacts; their GitHub Release URL is not live until a separately
-authorized release is published.
+To run a locally built package, extract its archive under `dist/` and run the
+included `tidemux` binary directly. Verify the archive against its accompanying
+`SHA256SUMS`.
 
 Set `TIDEMUX_INSTALL_DIR` to choose another destination, or `TIDEMUX_VERSION` to
 select a published version. Review the version-pinned installer before running
@@ -45,7 +42,7 @@ it. The installer does not change configuration or Keychain credentials.
 
 ## Upgrade and rollback
 
-The 0.3.0 candidate keeps the existing provider profiles, Keychain references,
+TideMux 0.3.0 keeps the existing provider profiles, Keychain references,
 budgets and audit ledger. It adds optional top-level `auto_chain` and `routing`
 fields; both are omitted while routing is disabled. Back up the config before
 an upgrade as part of your normal local-data practice. If you enable routing

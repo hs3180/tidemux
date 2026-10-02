@@ -1,4 +1,4 @@
-# Protocol support — 0.3.0 candidate
+# Protocol support — 0.3.0
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
