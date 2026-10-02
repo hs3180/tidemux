@@ -1,10 +1,10 @@
 # Provider and gateway setup
 
-The 0.2.2 CLI uses resource-oriented commands. Provider setup and
+The 0.3.0 candidate CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
-retained. This guide describes the current release CLI and labels commands
-that are only available in the 0.3.0 candidate.
+retained. The published release is still v0.2.2; use a 0.3.0 candidate binary
+to run the routing commands below.
 
 ## Add a provider
 
@@ -158,10 +158,9 @@ upstream model name (which may itself contain slashes). The client protocol does
 not choose a provider. TideMux strips only the first `REF/` prefix before
 forwarding an explicitly qualified request. Either client protocol can target
 any provider; cross-protocol conversion is applied when needed. Provider
-failures do not trigger a retry on another provider by default. The opt-in
-billing-exhaustion setting is described below. Removal asks for confirmation;
-non-interactive removal requires `--yes`. A Keychain item is removed only when
-no remaining provider references it.
+failures do not trigger a retry on another provider. Removal asks for
+confirmation; non-interactive removal requires `--yes`. A Keychain item is
+removed only when no remaining provider references it.
 
 With no scope option, `provider models` queries and prints the authenticated
 model catalog when the endpoint exposes a complete, recognizable list. Use
@@ -215,32 +214,122 @@ exact code-and-status entry wins over the same code's unqualified entry;
 duplicate code/status pairs are rejected. Valid categories are
 `insufficient_balance`, `rate_limited`, `authentication`, `permission_denied`,
 `policy_denied`, `invalid_request`, `model_not_found`, and
-`temporarily_unavailable`. Provider messages are never inspected to infer a
-category or returned to the client. The response
+`temporarily_unavailable`. Provider messages are
+never inspected to infer a category or returned to the client. The response
 includes the protocol-native envelope, a safe actionable explanation, a stable
 TideMux code, and the upstream code if it contains only safe ASCII characters.
 Mapped errors retain the upstream 4xx status when it agrees with the mapped
-category; rate-limit mappings always use HTTP 429 and temporarily-unavailable
-mappings use HTTP 503. Rate-limit mappings use the same bounded retry policy as
-HTTP 429. A temporarily-unavailable mapping can advance `model:auto` to the
-next preferred chain entry for new sessions before any response is sent.
+category; rate-limit mappings always use HTTP 429. Rate-limit mappings use the
+same bounded retry policy as HTTP 429.
 
-## Shared-model routing
+## Model fallback and shared-model routing
 
-By default, a bare model ID supported by multiple providers returns
-`model_ambiguous`. Enable an explicit strategy to choose one eligible provider:
+Exactly one auto chain belongs to the TideMux instance. Each ordered entry
+names a configured provider and a model allowed by that provider's scope:
+
+```sh
+tidemux auto-chain show
+tidemux auto-chain set --entries provider-a/model-fast,provider-b/model-capable
+tidemux auto-chain clear
+```
+
+`set` replaces the entire chain, and `clear` removes the optional top-level
+`auto_chain` field. Entries can span providers and models; the limit is 64
+distinct pairs. Restart a running gateway after changing the chain. Use only
+`model:auto`; `REF/auto` returns `auto_model_must_be_unqualified`.
+
+The first auto request for a stable `X-TideMux-Session-ID` (or Anthropic
+`metadata.user_id` fallback) atomically binds that session to the current
+preferred provider/model. Later requests and agent retries keep that pair,
+including after a failed request or when its provider cools down. TideMux
+returns the original request's failure and does not replay it on another chain
+entry. The selected pair appears in response metadata, usage, prices and audit.
+An explicit model request never uses the auto chain.
+
+An exact model-not-found, temporarily-unavailable or insufficient-balance
+classification, or a transport failure proven to precede request headers,
+advances the preferred entry for **new sessions only** when safe and before
+response output. Validation, authentication, unsupported-request errors,
+unclassified billing errors and HTTP 429 do not advance it. Concurrent failures
+from an old entry cannot skip the next preference. When the last entry fails safely, new sessions receive `auto_chain_exhausted`;
+existing sessions remain bound and the chain does not wrap. Existing bounded 429 retries stay on
+the selected provider/model and honor `Retry-After`.
+
+Without a stable ID, every auto request receives a fresh request-scoped ID and
+uses the current preference without creating a persistent binding. Stable auto
+bindings use hashed caller/protocol/session keys and a refreshed 24-hour idle
+TTL; restart clears bindings and resets the preference. Multi-instance
+state sharing is not provided. Auto requests never use billing provider failover,
+which would break the session's provider/model binding.
+
+Shared bare model IDs remain ambiguous unless a strategy is enabled:
 
 ```sh
 tidemux routing show
 tidemux routing set --shared-model-strategy random
+tidemux routing set --shared-model-strategy price_priority
 tidemux routing set --shared-model-strategy off
+tidemux routing set --billing-exhaustion-failover=true
+tidemux routing set --billing-exhaustion-failover=false
 ```
 
-This applies only to unqualified bare model IDs. Explicit `REF/MODEL_ID`
-requests remain pinned. Eligible providers must be available, support the
-requested protocol features, and include the model in `supported_models` when
-they use an allowlist. `random` chooses uniformly among eligible providers.
-Native Anthropic server tools require an Anthropic upstream.
+The strategy applies to an unqualified bare model ID only. Eligible providers
+must include the model in `supported_models` when a scope is configured, be
+available and outside key cooldown, and accept the request's protocol-specific
+features. `random` selects uniformly from the eligible providers. `price_priority`
+chooses the lowest sum of input-cache-hit, input-cache-miss and output rates per
+million tokens. Every candidate must have all three rates in the same currency;
+missing or incomparable rates fail closed with `routing_price_unavailable`.
+Equal totals break ties by provider reference. A strategy and billing failover
+are both disabled by default.
+
+With `random`, set `X-TideMux-Session-ID` to a stable conversation ID. Anthropic
+requests can instead use `metadata.user_id` when the header is absent. The
+header takes precedence; surrounding whitespace is removed. The first request
+atomically chooses an eligible provider uniformly, and later requests with the
+same caller namespace, client protocol, bare model ID and session ID reuse it.
+Concurrent first requests share one binding. Model IDs remain case-sensitive,
+and upstream model IDs containing slashes are supported. Requests without a
+stable ID keep per-request random selection; generated admission IDs do not
+create routing affinity.
+
+Bindings expire after 24 hours of idle time, refreshed on use. They store only
+a SHA-256 composite key, provider reference and timestamp in process memory.
+The current gateway has one authenticated local access token, which defines
+one caller namespace. Credentials, raw session IDs and request bodies are not
+stored in the binding or logged. Restart clears all bindings; separate gateway
+instances do not share them. This can improve cache locality but cannot guarantee
+an upstream cache hit.
+
+If the bound provider loses model/protocol eligibility or becomes unavailable
+or cooled down before dispatch, TideMux selects and binds another eligible
+provider. Once dispatched, a session-bound request never switches providers,
+even if billing-exhaustion failover is enabled. Its existing bounded 429 retries
+remain on the selected provider. A later request may rebind after cooldown.
+`REF/MODEL` and `model:auto` do not use shared-model bindings;
+`price_priority` also has no session affinity.
+
+Cross-provider failover is a separate, explicit opt-in because it sends the
+request to another provider. It happens only when that provider profile maps an
+exact upstream code (and optional status) to `insufficient_balance`, and only
+for providers whose upstream protocol matches the client protocol and whose
+model scope permits the same requested model. It never uses a provider of the
+other upstream protocol. Arbitrary 403 responses, policy errors, authentication failures,
+unmapped 5xx responses and 429 do not cross providers. TideMux tries at most
+four additional providers for one model and records each provider/model attempt
+separately. A mapped balance exhaustion cools all keys in that provider profile
+for five minutes; cooldowns reset when the gateway restarts. Budget reservations,
+usage and cost remain attached to the provider that handled each attempt.
+
+The new config fields are omitted while routing is disabled, so an untouched
+0.2.2 config remains readable by both versions. Before rolling back a config
+that uses 0.3.0 routing fields, clear the instance auto chain and disable
+both routing options with the commands above; then install v0.2.2. The local
+ledger and Keychain entries do not need migration. Also remove any
+`temporarily_unavailable` error-code mapping first because v0.2.2 does not
+recognize that new category; list and remove mappings with
+`tidemux provider error-map list REF` and
+`tidemux provider error-map remove REF --code CODE [--status STATUS]`.
 
 ## Provider budget
 
@@ -279,54 +368,6 @@ tidemux provider budget reset REF --window 7d
 The reset applies only to that provider and window. The other window and the
 request audit/billing history remain unchanged. Restart the gateway after the
 reset.
-
-## Model fallback (0.3.0 candidate)
-
-One auto chain belongs to a TideMux instance. Each ordered entry names a
-provider and model, so the chain can cross provider boundaries:
-
-```sh
-tidemux auto-chain show
-tidemux auto-chain set fast model-fast reliable model-capable
-tidemux auto-chain clear
-```
-
-Request `model:auto` to use the chain. A stable `X-TideMux-Session-ID` or
-Anthropic `metadata.user_id` pins the session to its selected provider/model,
-including after a failure. Classified safe failures before response output
-advance the preferred entry for new sessions only; TideMux does not switch
-models within a request or an existing session. After Disclaude `/reset`, a
-new session can use the next entry. If a request has no session ID, TideMux
-generates a request-scoped ID and treats every such request as a new session.
-Session bindings and preferred-entry progress are in memory: stale bindings
-expire after 24 hours, and a gateway restart begins at the first entry. Restart
-a running gateway after changing the chain.
-
-Provider-qualified `REF/auto` is not used with the instance-wide chain. Clear
-the chain before rolling a config back to v0.2.2 because that version does not
-recognize the `auto_chain` field.
-
-## Billing exhaustion failover (0.3.0 candidate)
-
-Cross-provider failover is disabled by default. Enable it to try another
-provider for the same model after an exact upstream error code maps to
-`insufficient_balance`:
-
-```sh
-tidemux routing show
-tidemux routing set --billing-exhaustion-failover true
-tidemux routing set --billing-exhaustion-failover false
-```
-
-The alternate must support the requested model. For Anthropic server-hosted
-tools, it must also use the Anthropic protocol. TideMux tries at most four
-alternates, keeps usage and budget records attributed to each provider, and
-places the exhausted provider's keys on a five-minute cooldown. Other 403s,
-429s, arbitrary upstream errors and model or budget failures do not cause a
-provider switch. `model:auto` remains governed by its session-aware chain: a
-failure does not switch the provider/model within that request or its existing
-session. After `/reset`, the client's new session may select the next chain
-entry. Turn the setting off with the command above to roll back.
 
 ## Gateway-wide settings
 

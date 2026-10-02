@@ -23,7 +23,8 @@ If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
 Homebrew installs the current published release, v0.2.2. This source branch
-contains the 0.3.0 candidate; `auto-chain` is not in the published binary yet.
+builds the v0.3.0 candidate; its new routing options are not part of the
+published binary yet.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -58,20 +59,19 @@ when scopes overlap. `/v1/models` lists qualified IDs. If you add a provider
 while the gateway is running, restart `tidemux serve` before using it. To
 configure just one protocol, add only its endpoint.
 
-Set one instance-wide ordered provider/model chain, then request `model:auto`:
-
-```sh
-tidemux auto-chain set fast model-fast reliable model-capable
-```
-
-Stable session IDs stay pinned to the selected pair, including after a
-classified failure. A request without a session ID gets a new request-scoped ID
-and is treated as a new session; the next client request without an ID is also
-a new session.
-
-Shared bare model IDs remain ambiguous by default. Enable random selection
-among eligible providers with `tidemux routing set --shared-model-strategy
-random`; the setting is opt-in.
+The 0.3.0 candidate also accepts Anthropic provider-hosted tools such as
+`web_search_20250305` on Anthropic upstream routes. Configure an ordered model
+chain with `tidemux auto-chain set --entries REF_A/MODEL_A,REF_B/MODEL_B`; then use
+`model:auto`. Existing auto sessions stay pinned; classified safe failures
+advance the preference only for new sessions. `REF/auto` is rejected. Shared bare model IDs remain
+ambiguous by default. `tidemux routing set --shared-model-strategy random` or
+`price_priority` opts into selection, and billing-exhaustion failover is a
+separate opt-in that requires an exact `insufficient_balance` provider mapping.
+With `random`, a stable `X-TideMux-Session-ID` (or Anthropic `metadata.user_id`
+when the header is absent) pins each conversation to its first eligible
+provider for 24 hours of idle time. Bindings are kept in memory and reset on
+restart. Without a stable ID, selection stays random for each request. See the
+[routing guide](docs/provider-cli.md#model-fallback-and-shared-model-routing).
 
 ### 2. Start the gateway
 
@@ -134,9 +134,7 @@ without trying another key or provider. Eligible 401/403 and transport failures
 before request headers are written can still fail over within the selected
 provider's key group. TideMux stops retrying once response content may have
 reached the client. Gateway auth, session limits and ledger accounting remain
-shared. Cross-provider billing failover is disabled by default; when enabled,
-it applies only to an exact `insufficient_balance` classification and keeps
-the requested model unchanged.
+shared.
 The three CLI workflows were verified for the 0.1.1 release; that evidence does
 not certify the 0.2.2 named-provider routing. Other compatible providers can be
 configured, though they have not all been tested.
@@ -157,8 +155,7 @@ managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
 `tidemux gateway`. The commands below describe the 0.3.0 candidate CLI; the
-published v0.2.2 binary does not include the candidate model-chain and routing
-options.
+published v0.2.2 binary does not include the candidate routing commands.
 
 | Command | Semantics |
 | --- | --- |
@@ -177,9 +174,9 @@ options.
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
 | `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
 | `tidemux provider budget reset REF --window 5h (or 7d)` | Reset only that provider's selected rolling budget window. Stop the gateway before reset, then restart it; request audit and billing history remain intact. |
-| `tidemux routing show` / `tidemux routing set --shared-model-strategy off\|random` | Inspect or configure random selection for a bare model served by multiple eligible providers. |
+| `tidemux auto-chain show`, `set` or `clear` | Inspect, replace or clear the single instance chain used by `model:auto`; failures change the preference for new sessions only. |
+| `tidemux routing show` / `tidemux routing set` | Inspect and opt into shared bare-model selection or exact billing-exhaustion cross-provider failover. Both routing settings default off. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
-| `tidemux routing show` / `tidemux routing set --billing-exhaustion-failover true\|false` | Inspect or opt in to same-model provider failover after an `insufficient_balance` error. |
 
 Provider identity does not depend on a user-chosen name. TideMux creates and
 prints a stable reference derived from the endpoint; `--name` optionally

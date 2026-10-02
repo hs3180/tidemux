@@ -13,29 +13,44 @@ before forwarding. Upstream model IDs containing slashes remain supported when
 identified by a configured scope or discovered catalog.
 
 Provider selection is independent of the client's API protocol. Bare IDs are
-resolved against model scope across all providers; when multiple providers can
-serve an ID, the gateway returns `model_ambiguous` instead of picking one.
-Configure `routing.shared_model_strategy` as `random` to opt in to choosing one
-eligible provider for a shared bare model. Explicit
-`REF/MODEL_ID` requests remain pinned to their selected provider.
-Either OpenAI or Anthropic clients can select any provider; TideMux uses the
-provider's configured upstream protocol and converts request/response
-semantics only when the client and provider protocols differ. Model, budget and
-timeout failures do not cause an implicit route change. Cross-provider billing
-failover is disabled by default; when enabled, it requires an exact upstream
-error code mapped to `insufficient_balance`, keeps the model unchanged and
-tries providers that advertise the same model. Requests with Anthropic
-server-hosted tools can use only Anthropic upstreams. It does not apply to
-`model:auto` requests, whose provider/model choice remains pinned for the
-request and stable session. Authentication failures, rate limits and safe
-pre-header transport failures may retry another key only within the selected
-provider's key group;
-429 cooldowns honor `Retry-After`. No key or provider retry occurs after
-response bytes may have reached the client. Gateway authentication,
-active-session limits and the local ledger remain shared.
+resolved against eligible model scopes across providers. If several providers
+can serve an ID, the default is to return `model_ambiguous`; `routing`
+configuration can opt into `random` or `price_priority` selection. Either
+OpenAI or Anthropic clients can select any provider when its upstream protocol
+can represent the request. Anthropic provider-hosted tools require an
+Anthropic-protocol upstream. Once selected, the provider remains fixed for the
+response unless explicit billing-exhaustion failover is enabled.
 
-The 0.1.x single-provider configuration remains a migration/compatibility path;
-do not rely on it as a 0.2.2 configuration guarantee.
+With `random`, stable `X-TideMux-Session-ID` or Anthropic `metadata.user_id`
+(header first) binds a shared bare model to one provider. The hashed binding
+includes the authenticated caller namespace, client protocol and model ID,
+has a refreshed 24-hour idle TTL, and exists only in the gateway process.
+No stable ID means per-request random selection. Unavailable or ineligible
+providers are rebound before dispatch. Session-bound requests do not switch
+providers after dispatch, including on mapped billing exhaustion; 429 retries
+stay on the selected provider. Explicit provider routes and auto model chains
+have separate behavior, and gateway restarts clear the bindings.
+
+`model:auto` uses the single instance `auto_chain` of ordered provider/model
+pairs. `REF/auto` is rejected. Stable auto sessions stay on their original pair
+across failures; safe exact model-not-found, temporarily-unavailable,
+insufficient-balance or pre-header transport failures advance the preference
+only for new sessions before output. The failed request is never replayed on
+the next entry. Requests without stable IDs receive fresh request-scoped IDs.
+Bindings and the preference are process-local and reset on restart. Explicit
+model requests do not use the chain, and streaming output never advances it.
+Authentication failures and HTTP 429 retries stay within the selected
+provider's key group; 429 cooldowns honor `Retry-After` and never switch
+providers. Cross-provider failover is opt-in and only follows an exact
+`insufficient_balance` error mapping to a provider using the same client protocol
+and requested model. Session-bound shared-model requests and auto-chain requests
+do not switch providers. Arbitrary 403 responses do not trigger failover.
+Gateway authentication, active-session limits and the local ledger remain
+shared.
+
+The 0.1.x single-provider configuration remains a migration/compatibility path.
+New 0.3.0 routing fields are omitted until enabled, so an unchanged 0.2.2
+configuration loads with routing disabled.
 
 For named providers, an explicitly configured `protocol` of `openai` or
 `anthropic` forces that upstream format and skips detection. Otherwise TideMux
@@ -66,7 +81,8 @@ ambiguous or non-standard; detection does not rewrite stored configuration.
 | Provider model discovery | OpenAI-shaped `/models` at this provider's endpoint | Anthropic-shaped `/models` at this provider's endpoint |
 | OpenAI client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is OpenAI | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies |
 | Anthropic client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is Anthropic |
-| Shared bare model | Ambiguous by default; an opt-in strategy selects one eligible provider | Same policy; native Anthropic tools restrict candidates to Anthropic upstreams |
+| Shared bare model | Ambiguous by default; `routing.shared_model_strategy` can select among eligible providers | Same policy; native Anthropic tools restrict candidates to Anthropic upstreams |
+| `model:auto` | Uses the single instance provider/model chain; stable sessions remain pinned and failures advance new sessions only; `REF/auto` is rejected | Same policy; unsupported features do not advance the chain |
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 
@@ -128,20 +144,22 @@ validated. Tools and history use the selected protocol's wire format; no tool
 execution occurs inside TideMux. Thinking/format options must match their wire
 schema, but actual reasoning and schema enforcement depend on the upstream.
 
-Unknown request fields are ignored with a gateway log warning. Unknown config
-fields, duplicate JSON keys, multiple JSON documents, malformed tool envelopes
-and invalid beta headers are rejected.
+Unknown request fields are ignored with a gateway log warning. Unknown fields
+inside an Anthropic provider-hosted tool are preserved on native Anthropic
+routes without logging their values. Unknown config fields, duplicate JSON
+keys, multiple JSON documents, malformed custom-tool envelopes and invalid
+beta headers are rejected.
 Native Anthropic routes preserve documented image, document, citation and
-server-tool content blocks for the upstream to validate. Provider-hosted tools
-such as `web_search_20250305` may omit `input_schema`; their provider-specific
-fields are forwarded on native Anthropic routes. TideMux does not translate
-these tools to OpenAI Chat Completions; a cross-protocol request receives a
-field-specific unsupported-feature error. Audio, Responses API,
+server-tool content blocks for the upstream to validate. Provider-hosted tool
+definitions such as `web_search_20250305` retain their custom fields and do not
+require the custom-tool `input_schema`. TideMux does not translate these tools
+or blocks to OpenAI Chat Completions; a cross-protocol request receives an
+actionable `unsupported_request_feature` error on `tools`. Audio, Responses API,
 embeddings, batches and token-counting endpoints are not implemented. These
 remain explicit boundaries; normal tested client workflows do not prove every
 client feature or every upstream model is supported. See the
 [0.1.1 client acceptance matrix](client-compatibility.md) for prior-release
-evidence; it does not certify the 0.2.2 routing model.
+evidence; it does not certify the 0.3.0 candidate routing model.
 
 ## Streaming and errors
 
@@ -164,8 +182,8 @@ codes, and safe guidance; a safe provider code is included when available.
 Mapped errors retain a compatible upstream 4xx status where that preserves the
 meaning of the classification; rate limits normalize to 429. Exact mappings
 can distinguish balance, authentication, permission, policy, malformed
-request, and model-access failures without treating every 403 as a billing
-problem.
+request, model-access and temporary-unavailability failures without treating
+every 403 as a billing problem.
 
 TideMux retries HTTP 429 on the same selected key and provider at most three
 total attempts, following `Retry-After` seconds or HTTP-date values. Invalid or

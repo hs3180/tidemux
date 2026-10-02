@@ -6,9 +6,14 @@ assets, update the Homebrew tap, or announce availability.
 
 Baseline: published v0.2.2, tag `v0.2.2`, source commit
 `9223e0a802d7e15780ff189eaf0093e338121189`. The candidate keeps the existing
-JSON config and SQLite ledger formats. The optional top-level `auto_chain`
-field and `routing` field are omitted until configured; their disabled defaults
-remain readable by v0.2.2.
+JSON config and SQLite ledger formats. The optional top-level `auto_chain` field
+and top-level `routing` field are omitted until configured; their disabled
+defaults remain readable by v0.2.2.
+
+Goal update (2026-10-02): [#91](https://github.com/hs3180/tidemux/issues/91),
+session affinity for shared-model routing, is included in the updated source.
+The earlier `b9c66c8ced30` package does not include it. Rebuild and validate the
+updated candidate before release review.
 
 ## 0.2.2 carry-forward audit
 
@@ -40,18 +45,33 @@ acceptance text and release checks. The `0.2.2` milestone was closed with all
   `tools` before dispatch. See `internal/adapter/tools_test.go`,
   `internal/gateway/tools_test.go` and
   `scripts/test_anthropic_server_tools_package.py`.
-- **[#40](https://github.com/hs3180/tidemux/issues/40): one ordered,
-  instance-wide `model:auto` chain.** Configure cross-provider provider/model
-  pairs with `tidemux auto-chain`. Stable session IDs stay pinned to one pair;
-  requests without an ID get a request-scoped ID and count as new sessions.
-  Model-not-found, temporarily-unavailable, insufficient-balance and
-  pre-header transport classifications can advance the preferred pair for new
-  sessions before output. A request never switches pairs after a failure;
-  explicit model IDs stay pinned and output ends all retries.
+- **[#40](https://github.com/hs3180/tidemux/issues/40): one instance auto chain.**
+  Configure ordered provider/model pairs with top-level `auto-chain show|set|clear`.
+  Only `model:auto` uses the chain; reject `REF/auto`. Stable sessions stay pinned
+  across failures. Classified safe failures before output advance the preference
+  only for new sessions, without replaying the failed request. Requests without
+  IDs receive fresh request-scoped IDs. Preserve actual route attribution.
+  See `internal/gateway/auto_chain_test.go` and `scripts/test_auto_chain_package.py`.
 - **[#41](https://github.com/hs3180/tidemux/issues/41): shared-model choice.**
-  `routing.shared_model_strategy` is opt-in (`random`). Eligible providers
-  must match the model scope, cooldown and request protocol features. Random
-  selection chooses uniformly among eligible providers.
+  `routing.shared_model_strategy` is opt-in (`random` or `price_priority`).
+  Eligible providers must match the model scope, cooldown and request protocol
+  features. Price priority compares the sum of the three per-million-token
+  rates only when every rate is present and currencies match; equal totals use
+  provider-reference order.
+- **[#91](https://github.com/hs3180/tidemux/issues/91): session affinity for
+  shared-model routing.** When random shared-model selection is enabled, bind
+  a hashed key composed of caller namespace when available, protocol, normalized
+  bare model ID and stable session ID to the first randomly selected eligible
+  provider. Use `X-TideMux-Session-ID`, with Anthropic `metadata.user_id` as a
+  fallback. Reuse the binding for 24 hours of idle time; requests without a
+  stable session ID remain request-scoped random. Keep bindings in process
+  memory only. Rebind only before dispatch when the bound provider is no longer
+  eligible or available; never retry or switch providers after dispatch or
+  during a stream. This is separate from `model:auto` chain state. Session-bound
+  requests do not use billing provider failover, but retain the existing bounded
+  same-provider 429 retries. Source checks are in
+  `internal/gateway/shared_model_affinity_test.go`; package checks are in
+  `scripts/test_shared_model_affinity_package.py`.
 - **[#32](https://github.com/hs3180/tidemux/issues/32): billing exhaustion
   failover.** Cross-provider attempts require the opt-in
   `routing.billing_exhaustion_failover` and an exact error-code mapping to
@@ -61,8 +81,10 @@ acceptance text and release checks. The `0.2.2` milestone was closed with all
 
 ## Upgrade and rollback
 
-The candidate adds only optional config fields and does not migrate or rewrite
-audit rows. With routing disabled, both new fields are omitted. When enabling
+The candidate adds optional config fields and an optional `provider_ref` field
+to new audit JSON, without changing SQLite columns or rewriting historical
+rows. The v0.2.2 billing reader accepts these new rows. With routing disabled,
+both new config fields are omitted. When enabling
 the features, use these commands to revert the config before replacing the
 binary with v0.2.2:
 
@@ -71,8 +93,8 @@ tidemux auto-chain clear
 tidemux routing set --shared-model-strategy off --billing-exhaustion-failover=false
 ```
 
-The rollback commands remove the new fields from the config; v0.2.2 uses the
-same Keychain references and ledger. If any
+The rollback commands remove the new fields from
+the config; v0.2.2 uses the same Keychain references and ledger. If any
 provider error map uses the new `temporarily_unavailable` category, remove that
 mapping with `tidemux provider error-map remove REF --code CODE [--status STATUS]`
 before starting v0.2.2, which does not recognize that category.
@@ -87,6 +109,8 @@ CGO_ENABLED=0 go test ./...
 go test -race ./...
 CGO_ENABLED=0 go vet ./...
 python3 scripts/test_anthropic_server_tools_package.py --binary /path/to/extracted/tidemux
+python3 scripts/test_shared_model_affinity_package.py --binary /path/to/extracted/tidemux
+python3 scripts/test_auto_chain_package.py --binary /path/to/extracted/tidemux
 python3 scripts/test_client_commands.py
 python3 scripts/test_context_management_claude.py --binary /path/to/extracted/tidemux
 python3 scripts/test_provider_add_pty.py
@@ -95,6 +119,10 @@ python3 scripts/test_budget_reservation_package.py --binary /path/to/extracted/t
 python3 scripts/test_runtime_logs_package.py --binary /path/to/extracted/tidemux
 python3 scripts/test_install.py
 ```
+
+For ledger rollback proof, run `test_auto_chain_package.py` again with
+`--baseline-binary /path/to/extracted/v0.2.2/tidemux`. It verifies that v0.2.2
+can read every new audit record without modifying the candidate ledger.
 
 Build the immutable local archive, checksums, SPDX SBOM, `BUILD.txt` and
 Homebrew formula with `scripts/release.py --build-id commit`. Verify those

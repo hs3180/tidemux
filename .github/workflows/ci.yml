@@ -25,7 +25,27 @@ jobs:
           python3 scripts/test_install.py
           python3 scripts/test_client_commands.py
       - name: Build candidate
-        run: python3 scripts/release.py
+        run: python3 scripts/release.py --build-id commit
+      - name: Verify packaged routing, budgets and logs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess, tarfile, tempfile
+          archives = list(Path("dist").glob("*/*.tar.gz"))
+          if len(archives) != 1:
+              raise SystemExit("Expected one immutable candidate archive")
+          with tempfile.TemporaryDirectory(prefix="tidemux-package-ci.") as temporary:
+              with tarfile.open(archives[0]) as archive:
+                  archive.extractall(temporary)
+              binary, = Path(temporary).glob("tidemux-*/tidemux")
+              for script in ["test_anthropic_server_tools_package.py",
+                             "test_shared_model_affinity_package.py",
+                             "test_auto_chain_package.py",
+                             "test_budget_recovery_package.py",
+                             "test_budget_reservation_package.py",
+                             "test_runtime_logs_package.py"]:
+                  subprocess.run(["python3", "scripts/" + script, "--binary", str(binary)], check=True)
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: candidate-darwin-arm64
