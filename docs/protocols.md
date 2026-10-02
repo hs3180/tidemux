@@ -198,11 +198,40 @@ have reached the client. A recognized error reported inside an SSE stream is
 sent as the current client protocol's `error` event; a stream already in
 progress is never replayed.
 
+Local session-capacity exhaustion is HTTP 429 with
+`error.code: "active_session_limit"` in both protocols, distinct from an
+upstream rate limit. The error includes `scope: "gateway"`, the configured
+`limit`, and a `retry` object with `strategy: "exponential_backoff_with_jitter"`,
+`initial_delay_seconds: 1` and `max_delay_seconds: 30`. There is no `Retry-After`
+header because ongoing activity makes capacity-release timing unknown. Clients
+can retry an unadmitted request using full jitter: choose a random delay between
+zero and `min(30, 2^attempt)` seconds, starting at attempt zero, while respecting
+their own deadline. No upstream request is sent for this rejection.
+
+SIGTERM, Ctrl-C and graceful server shutdown stop admission of new model calls
+and cancel active upstream calls and queued requests. Before headers are sent,
+clients receive HTTP 503 with `error.code: "server_shutting_down"`. A stream
+that has started instead receives an `event: error` frame with that code and
+then closes; it does not receive a success terminal marker. Partial output
+must not be treated as a completed turn or automatically replayed. Handler
+panics use the same JSON/SSE boundary with a redacted `internal_error`; panic
+values and stack traces are excluded from runtime logs. Shutdown waits for
+terminal audits and budget settlement before closing the ledger. A forced
+termination or a disconnected client cannot receive a final error event.
+
 ## Configuration and accounting
 
-Defaults remain 1 MiB request, 8 MiB non-streaming response, 64 MiB SSE stream,
-1 MiB SSE event, and 60 seconds after concurrency admission. All are configurable
-through `limits`; see [provider and gateway CLI](provider-cli.md). Retained active sessions use
+Defaults are 32 MiB request (33,554,432 bytes), 8 MiB non-streaming response,
+64 MiB SSE stream and 1 MiB SSE event. After concurrency admission, non-streaming
+requests have a 60-second total upstream timeout; streams have ten minutes by
+default, including time waiting for the first event. An explicit
+`limits.upstream_timeout_seconds` overrides both modes. An explicit
+`limits.request_bytes` continues to override the default. HTTP 413 includes
+`error.code: "request_too_large"`, `limit_bytes`, and the configuration field
+needed to adjust the limit. These defaults provide headroom for the Anthropic
+[32 MB Messages contract](https://platform.claude.com/docs/en/api/errors#request-size-limits);
+the configured provider may impose its own lower limit. All byte limits remain
+configurable through `limits`. Retained active sessions use
 a five-minute input/output idle timeout by default, configurable independently.
 Queue waiting is cancelable and reported separately. Upstream redirects are not
 followed.

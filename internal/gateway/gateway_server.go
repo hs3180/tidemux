@@ -140,5 +140,7 @@ func OpenWithLogger(c Config, client *http.Client, logger *slog.Logger) (net.Lis
 		closeLedger()
 		return nil, nil, nil, errors.New("cannot bind configured listener")
 	}
-	return listener, &http.Server{Handler: h, ErrorLog: observability.HTTPServerErrorLogger(logger), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}, func() error { listener.Close(); return closeLedger() }, nil
+	server := &http.Server{Handler: h, ErrorLog: observability.HTTPServerErrorLogger(logger), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	server.RegisterOnShutdown(h.(*handler).beginShutdown)
+	return listener, server, func() error { listener.Close(); return closeLedger() }, nil
 }

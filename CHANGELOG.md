@@ -2,6 +2,17 @@
 
 ## 0.3.0 — release candidate
 
+- Raise the default request body limit to 32 MiB so image-heavy agent
+  conversations can continue; report the configured byte limit on HTTP 413.
+  Explicit `limits.request_bytes` settings remain unchanged.
+- Cancel active and queued model requests during graceful shutdown and send
+  `server_shutting_down` as JSON or an SSE error before closing connections.
+  Recover handler panics with redacted errors and preserve audit/budget cleanup.
+- Allow streamed generations up to ten minutes by default, including long
+  Claude Code compaction turns. Non-streaming requests retain the 60-second
+  default; explicit `limits.upstream_timeout_seconds` overrides both modes.
+- Return consistent `active_session_limit` codes, gateway capacity and bounded
+  backoff guidance in both protocols; omit an unjustified `Retry-After: 1`.
 - Accept and forward Anthropic provider-hosted tools such as
   `web_search_20250305`, including provider extension fields, without requiring
   custom-tool `input_schema`; reject unsupported cross-protocol use with a

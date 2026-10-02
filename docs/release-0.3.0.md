@@ -15,6 +15,13 @@ session affinity for shared-model routing, is included in the updated source.
 The earlier `b9c66c8ced30` package does not include it. Rebuild and validate the
 updated candidate before release review.
 
+Release scope update (2026-10-02, after #96): recently reported client failures
+[#92](https://github.com/hs3180/tidemux/issues/92) and
+[#94](https://github.com/hs3180/tidemux/issues/94) are release blockers. Include
+[#90](https://github.com/hs3180/tidemux/issues/90) session-capacity retry guidance
+in the same client reliability acceptance. Milestone completion alone does not
+prove these reports are fixed or that the final release artifact is ready.
+
 ## 0.2.2 carry-forward audit
 
 The 11 issues below were checked against the published source, changelog,
@@ -81,6 +88,17 @@ acceptance text and release checks. The `0.2.2` milestone was closed with all
 
 ## Upgrade and rollback
 
+Client reliability fixes raise the default request-body cap to 32 MiB, preserve
+explicit byte limits, and include the actual gateway limit in HTTP 413 errors.
+Default streaming timeout is ten minutes; non-streaming timeout remains 60
+seconds. Explicit `limits.upstream_timeout_seconds` settings still apply to
+both modes. Users with an explicitly saved 60-second timeout must increase it
+to allow long streamed agent turns. No new config field or ledger column is
+required. Graceful shutdown sends `server_shutting_down` errors and settles
+active/queued requests; panics produce a redacted `internal_error`. Local
+session-capacity rejection exposes consistent codes and backoff guidance without
+promising one-second recovery. See [streaming and errors](protocols.md#streaming-and-errors).
+
 The candidate adds optional config fields and an optional `provider_ref` field
 to new audit JSON, without changing SQLite columns or rewriting historical
 rows. The v0.2.2 billing reader accepts these new rows. With routing disabled,
@@ -117,12 +135,21 @@ python3 scripts/test_provider_add_pty.py
 python3 scripts/test_budget_recovery_package.py --binary /path/to/extracted/tidemux
 python3 scripts/test_budget_reservation_package.py --binary /path/to/extracted/tidemux
 python3 scripts/test_runtime_logs_package.py --binary /path/to/extracted/tidemux
+python3 scripts/test_client_reliability_package.py --binary /path/to/extracted/tidemux
 python3 scripts/test_install.py
 ```
 
 For ledger rollback proof, run `test_auto_chain_package.py` again with
 `--baseline-binary /path/to/extracted/v0.2.2/tidemux`. It verifies that v0.2.2
 can read every new audit record without modifying the candidate ledger.
+
+The client reliability gate verifies image requests above 1 MiB, explicit
+request limits, session-capacity guidance in both protocols, SIGTERM during
+buffered and streamed requests, persisted cancellation and privacy. Source
+tests also cover exact default/custom byte boundaries, handler panics, queued
+budget cleanup and a 61-second generation under simulated time. For a real
+clock test of the former 60-second cutoff, additionally run the package gate
+with `--long-stream-seconds 65`.
 
 Build the immutable local archive, checksums, SPDX SBOM, `BUILD.txt` and
 Homebrew formula with `scripts/release.py --build-id commit`. Verify those

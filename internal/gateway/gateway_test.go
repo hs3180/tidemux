@@ -921,7 +921,7 @@ func TestActiveSessionLimitRejectsNewSessionsAndAllowsExistingSession(t *testing
 		t.Fatalf("first request = %d: %s", out.Code, out.Body.String())
 	}
 	rejected := request("session-b")
-	if rejected.Code != 429 || rejected.Header().Get("Retry-After") != "1" || !strings.Contains(rejected.Body.String(), "active_session_limit") {
+	if rejected.Code != 429 || rejected.Header().Get("Retry-After") != "" || !strings.Contains(rejected.Body.String(), "active_session_limit") {
 		t.Fatalf("rejected request = %d/%s/%s", rejected.Code, rejected.Header().Get("Retry-After"), rejected.Body.String())
 	}
 	if out := request("session-a"); out.Code != 200 {

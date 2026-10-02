@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -39,6 +40,10 @@ type handler struct {
 	randomIndex          func(int) int
 	sharedAffinity       sharedModelAffinity
 	autoChain            *autoChainState
+	activeMu             sync.Mutex
+	draining             bool
+	activeCalls          map[uint64]context.CancelCauseFunc
+	nextCallID           uint64
 }
 
 type requestLogContextKey struct{}
@@ -210,14 +215,27 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 	if code == "unsupported_request_feature" && field != "" {
 		message = "unsupported_request_feature: " + field + " cannot be represented by the configured upstream protocol"
 	}
+	detail := map[string]any{"type": kind, "message": message, "code": code}
+	switch code {
+	case "request_too_large":
+		limit := h.config.Limits.Effective().RequestBytes
+		detail["message"] = fmt.Sprintf("request_too_large: body exceeds gateway limit of %d bytes; configure limits.request_bytes to change it", limit)
+		detail["limit_bytes"] = limit
+		if protocol == "anthropic" {
+			detail["type"] = "request_too_large"
+		}
+	case "active_session_limit":
+		detail["message"] = fmt.Sprintf("Gateway capacity of %d active sessions is full; capacity release time is unknown. Retry with bounded exponential backoff and jitter (up to 30 seconds).", h.config.MaxActiveSessions)
+		detail["scope"], detail["limit"] = "gateway", h.config.MaxActiveSessions
+		detail["retry"] = map[string]any{"strategy": "exponential_backoff_with_jitter", "initial_delay_seconds": 1, "max_delay_seconds": 30}
+	}
 	if protocol == "anthropic" {
-		detail := map[string]any{"type": kind, "message": message}
 		if field != "" {
 			detail["param"] = field
 		}
 		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": detail})
 	} else {
-		detail := map[string]any{"message": message, "type": kind, "code": code, "param": nil}
+		detail["param"] = nil
 		if field != "" {
 			detail["param"] = field
 		}
@@ -283,6 +301,28 @@ func (h *handler) protocolForRequest(r *http.Request) string {
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = withRequestLogDetails(r, "", "")
+	tracked := &trackedResponseWriter{ResponseWriter: w}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
+			}
+			observability.LoggerOrDiscard(h.logger).Error("request handler panic recovered",
+				slog.Int("schema_version", observability.SchemaVersion),
+				slog.String("event", "request_panic"),
+			)
+			protocol := h.protocolForRequest(r)
+			if tracked.eventStream && !tracked.streamComplete {
+				writeStreamFailure(tracked, protocol, "internal_error")
+			} else if !tracked.wroteHeader {
+				h.reject(tracked, r, protocol, http.StatusInternalServerError, "internal_error")
+			}
+		}
+	}()
+	h.serveHTTP(tracked, r)
+}
+
+func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	protocol := h.protocolForRequest(r)
 	a := sha256.Sum256([]byte(r.Header.Get("Authorization")))
 	b := sha256.Sum256([]byte("Bearer " + h.config.AccessToken))
@@ -370,6 +410,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 404, "unsupported_endpoint")
 		return
 	}
+	callCtx, finishCall, admitted := h.beginCall(r.Context())
+	if !admitted {
+		h.reject(w, r, protocol, http.StatusServiceUnavailable, "server_shutting_down")
+		return
+	}
+	defer finishCall()
+	r = r.WithContext(callCtx)
+	stopReadCancellation := context.AfterFunc(callCtx, func() {
+		if errors.Is(context.Cause(callCtx), adapter.ErrServerShuttingDown) {
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+		}
+	})
+	defer stopReadCancellation()
 	options := adapter.CallOptions{AnthropicBeta: strings.Join(r.Header.Values("anthropic-beta"), ","), SessionID: strings.TrimSpace(r.Header.Get(adapter.SessionIDHeader))}
 	if err := options.Validate(protocol); err != nil {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
@@ -378,7 +431,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.config.Limits.Effective().RequestBytes))
 	if err != nil {
-		h.reject(w, r, protocol, 413, "request_too_large")
+		var sizeErr *http.MaxBytesError
+		if errors.Is(context.Cause(callCtx), adapter.ErrServerShuttingDown) {
+			h.reject(w, r, protocol, http.StatusServiceUnavailable, "server_shutting_down")
+		} else if errors.As(err, &sizeErr) {
+			h.reject(w, r, protocol, http.StatusRequestEntityTooLarge, "request_too_large")
+		} else {
+			h.reject(w, r, protocol, http.StatusBadRequest, "request_read_error")
+		}
+		return
+	}
+	if errors.Is(context.Cause(callCtx), adapter.ErrServerShuttingDown) {
+		h.reject(w, r, protocol, http.StatusServiceUnavailable, "server_shutting_down")
 		return
 	}
 	body, qualifiedModel, ignoredFields, err := adapter.RequestWithWarnings(protocol, data, "")
@@ -462,8 +526,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	lease, err := h.sessions.Acquire(r.Context(), options.SessionID)
 	if err != nil {
+		if errors.Is(context.Cause(callCtx), adapter.ErrServerShuttingDown) {
+			h.reject(w, r, protocol, http.StatusServiceUnavailable, "server_shutting_down")
+			return
+		}
 		if errors.Is(err, limiter.ErrActiveSessionLimit) {
-			w.Header().Set("Retry-After", "1")
 			h.reject(w, r, protocol, http.StatusTooManyRequests, limiter.ErrActiveSessionLimit.Error())
 			return
 		}
@@ -566,7 +633,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if callErr == nil {
-			send(id, terminal)
+			if send(id, terminal) == nil {
+				w.streamComplete = true
+			}
 			return
 		}
 		var upstreamErr *adapter.CallError
@@ -594,6 +663,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		encoded, _ := json.Marshal(payload)
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
+		w.streamComplete = true
 		return
 	}
 
