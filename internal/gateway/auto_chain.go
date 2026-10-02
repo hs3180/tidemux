@@ -32,6 +32,7 @@ type autoChainState struct {
 	ttl       time.Duration
 	lastPrune time.Time
 	sessions  map[string]autoChainBinding
+	now       func() time.Time // injectable clock, sampled while mu is held
 }
 
 func newAutoChainState(entries []AutoChainEntry, idleTTL time.Duration) *autoChainState {
@@ -49,9 +50,12 @@ func (s *autoChainState) selectForSession(sessionID string, sticky bool) (autoCh
 	if s == nil || sessionID == "" || len(s.entries) == 0 {
 		return autoChainSelection{}, false
 	}
-	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
 	if sticky && (s.lastPrune.IsZero() || now.Sub(s.lastPrune) >= autoChainPruneInterval) {
 		for id, binding := range s.sessions {
 			if now.Sub(binding.lastTouch) >= s.ttl {
@@ -62,11 +66,12 @@ func (s *autoChainState) selectForSession(sessionID string, sticky bool) (autoCh
 	}
 	if sticky {
 		key := hashAutoChainSessionID(sessionID)
-		if binding, ok := s.sessions[key]; ok {
+		if binding, ok := s.sessions[key]; ok && now.Sub(binding.lastTouch) < s.ttl {
 			binding.lastTouch = now
 			s.sessions[key] = binding
 			return s.selection(binding.index), true
 		}
+		delete(s.sessions, key)
 	}
 	if s.next >= len(s.entries) {
 		return autoChainSelection{}, false
@@ -95,13 +100,36 @@ func (s *autoChainState) advanceForNewSessions(index int) {
 }
 
 func autoChainFailureAdvances(callErr *adapter.CallError, ctxErr error, delivered bool) bool {
-	if callErr == nil || ctxErr != nil || delivered {
+	if callErr == nil || !callErr.FailoverSafe || ctxErr != nil || delivered {
 		return false
 	}
-	if callErr.Code == "upstream_transport_error" && callErr.Retryable {
+	if callErr.Code == "upstream_transport_error" && callErr.UpstreamNotAttempted {
 		return true
 	}
 	return callErr.Category == adapter.ProviderErrorModelNotFound || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorTemporarilyUnavailable
+}
+
+func (s *autoChainState) selectRoute(key *sharedModelSessionKey) (routeStep, bool) {
+	id := "request-scoped"
+	if key != nil {
+		id = hex.EncodeToString(key[:])
+	}
+	selection, ok := s.selectForSession(id, key != nil)
+	if !ok {
+		return routeStep{}, false
+	}
+	index := selection.index
+	return routeStep{provider: selection.provider, model: selection.model, trigger: routeInitial, autoChainIndex: &index}, true
+}
+
+func (s *autoChainState) recordFailure(index, _ int, callErr *adapter.CallError, ctxErr error, delivered bool) {
+	if autoChainFailureAdvances(callErr, ctxErr, delivered) {
+		s.advanceForNewSessions(index)
+	}
+}
+
+func autoChainFailureCanAdvance(callErr *adapter.CallError, ctxErr error, delivered bool) bool {
+	return autoChainFailureAdvances(callErr, ctxErr, delivered)
 }
 
 func hashAutoChainSessionID(sessionID string) string {

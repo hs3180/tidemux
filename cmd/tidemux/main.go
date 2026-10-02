@@ -30,8 +30,8 @@ commands:
   serve       start the local gateway
   doctor      check the configuration, Keychain and local state directory
   provider    add, inspect, edit and reset budgets for upstream providers
-  auto-chain  configure the instance-wide ordered provider/model fallback chain
-  routing     configure routing and billing failover
+  auto-chain  show, replace or clear the instance provider/model chain
+  routing     configure shared-model selection and billing failover
   gateway     configure settings or check the running gateway
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
@@ -55,15 +55,15 @@ common examples:
 Each provider uses one API protocol and endpoint, with one or more API keys
 stored in Keychain. Provider protocol is detected from bounded authenticated
 /models schema probes unless explicitly forced.
-Set each client's model to the upstream model ID when one configured provider
+Set each client's model to an upstream model ID when one configured provider
 scope matches, or use PROVIDER/MODEL to choose explicitly when scopes overlap.
 The client protocol does not choose the provider. TideMux strips PROVIDER/
-from explicitly qualified IDs before forwarding upstream. Key failover is
-limited to safe failures within that provider group before response content is
-sent. Configure the instance-wide chain with tidemux auto-chain set, then
-request model:auto; after a classified failure, only new sessions can select
-the next provider/model. A stable session stays pinned to its original pair.
-Shared bare model IDs remain ambiguous unless shared-model routing is explicitly enabled.
+from explicitly qualified IDs before forwarding upstream. Configure an ordered
+instance auto-chain for model:auto. Existing auto sessions stay pinned; safe
+failures advance the preference only for new sessions. Shared-model routing and
+billing-exhaustion failover are disabled by default.
+Random shared-model routing binds stable X-TideMux-Session-ID (or Anthropic
+metadata.user_id) sessions in memory for 24 hours of idle time.
 `
 )
 

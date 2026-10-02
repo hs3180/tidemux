@@ -29,8 +29,6 @@ type handler struct {
 	budgetMu             sync.RWMutex
 	budgetBlocked        map[string]struct{}
 	sessions             *limiter.SessionLimiter
-	autoChain            *autoChainState
-	randomIndex          func(int) int
 	providers            map[string]Provider
 	clients              map[string]*adapter.Client
 	keyPools             map[string]*providerKeyPool
@@ -38,6 +36,9 @@ type handler struct {
 	modelsKnown          map[string]bool
 	unavailableProviders map[string]error
 	logger               *slog.Logger
+	randomIndex          func(int) int
+	sharedAffinity       sharedModelAffinity
+	autoChain            *autoChainState
 }
 
 type requestLogContextKey struct{}
@@ -114,20 +115,33 @@ func (h *handler) allQualifiedModels() []string {
 	return result
 }
 
-func (h *handler) resolveRequestModel(modelID, clientProtocol string, body []byte) (providerName, model, code string, status int) {
+func (h *handler) resolveRequestModel(modelID string) (providerName, model, code string, status int) {
 	if ref, suffix, qualified := parseQualifiedModelID(modelID); qualified {
 		if _, exists := h.providers[ref]; exists {
-			if suffix == "auto" {
-				return "", "", "auto_chain_requires_unqualified_model", http.StatusBadRequest
-			}
 			return ref, suffix, "", 0
 		}
 		// An upstream model may itself contain slashes. Without a matching
 		// TideMux provider prefix, accept it only when a configured scope or a
 		// complete discovered catalog identifies the full model ID.
-		return h.resolveSharedModel(modelID, true, true, clientProtocol, body)
+		candidates := h.bareModelCandidates(modelID, true)
+		if len(candidates) == 1 {
+			return candidates[0], modelID, "", 0
+		}
+		if len(candidates) > 1 {
+			return "", "", "model_ambiguous", http.StatusBadRequest
+		}
+		return "", "", "provider_not_found", http.StatusNotFound
 	}
-	return h.resolveSharedModel(modelID, false, false, clientProtocol, body)
+
+	candidates := h.bareModelCandidates(modelID, false)
+	switch len(candidates) {
+	case 0:
+		return "", "", "model_not_found", http.StatusNotFound
+	case 1:
+		return candidates[0], modelID, "", 0
+	default:
+		return "", "", "model_ambiguous", http.StatusBadRequest
+	}
 }
 
 func (h *handler) bareModelCandidates(model string, requireKnownScope bool) []string {
@@ -380,24 +394,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 400, err.Error(), adapter.ValidationParameter(err))
 		return
 	}
-	r = withRequestLogDetails(r, "", qualifiedModel)
+	qualifiedModel = strings.TrimSpace(qualifiedModel)
 	if options.SessionID == "" {
 		options.SessionID = adapter.SessionID(protocol, body)
 	}
-	persistentSession := strings.TrimSpace(options.SessionID) != ""
 	if err := options.Validate(protocol); err != nil {
-		h.reject(w, r, protocol, 400, "invalid_session_id")
+		h.reject(w, r, protocol, http.StatusBadRequest, "invalid_session_id")
 		return
 	}
-	autoModel := qualifiedModel == "auto"
-	var autoSelection autoChainSelection
-	var providerName, model, routeError string
-	var routeStatus int
-	if autoModel {
-		if h.autoChain == nil || len(h.config.AutoChain) == 0 {
-			h.reject(w, r, protocol, http.StatusNotFound, "model_not_found", "model")
-			return
-		}
+	persistentSession := strings.TrimSpace(options.SessionID) != ""
+	sessionKey := h.sharedSessionKey(qualifiedModel, protocol, options.SessionID)
+	if qualifiedModel == "auto" {
+		sessionKey = h.callerSessionKey("auto", protocol, options.SessionID)
 		if !persistentSession {
 			options.SessionID, err = newRequestID()
 			if err != nil {
@@ -405,69 +413,50 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		var ok bool
-		autoSelection, ok = h.autoChain.selectForSession(options.SessionID, persistentSession)
-		if !ok {
-			h.reject(w, r, protocol, http.StatusServiceUnavailable, "auto_chain_exhausted", "model")
-			return
-		}
-		providerName, model = autoSelection.provider, autoSelection.model
-		options.ResponseModel = model
-	} else {
-		providerName, model, routeError, routeStatus = h.resolveRequestModel(qualifiedModel, protocol, body)
 	}
-	if providerName != "" {
-		r = withRequestLogDetails(r, providerName, model)
-	}
+	r = withRequestLogDetails(r, "", qualifiedModel)
+	routes, routeError, routeStatus := h.resolveRoutes(qualifiedModel, protocol, body, sessionKey)
 	if routeError != "" {
 		parameter := "model"
 		if routeError == "unsupported_request_feature" {
-			parameter = "tools"
+			parameter = h.routeErrorParameter(qualifiedModel, protocol, body)
 		}
 		h.reject(w, r, protocol, routeStatus, routeError, parameter)
 		return
 	}
-	provider, providerExists := h.providers[providerName]
-	if !providerExists {
-		h.reject(w, r, protocol, 404, "provider_not_found", "model")
+	if len(routes) == 0 {
+		h.reject(w, r, protocol, http.StatusServiceUnavailable, "provider_unavailable", "model")
 		return
 	}
-	if _, unavailable := h.unavailableProviders[providerName]; unavailable {
-		if autoModel {
-			h.autoChain.advanceForNewSessions(autoSelection.index)
+	initial := routes[0]
+	r = withRequestLogDetails(r, initial.provider, initial.model)
+	if _, exists := h.providers[initial.provider]; !exists {
+		h.reject(w, r, protocol, http.StatusNotFound, "provider_not_found", "model")
+		return
+	}
+	if _, unavailable := h.unavailableProviders[initial.provider]; unavailable {
+		if initial.autoChainIndex != nil {
+			h.autoChain.recordFailure(*initial.autoChainIndex, len(h.config.AutoChain), &adapter.CallError{FailoverSafe: true, UpstreamNotAttempted: true, Category: adapter.ProviderErrorTemporarilyUnavailable}, r.Context().Err(), false)
 		}
 		h.reject(w, r, protocol, http.StatusServiceUnavailable, "provider_unavailable", "model")
 		return
 	}
-	providerClient := h.clients[providerName]
-	if providerClient == nil {
-		if autoModel {
-			h.autoChain.advanceForNewSessions(autoSelection.index)
-		}
-		h.reject(w, r, protocol, 404, "provider_not_found", "model")
+	if h.clients[initial.provider] == nil {
+		h.reject(w, r, protocol, http.StatusNotFound, "provider_not_found", "model")
 		return
 	}
-	if protocol == "anthropic" && adapter.HasAnthropicServerTools(body) && providerClient.Protocol != "anthropic" {
-		h.reject(w, r, protocol, http.StatusBadRequest, "unsupported_request_feature", "tools")
-		return
-	}
-	body, err = replaceRequestModel(body, model)
-	if err != nil {
-		h.reject(w, r, protocol, 400, "invalid_request", "model")
-		return
-	}
-	if len(provider.SupportedModels) > 0 && !containsModel(provider.SupportedModels, model) {
-		h.reject(w, r, protocol, 404, "model_not_found")
+	if !h.supportScopeAllows(initial.provider, initial.model) {
+		h.reject(w, r, protocol, http.StatusNotFound, "model_not_found")
 		return
 	}
 	var mode struct {
 		Stream bool `json:"stream"`
 	}
 	_ = json.Unmarshal(body, &mode)
-	if h.config.MaxActiveSessions > 0 && !persistentSession && options.SessionID == "" {
+	if h.config.MaxActiveSessions > 0 && options.SessionID == "" {
 		options.SessionID, err = newRequestID()
 		if err != nil {
-			h.reject(w, r, protocol, 500, "request_id_failed")
+			h.reject(w, r, protocol, http.StatusInternalServerError, "request_id_failed")
 			return
 		}
 	}
@@ -475,48 +464,74 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, limiter.ErrActiveSessionLimit) {
 			w.Header().Set("Retry-After", "1")
-			h.reject(w, r, protocol, 429, limiter.ErrActiveSessionLimit.Error())
+			h.reject(w, r, protocol, http.StatusTooManyRequests, limiter.ErrActiveSessionLimit.Error())
 			return
 		}
-		h.reject(w, r, protocol, 400, "invalid_session_id")
+		h.reject(w, r, protocol, http.StatusBadRequest, "invalid_session_id")
 		return
 	}
 	retainSession := false
 	defer func() { lease.Release(retainSession) }()
-	if providerClient == nil {
-		h.reject(w, r, protocol, 500, "protocol_client_unavailable")
-		return
-	}
-	advanceAutoChain := func(callErr error, delivered bool) {
-		if !autoModel || h.autoChain == nil {
-			return
+
+	var delivered bool
+	send := func(id string, frame []byte) error {
+		if !delivered {
+			w.Header().Set("X-TideMux-Request-ID", id)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+			delivered = true
 		}
-		var upstreamErr *adapter.CallError
-		if errors.As(callErr, &upstreamErr) && autoChainFailureAdvances(upstreamErr, r.Context().Err(), delivered) {
-			h.autoChain.advanceForNewSessions(autoSelection.index)
+		if _, err := w.Write(frame); err != nil {
+			return err
 		}
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			return err
+		}
+		lease.TouchOutput()
+		return nil
 	}
-	providerAttempts := h.billingFailoverProviders(providerName, model, protocol, body, autoModel)
-	callProviders := func(sink adapter.StreamSink, delivered func() bool) ([]byte, string, error, bool) {
+
+	attemptRoutes := func(sink adapter.StreamSink) ([]byte, string, error, bool) {
 		var lastID string
-		var lastErr error
+		var lastErr *adapter.CallError
 		var firstBalanceErr *adapter.CallError
 		var firstBalanceID string
-		for index, candidate := range providerAttempts {
-			if index > 0 {
-				if !h.config.EffectiveRouting().BillingExhaustionFailover || autoModel || r.Context().Err() != nil || delivered() {
-					break
-				}
-				var previousErr *adapter.CallError
-				if !errors.As(lastErr, &previousErr) || !previousErr.FailoverSafe || previousErr.Category != adapter.ProviderErrorInsufficientBalance {
-					break
-				}
-				if pool := h.keyPools[candidate]; pool != nil && pool.CooldownWaitAt(time.Now()) > 0 {
+		for index, route := range routes {
+			if index > 0 && !routeCanAdvance(h.config.EffectiveRouting(), route, lastErr, r.Context().Err(), delivered) {
+				continue
+			}
+			if lastErr != nil && lastErr.Category == adapter.ProviderErrorInsufficientBalance {
+				if pool := h.keyPools[route.provider]; pool != nil && pool.CooldownWaitAt(time.Now()) > 0 {
 					continue
 				}
 			}
-			r = withRequestLogDetails(r, candidate, model)
-			response, id, callErr, handled := h.callProviderCandidate(w, r, protocol, candidate, model, body, options, sink)
+			var response []byte
+			var id string
+			var callErr error
+			var handled bool
+			for preDispatch := 0; ; preDispatch++ {
+				if route.sessionKey != nil {
+					// Recheck after admission and on a proven pre-dispatch cooldown
+					// race. Once the adapter may have sent a request, do not rebind.
+					rebound, code, status := h.resolveRoutes(route.model, protocol, body, route.sessionKey)
+					if code != "" {
+						parameter := "model"
+						if code == "unsupported_request_feature" {
+							parameter = h.routeErrorParameter(route.model, protocol, body)
+						}
+						h.reject(w, r, protocol, status, code, parameter)
+						return nil, "", nil, true
+					}
+					route = rebound[0]
+				}
+				r = withRequestLogDetails(r, route.provider, route.model)
+				response, id, callErr, handled = h.callRouteCandidate(w, r, protocol, route, body, options, sink)
+				var preDispatchErr *adapter.CallError
+				if route.sessionKey == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || preDispatchErr.Code != "provider_keys_cooling_down" {
+					break
+				}
+			}
 			if handled {
 				return nil, id, nil, true
 			}
@@ -524,74 +539,53 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if callErr == nil {
 				return response, id, nil, false
 			}
-			lastErr = callErr
-			var providerErr *adapter.CallError
-			if !errors.As(callErr, &providerErr) {
+			var adapterErr *adapter.CallError
+			if !errors.As(callErr, &adapterErr) {
 				return nil, id, callErr, false
 			}
-			if providerErr.Category != adapter.ProviderErrorInsufficientBalance || !providerErr.FailoverSafe {
-				return nil, id, callErr, false
+			lastErr = adapterErr
+			if route.autoChainIndex != nil {
+				h.autoChain.recordFailure(*route.autoChainIndex, len(h.config.AutoChain), adapterErr, r.Context().Err(), delivered)
 			}
-			if firstBalanceErr == nil {
-				firstBalanceErr, firstBalanceID = providerErr, id
+			if firstBalanceErr == nil && adapterErr.Category == adapter.ProviderErrorInsufficientBalance {
+				firstBalanceErr, firstBalanceID = adapterErr, id
 			}
-			if delivered() {
+			if delivered {
 				break
 			}
 		}
-		if firstBalanceErr != nil {
+		if firstBalanceErr != nil && !delivered {
 			return nil, firstBalanceID, firstBalanceErr, false
 		}
 		return nil, lastID, lastErr, false
 	}
 
 	if mode.Stream {
-		sent := false
-		send := func(id string, frame []byte) error {
-			if !sent {
-				w.Header().Set("X-TideMux-Request-ID", id)
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.Header().Set("Cache-Control", "no-cache")
-				w.WriteHeader(200)
-				sent = true
-			}
-			if _, err := w.Write(frame); err != nil {
-				return err
-			}
-			if err := http.NewResponseController(w).Flush(); err != nil {
-				return err
-			}
-			lease.TouchOutput()
-			return nil
-		}
-		terminal, id, err, handled := callProviders(send, func() bool { return sent })
+		terminal, id, callErr, handled := attemptRoutes(send)
 		if handled {
 			return
 		}
-		if err != nil {
-			advanceAutoChain(err, sent)
-		}
-		if err == nil {
+		if callErr == nil {
 			send(id, terminal)
 			return
 		}
-		var ce *adapter.CallError
-		if !errors.As(err, &ce) {
-			ce = &adapter.CallError{Status: 500, Code: "internal_error"}
+		var upstreamErr *adapter.CallError
+		if !errors.As(callErr, &upstreamErr) {
+			upstreamErr = &adapter.CallError{Status: http.StatusInternalServerError, Code: "internal_error"}
 		}
-		setRetryAfterHeader(w, ce)
-		if !sent {
+		setRetryAfterHeader(w, upstreamErr)
+		if !delivered {
 			if id != "" {
 				w.Header().Set("X-TideMux-Request-ID", id)
 			}
-			h.failUpstream(w, ce, protocol)
+			h.failUpstream(w, upstreamErr, protocol)
 			return
 		}
-		payload := mappedUpstreamErrorPayload(ce, protocol)
-		if ce.Category == "" {
-			detail := map[string]any{"type": "api_error", "message": ce.Code, "code": ce.Code}
-			if ce.Param != "" {
-				detail["param"] = ce.Param
+		payload := mappedUpstreamErrorPayload(upstreamErr, protocol)
+		if upstreamErr.Category == "" {
+			detail := map[string]any{"type": "api_error", "message": upstreamErr.Code, "code": upstreamErr.Code}
+			if upstreamErr.Param != "" {
+				detail["param"] = upstreamErr.Param
 			}
 			payload = map[string]any{"error": detail}
 			if protocol == "anthropic" {
@@ -602,28 +596,26 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
 		return
 	}
-	response, id, err, handled := callProviders(nil, func() bool { return false })
+
+	response, id, callErr, handled := attemptRoutes(nil)
 	if handled {
 		return
-	}
-	if err != nil {
-		advanceAutoChain(err, false)
 	}
 	if id != "" {
 		w.Header().Set("X-TideMux-Request-ID", id)
 	}
-	if err != nil {
-		var ce *adapter.CallError
-		if errors.As(err, &ce) {
-			setRetryAfterHeader(w, ce)
-			h.failUpstream(w, ce, protocol)
+	if callErr != nil {
+		var upstreamErr *adapter.CallError
+		if errors.As(callErr, &upstreamErr) {
+			setRetryAfterHeader(w, upstreamErr)
+			h.failUpstream(w, upstreamErr, protocol)
 		} else {
-			h.fail(w, 500, "internal_error", protocol)
+			h.fail(w, http.StatusInternalServerError, "internal_error", protocol)
 		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	n, writeErr := w.Write(response)
 	if writeErr != nil || n != len(response) {
 		return
