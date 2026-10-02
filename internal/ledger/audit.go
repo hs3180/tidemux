@@ -15,6 +15,7 @@ type Audit struct {
 	TimestampMS      int64           `json:"timestamp_ms"`
 	Protocol         string          `json:"protocol"`
 	Upstream         string          `json:"upstream"`
+	ProviderRef      string          `json:"provider_ref,omitempty"`
 	Model            string          `json:"model"`
 	Status           string          `json:"status"`
 	ErrorCode        string          `json:"error_code,omitempty"`

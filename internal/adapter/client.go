@@ -122,7 +122,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		return nil, "", &CallError{Status: 500, Code: "request_id_failed", UpstreamNotAttempted: true}
 	}
 	id = hex.EncodeToString(nonce)
-	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, Model: model, Status: "error", Events: []string{}}
+	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, ProviderRef: c.ProviderRef, Model: model, Status: "error", Events: []string{}}
 	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
 	if e != nil {
 		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e), UpstreamNotAttempted: true}
@@ -187,7 +187,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		if err != nil {
 			var callErr *CallError
 			if errors.As(err, &callErr) {
-				callErr.UpstreamNotAttempted = !attempted
+				if !attempted {
+					callErr.UpstreamNotAttempted = true
+				}
 			}
 		}
 		status := terminalHTTPStatus(clientProtocol, delivered, err)
@@ -476,6 +478,8 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		if !headersWritten.Load() && ctx.Err() == nil {
 			callErr.Retryable = true
 			callErr.Cooldown = 5 * time.Second
+			callErr.UpstreamNotAttempted = true
+			callErr.FailoverSafe = true
 		}
 		return nil, TokenUsage{}, callErr
 	}
