@@ -159,3 +159,43 @@ func TestConfigPreparationDeadlineKeepsOldView(t *testing.T) {
 		t.Fatal("failed preparation changed active provider")
 	}
 }
+
+func TestExplicitProviderWithoutModelEndpointStillReloads(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	defer upstream.Close()
+	c := routingTestConfig(filepath.Join(t.TempDir(), "ledger.db"))
+	addRoutingProvider(&c, "a", upstream.URL, "openai", "custom-model")
+	h, closeGateway, err := NewHandler(c, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGateway()
+	root := h.(*handler)
+	for _, scenario := range []string{"scope", "addition"} {
+		t.Run(scenario, func(t *testing.T) {
+			next := c
+			next.Providers = map[string]Provider{}
+			for name, p := range c.Providers {
+				next.Providers[name] = p
+			}
+			if scenario == "scope" {
+				p := next.Providers["a"]
+				p.SupportedModels = []string{"new-model"}
+				next.Providers["a"] = p
+			} else {
+				addRoutingProvider(&next, "b", upstream.URL, "openai", "new-model")
+			}
+			view, err := root.prepareConfigView(context.Background(), next, c, root, upstream.Client())
+			if err != nil {
+				t.Fatalf("explicit protocol/scoped provider with unsupported model discovery could not reload: %v", err)
+			}
+			name := "a"
+			if scenario == "addition" {
+				name = "b"
+			}
+			if models, _ := view.modelsForProvider(name); len(models) != 1 || models[0] != "new-model" {
+				t.Fatal("active scope/catalog mismatch")
+			}
+		})
+	}
+}
