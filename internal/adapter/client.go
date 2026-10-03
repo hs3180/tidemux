@@ -148,7 +148,11 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		if !priced || a.EstimatedCost != nil {
 			return
 		}
-		cost, usage, source := c.PromptCache.LocalEstimate(c.Protocol, model, options.SessionID, body, response, price)
+		cacheSession := options.SessionID
+		if options.RequestScopedSession {
+			cacheSession = ""
+		}
+		cost, usage, source := c.PromptCache.LocalEstimate(c.Protocol, model, cacheSession, body, response, price)
 		if cost != nil {
 			a.InputTokens, a.OutputTokens, a.CacheReadTokens = usage.Input, usage.Output, usage.CacheRead
 			a.Currency, a.PriceSnapshot, a.EstimatedCost, a.CostSource = price.Currency, mustJSON(price), cost, source
@@ -342,7 +346,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			localEstimate(data)
 		}
 	}
-	if c.PromptCache != nil {
+	if c.PromptCache != nil && !options.RequestScopedSession {
 		c.PromptCache.Remember(clientProtocol, model, options.SessionID, body)
 	}
 	a.Status = "ok"

@@ -4,33 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
-	"sync"
 	"unicode"
 	"unicode/utf8"
 )
-
-// PromptCache remembers the last normalized prompt for a client session. It
-// stores only the normalized prompt bytes, never credentials or response text.
-type PromptCache struct {
-	mu      sync.Mutex
-	prompts map[string][]byte
-}
-
-func NewPromptCache() *PromptCache { return &PromptCache{prompts: map[string][]byte{}} }
-
-func (c *PromptCache) Remember(protocol, model, session string, request []byte) {
-	prompt := normalizedPrompt(request)
-	if c == nil || len(prompt) == 0 || strings.TrimSpace(session) == "" {
-		return
-	}
-	key := protocol + "\x00" + model + "\x00" + session
-	c.mu.Lock()
-	if c.prompts == nil {
-		c.prompts = map[string][]byte{}
-	}
-	c.prompts[key] = append([]byte(nil), prompt...)
-	c.mu.Unlock()
-}
 
 // LocalEstimate applies the configured price to a content-based estimate. A
 // session with no previous prompt is all cache-miss; a known session reuses its
@@ -40,19 +16,7 @@ func (c *PromptCache) LocalEstimate(protocol, model, session string, request, re
 	if len(prompt) == 0 {
 		return nil, TokenUsage{}, ""
 	}
-	hitBytes := 0
-	key := ""
-	if c != nil && strings.TrimSpace(session) != "" {
-		key = protocol + "\x00" + model + "\x00" + session
-		c.mu.Lock()
-		if c.prompts == nil {
-			c.prompts = map[string][]byte{}
-		}
-		previous := c.prompts[key]
-		hitBytes = commonPrefix(previous, prompt)
-		c.prompts[key] = append([]byte(nil), prompt...)
-		c.mu.Unlock()
-	}
+	hitBytes := c.prefixAndRemember(protocol, model, session, prompt)
 	if hitBytes > 0 && price.InputCacheHit == nil {
 		// Without a cache-hit rate, price the whole input as cache-miss rather
 		// than inventing a discount.

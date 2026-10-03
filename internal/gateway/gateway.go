@@ -471,6 +471,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	if qualifiedModel == "auto" {
 		sessionKey = h.callerSessionKey("auto", protocol, options.SessionID)
 		if !persistentSession {
+			options.RequestScopedSession = true
 			options.SessionID, err = newRequestID()
 			if err != nil {
 				h.reject(w, r, protocol, http.StatusInternalServerError, "request_id_failed")
@@ -518,6 +519,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &mode)
 	if h.config.MaxActiveSessions > 0 && options.SessionID == "" {
+		options.RequestScopedSession = true
 		options.SessionID, err = newRequestID()
 		if err != nil {
 			h.reject(w, r, protocol, http.StatusInternalServerError, "request_id_failed")

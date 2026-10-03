@@ -11,9 +11,10 @@ const SessionIDHeader = "X-TideMux-Session-ID"
 // accounting. SessionID is forwarded upstream using SessionIDHeader.
 // Credentials and API version always come from the gateway configuration.
 type CallOptions struct {
-	AnthropicBeta string
-	SessionID     string
-	ResponseModel string // Optional downstream model name override for model:auto.
+	AnthropicBeta        string
+	SessionID            string
+	RequestScopedSession bool   // Gateway-generated admission ID; never reuse a prompt prefix.
+	ResponseModel        string // Optional downstream model name override for model:auto.
 }
 
 func (o CallOptions) Validate(protocol string) error {

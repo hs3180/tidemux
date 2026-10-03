@@ -572,6 +572,7 @@ func TestMissingUsageUsesLocalContentEstimateAndSessionCache(t *testing.T) {
 	}
 	g, _ := limiter.NewConcurrencyGate(1)
 	c.Gate = g
+	t.Cleanup(c.PromptCache.Close)
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
 	for i := 0; i < 2; i++ {
 		if _, _, err = c.CallWithOptions(context.Background(), body, "m", nil, CallOptions{SessionID: "session"}); err != nil {
@@ -621,6 +622,7 @@ func TestInterruptedStreamEstimatesReceivedOutput(t *testing.T) {
 		Ledger:      l,
 		Gate:        g,
 	}
+	t.Cleanup(c.PromptCache.Close)
 	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	_, _, err = c.CallWithOptions(context.Background(), body, "m", func(string, []byte) error { return nil }, CallOptions{SessionID: "session"})
 	if err == nil || err.Error() != "incomplete_upstream_stream" {
