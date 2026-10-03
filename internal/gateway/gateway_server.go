@@ -87,7 +87,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	if err := c.Validate(); err != nil {
 		return nil, nil, err
 	}
-	l, err := ledger.Open(c.LedgerPath)
+	l, err := ledger.OpenForGateway(c.LedgerPath)
 	if err != nil {
 		return nil, nil, errors.New("cannot open ledger")
 	}
