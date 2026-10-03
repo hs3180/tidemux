@@ -175,19 +175,28 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 		var models []string
 		var known bool
 		var err error
-		if protocol == "" || protocol == "auto" {
+		before, existed := previousRaw.Providers[name]
+		prior := previous.providers[name]
+		sameConnection := existed && previous.clients[name] != nil && before.BaseURL == raw.BaseURL && normalizeProviderProtocol(before.Protocol) == normalizeProviderProtocol(raw.Protocol) && before.APIVersion == raw.APIVersion && reflect.DeepEqual(before.ResolvedAPIKeys(), raw.ResolvedAPIKeys())
+		if sameConnection {
+			protocol = prior.Protocol
+			p.APIVersion = prior.APIVersion
+			models, known = previous.models[name], previous.modelsKnown[name]
+		} else if protocol == "" || protocol == "auto" {
 			protocol, models, known, err = detectProviderEndpoint(ctx, p.BaseURL, p.APIKey, p.APIVersion, client)
 		} else {
 			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			response, probeErr := requestProviderModels(probeCtx, p.BaseURL, p.APIKey, p.APIVersion, protocol, client)
 			cancel()
-			if probeErr != nil || response.status < 200 || response.status >= 300 {
+			if probeErr != nil {
+				err = errors.New("provider probe failed")
+			} else if response.status == http.StatusNotFound || response.status == http.StatusMethodNotAllowed {
+				// Explicit protocol profiles already support endpoints without
+				// model discovery. Configured scope remains authoritative.
+			} else if response.status < 200 || response.status >= 300 {
 				err = errors.New("provider probe failed")
 			} else {
 				models, known = parseProviderModels(response.body, protocol)
-				if !known && len(p.SupportedModels) == 0 {
-					err = errors.New("provider catalog unavailable")
-				}
 			}
 		}
 		if err != nil || ctx.Err() != nil {

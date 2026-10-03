@@ -32,6 +32,8 @@ class Upstream(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
     def do_GET(self):
+        if '/no-models/' in self.path:
+            self.send_error(404);return
         self.reply({'object':'list','data':[{'id':m,'type':'model'} for m in ('custom-model','other-model')],'has_more':False})
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
@@ -178,6 +180,13 @@ else:sys.exit(1)
                     if query(url,'/v1/chat/completions',body('original/custom-model'))[0]!=404:raise RuntimeError('removed provider routable')
                     upstream.release.set();tail=held.read().decode()
                     if '[DONE]' not in tail or 'event: error' in tail:raise RuntimeError('reload interrupted SSE')
+                cli(binary,env,config,['add',endpoint.replace('/v1','/no-models/v1'),'--name','catalogless','--protocol','openai','--model','custom-model'],KEY+'-catalogless')
+                wait_for(lambda:'catalogless/custom-model' in query(url,'/v1/models')[1],'explicit provider without model endpoint')
+                for path in ('/v1/chat/completions','/v1/messages'):
+                    if query(url,path,body('catalogless/custom-model'))[0]!=200:raise RuntimeError('catalogless provider not callable')
+                cli(binary,env,config,['update','catalogless','--model','other-model'])
+                wait_for(lambda:'catalogless/other-model' in query(url,'/v1/models')[1],'catalogless scope update')
+                if query(url,'/v1/chat/completions',body('catalogless/other-model'))[0]!=200:raise RuntimeError('catalogless scope not routable')
                 if process.pid!=pid or process.poll() is not None:raise RuntimeError('gateway restarted')
                 with sqlite3.connect(ledger) as connection:
                     rows=connection.execute("SELECT record_json FROM request_audit WHERE status='ok'").fetchall()

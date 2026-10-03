@@ -77,9 +77,14 @@ individual model probes capped at five seconds. When no load is in progress,
 a valid change applies within 11 seconds under normal local file I/O. A change
 arriving during another load is checked within 21 seconds. These bounds are
 attempt deadlines, not promises that an unavailable provider will become ready.
-Changed providers must pass an authenticated, redirect-free `GET /models` probe;
-an explicit model scope permits an unrecognized successful catalog, while an
-unrestricted provider requires a complete recognizable catalog. A failed probe,
+Endpoint/protocol/key changes make an authenticated, redirect-free `GET /models`
+probe. Automatic protocol detection requires recognizable evidence. Explicit
+protocol profiles retain their existing support for unavailable model discovery:
+404/405 or an unrecognized successful catalog does not invalidate the profile;
+a configured scope supplies the catalog, otherwise undiscovered models are not
+listed. Scope/pricing/policy-only updates reuse the validated connection/catalog.
+Transport, authentication, redirect and other unsuccessful probes remain failures.
+A failed probe,
 missing/invalid/duplicate key, invalid file or a file changed during validation
 keeps the entire last valid view and leaves the change pending. Unchanged
 providers retain clients, catalog and key cooldowns. Failures emit safe
