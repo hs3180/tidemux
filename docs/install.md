@@ -1,6 +1,6 @@
 # Installation
 
-TideMux v0.3.0 targets macOS 15+ on Apple Silicon. Install your coding client
+TideMux v0.3.1 targets macOS 15+ on Apple Silicon. Install your coding client
 separately; TideMux does not install Claude Code, Kilo CLI or Hermes Agent.
 
 ## Homebrew (recommended)
@@ -19,12 +19,12 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Install without Homebrew
 
-Install the published version, 0.3.0:
+Install version 0.3.1:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.0/scripts/install.sh -o /tmp/tidemux-install.sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.1/scripts/install.sh -o /tmp/tidemux-install.sh
 less /tmp/tidemux-install.sh
-TIDEMUX_VERSION=0.3.0 sh /tmp/tidemux-install.sh
+TIDEMUX_VERSION=0.3.1 sh /tmp/tidemux-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -41,6 +41,23 @@ select a published version. Review the version-pinned installer before running
 it. The installer does not change configuration or Keychain credentials.
 
 ## Upgrade and rollback
+
+TideMux 0.3.1 preserves the existing config and SQLite table formats. Before
+upgrading, back up your config, launchd plist, old executable and ledger using
+SQLite's online backup API. Stop the old gateway before replacing its binary,
+then restart it and verify `tidemux version`, `tidemux doctor` and
+`tidemux gateway check`. See the [0.3.1 release guide](release-0.3.1.md) for the
+full integrity and service checks.
+
+For an emergency rollback to 0.3.0, stop the gateway and restore the retained
+0.3.0 executable, or inspect that version's installer and run it with
+`TIDEMUX_VERSION=0.3.0`. Keep the current ledger and config; do not restore an
+older ledger over newer accounting records. The 0.3.0 binary can read them,
+but restores its known live-report, prompt-cache and tool-history defects.
+The `.gateway.lock` sidecar belongs to 0.3.1's running gateway; do not remove
+it while that process owns the ledger.
+
+### Returning to versions before 0.3.0
 
 TideMux 0.3.0 keeps the existing provider profiles, Keychain references,
 budgets and audit ledger. It adds optional top-level `auto_chain` and `routing`
