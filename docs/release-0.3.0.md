@@ -21,6 +21,10 @@ Client reliability update (2026-10-03): merged
 [#90](https://github.com/hs3180/tidemux/issues/90) session-capacity retry guidance.
 The release acceptance below covers these fixes and long streamed generations.
 
+0.3.1 correction: [#61](https://github.com/hs3180/tidemux/issues/61) was reopened
+with an automatic-application requirement. The historical restart guidance
+below does not satisfy that requirement; see the [0.3.1 guide](release-0.3.1.md).
+
 ## 0.2.2 carry-forward audit
 
 The 11 issues below were checked against the published source, changelog,

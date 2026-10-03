@@ -22,8 +22,9 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-Homebrew installs TideMux v0.3.0, including the client reliability fixes
-and routing options documented below.
+TideMux v0.3.1 adds automatic provider application, bounded prompt retention,
+safer live budget/report handling, tool-history diagnostics and a minimal
+Elasticsearch collector reference.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -31,7 +32,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.3.0 CLI**.
+This walkthrough describes the **0.3.1 CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -153,7 +154,7 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.3.0 CLI.
+`tidemux gateway`. The commands below describe the 0.3.1 CLI.
 
 | Command | Semantics |
 | --- | --- |
@@ -276,7 +277,8 @@ tidemux claude --model REF_FROM_LIST/model-a
 [Client setup](docs/clients.md) ·
 [Agent installation and setup](docs/agent-install.md) ·
 [Runtime JSON logs](docs/runtime-logging.md) ·
-[0.3.0 release guide](docs/release-0.3.0.md) ·
+[0.3.1 release guide](docs/release-0.3.1.md) ·
+[Elasticsearch collection](docs/elasticsearch.md) ·
 [0.2.2 release plan](docs/release-0.2.2.md) ·
 [0.2.1 release history](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·

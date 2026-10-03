@@ -14,8 +14,8 @@ version's assets.
    Commit all reviewed files; do not include local credentials, config or
    databases.
 4. Run `python3 scripts/release.py` from a clean Git tree. It builds arm64 with
-   CGO disabled, includes build metadata, docs, license texts and SPDX JSON, then
-   emits a tarball, SHA256SUMS and matching `tidemux.rb` formula.
+   CGO disabled and includes build metadata, docs, licenses, SPDX JSON and
+   collector reference examples. It emits a tarball, SHA256SUMS and matching `tidemux.rb` formula.
 5. Verify `shasum -a 256 -c SHA256SUMS` in the output directory, extract into a
    fresh directory, and run the packaged binary's version / doctor / serve /
    billing checks. Preserve source commit and test results in private evidence.
@@ -55,3 +55,14 @@ If download/install fails after publication, flag the release as unusable and
 pause announcements. Fix via a new candidate/version; do not silently replace
 assets or delete users' data. For upgrades, retain a tested rollback path and
 document database compatibility before changing persisted formats.
+
+## 0.3.1 gates
+
+Use `docs/release-0.3.1.md` for the required reliability and collector gates.
+Run each against the same clean, extracted archive that will be uploaded.
+The ES destination must be an explicitly supplied isolated fixture; CI's
+normal packaged checks do not contact a production Elasticsearch deployment.
+Back up config and ledger with SQLite's online backup API before local upgrade;
+verify table schema and historical audit rows after upgrade. Stop the old
+process before replacing its executable, retain the old binary as a rollback
+path, and verify the actual launchd service plus authenticated gateway access.

@@ -104,8 +104,8 @@ def main():
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise SystemExit("--binary must point to an executable packaged candidate")
     version = subprocess.check_output([str(binary), "version"], text=True).strip()
-    if version != "0.3.0":
-        raise RuntimeError(f"candidate version is {version!r}, expected '0.3.0'")
+    if version != "0.3.1":
+        raise RuntimeError(f"candidate version is {version!r}, expected '0.3.1'")
 
     upstream = Server(("127.0.0.1", 0), UpstreamHandler)
     upstream.posts = []

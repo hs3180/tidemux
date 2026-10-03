@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1 — 2026-10-03
+
+- Automatically validate and apply provider additions, updates, removals, model
+  scope and Keychain key changes in a running gateway. Swap catalog/routing
+  together; admitted requests and SSE retain original credentials, pricing and
+  budget. Failed loads preserve the last valid view. Report pending/applied
+  status against the saved config instead of requiring provider-add restarts.
+- Recover abandoned budget attempts only at gateway startup under an exclusive
+  ledger sidecar lock. Reports preserve live pending attempts; proven queued
+  cancellation releases the reservation without permanently blocking a provider.
+- Bound prompt-cache retention to 256 entries, 16 MiB and five minutes of idle
+  time, with a background sweep. Generated request-scoped IDs retain no prompts;
+  evictions preserve estimation fallback and provider usage/price semantics.
+- Withhold malformed assistant generic Anthropic tool_result blocks, including
+  SSE. Reject poisoned native/converted history before dispatch with exact
+  paths and explicit recovery; preserve valid native server tools, client tool
+  results and compaction. Built-in upstream tool defects remain upstream-owned.
+- Ship a minimal Logstash 8.19.5 / Elasticsearch 8.19.5 collector, typed template,
+  tidemux namespace/ECS action, parse diagnostics, DLQ reader and actual packaged
+  ingestion gate. Deployment, credentials and retention remain operator-owned.
+- Retain existing JSON config and SQLite formats. Logging features #100–#104
+  remain deferred and are not prerequisites for basic ingestion.
+
 ## 0.3.0 — 2026-10-03
 
 - Raise the default request body limit to 32 MiB so image-heavy agent
