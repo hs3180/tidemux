@@ -99,7 +99,12 @@ func reportWithKeychain(args []string, stdout, stderr *os.File, keychain gateway
 		}
 		return openHTMLReport(path)
 	}
-	l, err := ledger.Open(c.LedgerPath)
+	var l *ledger.Ledger
+	if command == "list" || command == "deliveries" {
+		l, err = ledger.OpenAuditReadOnly(c.LedgerPath)
+	} else {
+		l, err = ledger.Open(c.LedgerPath)
+	}
 	if err != nil {
 		return errors.New("cannot open ledger")
 	}
