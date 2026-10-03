@@ -167,7 +167,7 @@ func TestPricePriorityRejectsIncomparablePrices(t *testing.T) {
 	b.Prices = map[string]adapter.Price{"shared-model": bPrice}
 	c.Providers["a"], c.Providers["b"] = a, b
 	configureRouting(&c, RoutingConfig{SharedModelStrategy: "price_priority"})
-	h := &handler{config: c, providers: c.Providers, clients: map[string]*adapter.Client{
+	h := &handler{handlerRuntime: &handlerRuntime{}, config: c, providers: c.Providers, clients: map[string]*adapter.Client{
 		"a": {Protocol: "openai"}, "b": {Protocol: "openai"},
 	}}
 	if _, err := h.orderSharedModelProviders("shared-model", []string{"a", "b"}); err == nil {
@@ -196,7 +196,7 @@ func TestSharedRoutingExcludesCoolingProvidersAndBoundsBillingAttempts(t *testin
 	}
 	now := time.Now()
 	pools["a"].CooldownAt(0, time.Minute, now)
-	h := &handler{config: c, providers: c.Providers, clients: clients, keyPools: pools, randomIndex: func(int) int { return 0 }}
+	h := &handler{handlerRuntime: &handlerRuntime{}, config: c, providers: c.Providers, clients: clients, keyPools: pools, randomIndex: func(int) int { return 0 }}
 	routes, code, status := h.resolveRoutes("shared-model", "openai", []byte(`{"model":"shared-model"}`), nil)
 	if code != "" || status != 0 || len(routes) == 0 || routes[0].provider != "b" {
 		t.Fatalf("cooldown selection routes=%+v code=%q status=%d", routes, code, status)

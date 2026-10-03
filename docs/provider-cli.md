@@ -38,8 +38,9 @@ the endpoint; use `--name LABEL` only when you want a different reference. If
 the endpoint does not identify the protocol, `--protocol openai` or
 `--protocol anthropic` forces it. `--model MODEL[,MODEL...]` restricts the
 provider to those IDs; omit it to allow all models. Use `tidemux provider list`
-to get the provider reference. After adding a provider, restart a running
-`tidemux serve` process before routing requests to it. In a client, use the
+to get the provider reference. A running v0.3.1 gateway automatically applies
+provider changes from its config file; wait for applied status before routing
+requests to a newly added provider. In a client, use the
 bare upstream model ID when its configured scope selects one provider, or use
 `REF/MODEL_ID` for explicit routing.
 
@@ -49,6 +50,47 @@ migrated to a named provider when one is added; listener, report, ledger and
 gateway credential settings are retained. A development-era global budget must
 be assigned explicitly with `tidemux provider budget REF`. Configuration
 changes are validated and atomically installed.
+
+## Automatic provider application (0.3.1)
+
+A running `tidemux serve --config PATH` polls that file and its provider
+Keychain references every second. Add/update/remove, scope, credentials,
+pricing, budget and provider protocol/capabilities form one immutable view.
+The catalog and new requests use that view together. Routing/auto-chain changes
+also use a new view; unchanged auto-chain and shared-model session state survive.
+Already-admitted requests, including queued work and SSE, finish with their
+original endpoint, keys, price/budget policy and accounting. The ledger,
+concurrency gate and active-session limiter remain shared; reload never creates
+another gateway or retries an admitted request.
+
+CLI provider mutations report **saved / automatic application pending** until
+an authenticated gateway response acknowledges the exact saved file. They report
+**applied** only after that acknowledgement. An unreachable/older gateway has
+not acknowledged the change. This status is also available through authenticated
+`GET /tidemux/config-status`, with `status`, `applied_revision`, `error_code`
+and the last successful `credentials_checked_at` (UTC). It is read-only; no
+manual reload is needed. Same-reference Keychain rotation is noticed at the next
+credential sample, even when the file has not changed.
+
+Each validation attempt has a 10-second total credential/probe deadline, with
+individual model probes capped at five seconds. When no load is in progress,
+a valid change applies within 11 seconds under normal local file I/O. A change
+arriving during another load is checked within 21 seconds. These bounds are
+attempt deadlines, not promises that an unavailable provider will become ready.
+Changed providers must pass an authenticated, redirect-free `GET /models` probe;
+an explicit model scope permits an unrecognized successful catalog, while an
+unrestricted provider requires a complete recognizable catalog. A failed probe,
+missing/invalid/duplicate key, invalid file or a file changed during validation
+keeps the entire last valid view and leaves the change pending. Unchanged
+providers retain clients, catalog and key cooldowns. Failures emit safe
+`config_reload` events; neither secret values nor raw diagnostics are logged.
+
+Listener, ledger location, gateway credential, limits, reconciliation and report
+settings retain startup semantics. A combined edit that changes those settings
+is pending with `config_requires_restart`; restore those fields to apply only
+provider changes automatically. Removing every named provider is supported in a
+running gateway and leaves an empty model catalog. No persisted config or ledger
+schema is added by automatic application.
 
 ## Add API keys to a provider
 

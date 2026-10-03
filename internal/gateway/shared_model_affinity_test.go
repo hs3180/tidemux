@@ -23,7 +23,7 @@ func affinityUnitHandler(t *testing.T) *handler {
 	addRoutingProvider(&c, "a", "https://a.example", "openai", "shared-model", "other-model", "vendor/model")
 	addRoutingProvider(&c, "b", "https://b.example", "openai", "shared-model", "other-model", "vendor/model")
 	configureRouting(&c, RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true})
-	return &handler{config: c, providers: c.Providers, clients: map[string]*adapter.Client{
+	return &handler{handlerRuntime: &handlerRuntime{}, config: c, providers: c.Providers, clients: map[string]*adapter.Client{
 		"a": {Protocol: "openai"}, "b": {Protocol: "openai"},
 	}, keyPools: map[string]*providerKeyPool{"a": newProviderKeyPool([]string{"key-a"}), "b": newProviderKeyPool([]string{"key-b"})}}
 }
