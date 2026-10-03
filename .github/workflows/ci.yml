@@ -21,6 +21,7 @@ jobs:
           CGO_ENABLED=0 go vet ./...
           go test -race ./...
           python3 scripts/test_provider_add_pty.py
+          python3 -m py_compile scripts/test_elasticsearch_package.py
           sh -n scripts/install.sh
           python3 scripts/test_install.py
           python3 scripts/test_client_commands.py

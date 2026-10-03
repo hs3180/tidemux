@@ -1,0 +1,176 @@
+{
+  "index_patterns": [
+    "tidemux-*"
+  ],
+  "priority": 200,
+  "_meta": {
+    "tidemux_schema_version": 1,
+    "tested_elasticsearch": "8.19.5",
+    "tested_logstash": "8.19.5"
+  },
+  "template": {
+    "settings": {
+      "number_of_shards": 1
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "tidemux": {
+          "dynamic": false,
+          "properties": {
+            "event": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "request_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "provider_protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "endpoint": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "provider_ref": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "model": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "outcome": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "error_code": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "error_class": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "signal": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "listen_address": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "recovery_command": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "level": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "time": {
+              "type": "date_nanos"
+            },
+            "msg": {
+              "type": "text",
+              "index": false
+            },
+            "schema_version": {
+              "type": "long",
+              "coerce": false
+            },
+            "http_status": {
+              "type": "long",
+              "coerce": false
+            },
+            "latency_ms": {
+              "type": "long",
+              "coerce": false
+            },
+            "queue_time_ms": {
+              "type": "long",
+              "coerce": false
+            },
+            "field_count": {
+              "type": "long",
+              "coerce": false
+            },
+            "files": {
+              "type": "long",
+              "coerce": false
+            },
+            "lines": {
+              "type": "long",
+              "coerce": false
+            },
+            "failures": {
+              "type": "long",
+              "coerce": false
+            },
+            "upstream_attempted": {
+              "type": "boolean"
+            },
+            "record_persisted": {
+              "type": "boolean"
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "action": {
+              "type": "keyword"
+            }
+          }
+        },
+        "log": {
+          "properties": {
+            "level": {
+              "type": "keyword"
+            },
+            "file": {
+              "properties": {
+                "path": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "host": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            }
+          }
+        },
+        "message": {
+          "type": "text",
+          "index": false
+        },
+        "tags": {
+          "type": "keyword"
+        },
+        "collector": {
+          "properties": {
+            "error": {
+              "type": "keyword"
+            },
+            "reason": {
+              "type": "text",
+              "index": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
