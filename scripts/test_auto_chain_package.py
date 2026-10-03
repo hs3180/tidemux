@@ -62,8 +62,8 @@ def main():
     args = parser.parse_args()
     binary = args.binary.resolve()
     version = subprocess.check_output([str(binary), "version"], text=True).strip()
-    if version != "0.3.0":
-        raise RuntimeError("expected the 0.3.0 packaged binary")
+    if version != "0.3.1":
+        raise RuntimeError("expected the 0.3.1 packaged binary")
     upstream = Server(("127.0.0.1", 0), AutoUpstream)
     upstream.posts, upstream.lock = [], threading.Lock()
     threading.Thread(target=upstream.serve_forever, daemon=True).start()

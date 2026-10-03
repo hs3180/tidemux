@@ -1,6 +1,6 @@
 # Provider and gateway setup
 
-The 0.3.0 CLI uses resource-oriented commands. Provider setup and
+The 0.3.1 CLI uses resource-oriented commands. Provider setup and
 lifecycle belong to `tidemux provider`; listener and session limits belong to
 `tidemux gateway`. The legacy top-level `tidemux configure` command is not
 retained. The new routing commands below require v0.3.0 or later.

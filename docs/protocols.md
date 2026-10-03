@@ -159,7 +159,7 @@ embeddings, batches and token-counting endpoints are not implemented. These
 remain explicit boundaries; normal tested client workflows do not prove every
 client feature or every upstream model is supported. See the
 [0.1.1 client acceptance matrix](client-compatibility.md) for prior-release
-evidence; it does not certify the 0.3.0 candidate routing model.
+evidence; it does not certify the 0.3.1 candidate routing model.
 
 ## Streaming and errors
 
