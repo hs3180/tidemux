@@ -563,6 +563,9 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 	}
 	usage, err := ValidateResponse(c.Protocol, data)
 	if err != nil {
+		if err.Error() == "invalid_upstream_tool_history" {
+			return nil, TokenUsage{}, &CallError{Status: 502, Code: err.Error(), Param: ValidationParameter(err)}
+		}
 		return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_response"}
 	}
 	var responseWarnings []string
