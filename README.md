@@ -55,7 +55,7 @@ if you want to restrict a provider; the selection can also be supplied as
 `--model MODEL[,MODEL...]`. A bare model ID routes when exactly one provider's
 configured scope matches it; use `REF/MODEL` to select a provider explicitly
 when scopes overlap. `/v1/models` lists qualified IDs. If you add a provider
-while the gateway is running, restart `tidemux serve` before using it. To
+while the gateway is running, 0.3.1 automatically validates and applies it. The CLI reports pending until the gateway acknowledges the saved configuration. To
 configure just one protocol, add only its endpoint.
 
 TideMux 0.3.0 also accepts Anthropic provider-hosted tools such as

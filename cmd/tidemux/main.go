@@ -152,7 +152,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, "doctor: configuration, Keychain references, and ledger directory are ready")
 		return nil
 	case "serve":
-		return serve(resolved, stdout, stderr)
+		return serveConfigFile(resolved, *configPath, stdout, stderr)
 	default:
 		return errors.New(usage)
 	}
@@ -185,6 +185,13 @@ type runtimeLoggedError struct {
 func (e *runtimeLoggedError) Error() string { return e.err.Error() }
 func (e *runtimeLoggedError) Unwrap() error { return e.err }
 
+func serveConfigFile(config gateway.Config, path string, stdout, stderr *os.File) error {
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
+	return serveWithSignalsUsingConfig(config, stdout, stderr, interrupt, func(server *http.Server, listener net.Listener) error { return server.Serve(listener) }, path)
+}
+
 func serve(config gateway.Config, stdout, stderr *os.File) error {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
@@ -199,6 +206,10 @@ func serveWithSignals(config gateway.Config, stdout, stderr io.Writer, interrupt
 }
 
 func serveWithSignalsUsing(config gateway.Config, stdout, stderr io.Writer, interrupt <-chan os.Signal, serveServer func(*http.Server, net.Listener) error) error {
+	return serveWithSignalsUsingConfig(config, stdout, stderr, interrupt, serveServer, "")
+}
+
+func serveWithSignalsUsingConfig(config gateway.Config, stdout, stderr io.Writer, interrupt <-chan os.Signal, serveServer func(*http.Server, net.Listener) error, path string) error {
 	logger := observability.JSONLogger(stderr)
 	listener, server, closeGateway, err := gateway.OpenWithLogger(config, nil, logger)
 	if err != nil {
@@ -210,6 +221,11 @@ func serveWithSignalsUsing(config gateway.Config, stdout, stderr io.Writer, inte
 		)
 		fmt.Fprintf(stdout, "TideMux could not start: %v\n", err)
 		return &runtimeLoggedError{err: err}
+	}
+	if path != "" {
+		stopReload := gateway.WatchConfig(server.Handler, path, config, gateway.MacOSKeychain{}, nil)
+		previousClose := closeGateway
+		closeGateway = func() error { stopReload(); return previousClose() }
 	}
 	closedGateway := false
 	closeGatewayOnce := func() error {

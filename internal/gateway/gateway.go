@@ -25,10 +25,10 @@ import (
 )
 
 type handler struct {
-	config               Config
-	ledger               *ledger.Ledger
-	budgetMu             sync.RWMutex
-	budgetBlocked        map[string]struct{}
+	config Config
+	ledger *ledger.Ledger
+	*handlerRuntime
+	reload               *configReload
 	sessions             *limiter.SessionLimiter
 	providers            map[string]Provider
 	clients              map[string]*adapter.Client
@@ -38,12 +38,20 @@ type handler struct {
 	unavailableProviders map[string]error
 	logger               *slog.Logger
 	randomIndex          func(int) int
-	sharedAffinity       sharedModelAffinity
 	autoChain            *autoChainState
-	activeMu             sync.Mutex
-	draining             bool
-	activeCalls          map[uint64]context.CancelCauseFunc
-	nextCallID           uint64
+}
+
+// Mutable admission/accounting state is shared by all immutable config views.
+type handlerRuntime struct {
+	budgetMu       sync.RWMutex
+	budgetBlocked  map[string]struct{}
+	sharedAffinity sharedModelAffinity
+	activeMu       sync.Mutex
+	draining       bool
+	activeCalls    map[uint64]context.CancelCauseFunc
+	nextCallID     uint64
+	gate           *limiter.ConcurrencyGate
+	cache          *adapter.PromptCache
 }
 
 type requestLogContextKey struct{}
@@ -300,6 +308,9 @@ func (h *handler) protocolForRequest(r *http.Request) string {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.reload != nil {
+		h = h.reload.active.Load()
+	}
 	r = withRequestLogDetails(r, "", "")
 	tracked := &trackedResponseWriter{ResponseWriter: w}
 	defer func() {
@@ -334,6 +345,11 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	}
 	if !valid {
 		h.reject(w, r, protocol, 401, "invalid_api_key")
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/tidemux/config-status" && h.reload != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(h.reload.applicationStatus())
 		return
 	}
 	modelList := r.URL.Path == "/v1/models" || r.URL.Path == "/models"

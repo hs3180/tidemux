@@ -41,6 +41,7 @@ jobs:
               for script in ["test_anthropic_server_tools_package.py",
                              "test_shared_model_affinity_package.py",
                              "test_auto_chain_package.py",
+                             "test_hot_reload_package.py",
                              "test_budget_recovery_package.py",
                              "test_budget_reservation_package.py",
                              "test_client_reliability_package.py",

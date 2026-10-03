@@ -19,7 +19,34 @@ import (
 	"golang.org/x/term"
 )
 
-func providerCommand(args []string, stdout, stderr *os.File) error {
+func providerCommand(args []string, stdout, stderr *os.File) (err error) {
+	defer func() {
+		if err != nil || len(args) == 0 {
+			return
+		}
+		mutation := args[0] == "add" || args[0] == "update" || args[0] == "remove" || args[0] == "models"
+		if len(args) > 1 && args[0] == "key" {
+			mutation = args[1] == "add" || args[1] == "remove"
+		}
+		for _, arg := range args {
+			if arg == "--help" || arg == "-h" {
+				return
+			}
+		}
+		if !mutation {
+			return
+		}
+		path := defaultConfigPath()
+		for i, arg := range args {
+			if arg == "--config" && i+1 < len(args) {
+				path = args[i+1]
+			}
+			if strings.HasPrefix(arg, "--config=") {
+				path = strings.TrimPrefix(arg, "--config=")
+			}
+		}
+		configurationApplicationStatus(path, stdout)
+	}()
 	if len(args) == 0 {
 		return errors.New("usage: tidemux provider <add|list|show|validate|update|remove|key|models|pricing|budget|error-map>")
 	}
@@ -286,7 +313,6 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Added provider %s (%s) at %s.\n", providerName, setup.Provider.Protocol, setup.Provider.BaseURL)
-	fmt.Fprintln(stdout, "If a TideMux gateway is already running, restart `tidemux serve` to load this provider.")
 	if reportScheduleChanged {
 		if _, err := syncReportSchedule(path, c.ReportSchedule); err != nil {
 			return fmt.Errorf("provider added, but daily notification setup failed: %w", err)
