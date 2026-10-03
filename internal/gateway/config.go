@@ -139,6 +139,10 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("cannot read config")
 	}
+	return decodeValidatedConfig(data)
+}
+
+func decodeValidatedConfig(data []byte) (Config, error) {
 	c, err := decodeConfig(data)
 	if err != nil {
 		return Config{}, err
