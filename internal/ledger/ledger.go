@@ -51,7 +51,10 @@ type Event struct {
 }
 
 // Ledger is a local SQLite-backed append-only ledger.
-type Ledger struct{ db *sql.DB }
+type Ledger struct {
+	db    *sql.DB
+	owner *os.File
+}
 
 // Open creates the SQLite schema when necessary and enables settings suitable
 // for concurrent local reads and serialized request writes.
@@ -133,8 +136,7 @@ func (l *Ledger) initBudget(ctx context.Context) error {
 	if _, err := l.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS budget_charge_provider_period ON budget_charges(provider_scope,currency,charged_at_ms)`); err != nil {
 		return err
 	}
-	_, err = l.db.ExecContext(ctx, `UPDATE budget_charges SET state='unknown' WHERE state='pending'`)
-	return err
+	return nil
 }
 
 // OpenReadOnly opens an existing database without creating it or migrating its
@@ -184,7 +186,14 @@ func OpenAuditReadOnly(path string) (*Ledger, error) {
 }
 
 // Close releases the local database handle.
-func (l *Ledger) Close() error { return l.db.Close() }
+func (l *Ledger) Close() error {
+	err := l.db.Close()
+	if l.owner != nil {
+		err = errors.Join(err, l.owner.Close())
+		l.owner = nil
+	}
+	return err
+}
 
 // QueryRow exposes read-only SQL access for derived views and diagnostics.
 // Callers must not mutate ledger tables. Current writes use AppendAudit or

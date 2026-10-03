@@ -280,8 +280,13 @@ charges that predate provider scoping are conservatively counted for each
 provider until they age out of the rolling windows.
 
 Budget admission persists a zero-value pending attempt before the upstream call.
+The gateway holds an OS lock on a canonical ledger sidecar for its lifetime;
+a second gateway cannot recover reservations owned by a running process. Report
+reads use read-only handles, and report writes initialize schemas without
+recovering attempts. Do not delete the `.gateway.lock` sidecar or access one
+ledger through different hard links while a gateway is running.
 It is not a reserve and does not count toward the amount. If the process exits
-before settlement, restart converts the pending attempt to `unknown`, so the
+before settlement, the next gateway startup converts the pending attempt to `unknown`, so the
 request cannot disappear from budget accounting.
 
 If request validation or protocol conversion proves that no upstream request
@@ -314,7 +319,16 @@ portion received before an interrupted stream. The tokenizer is intentionally
 model-independent, so this is a transparent approximation rather than an
 exact provider token count. These records are marked
 `local_estimated_cache_prefix`, not supplier billing. Session prompt history is
-in memory; after a restart the next request starts without a local cache prefix.
+in memory. One gateway retains at most 256 entries and 16 MiB of combined
+normalized prompt/key bytes, evicting the least recently used entries first.
+Idle entries expire after five minutes and housekeeping clears them within
+another 30 seconds even when traffic stops. Oversized entries are not retained;
+shutdown clears all entries. Allocator overhead is bounded by the entry limit.
+Only caller-supplied conversation IDs are cache identities; request-scoped IDs
+generated for routing/admission do not retain prompts. After eviction, expiry
+or restart, local estimation uses cache-miss input until a new prefix is known.
+Provider-reported usage and prices still take precedence; these limits do not
+change upstream prompt caching or supplier billing.
 
 Pre-release budget tables and the older daily/monthly policy fields are not
 converted to rolling windows. Running `tidemux provider budget REF` replaces

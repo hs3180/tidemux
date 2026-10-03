@@ -165,7 +165,7 @@ func TestBudgetSoftRequiresConfirmation(t *testing.T) {
 
 func TestPendingBudgetChargeBecomesUnknownAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.db")
-	l, err := Open(path)
+	l, err := OpenForGateway(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestPendingBudgetChargeBecomesUnknownAfterRestart(t *testing.T) {
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
 	}
-	l, err = Open(path)
+	l, err = OpenForGateway(path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -87,7 +87,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	if err := c.Validate(); err != nil {
 		return nil, nil, err
 	}
-	l, err := ledger.Open(c.LedgerPath)
+	l, err := ledger.OpenForGateway(c.LedgerPath)
 	if err != nil {
 		return nil, nil, errors.New("cannot open ledger")
 	}
@@ -119,6 +119,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	return &handler{config: c, ledger: l, handlerRuntime: &handlerRuntime{budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
 		stopReconciliation()
 		sessions.Close()
+		cache.Close()
 		return l.Close()
 	}, nil
 }

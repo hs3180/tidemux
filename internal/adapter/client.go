@@ -148,7 +148,11 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		if !priced || a.EstimatedCost != nil {
 			return
 		}
-		cost, usage, source := c.PromptCache.LocalEstimate(c.Protocol, model, options.SessionID, body, response, price)
+		cacheSession := options.SessionID
+		if options.RequestScopedSession {
+			cacheSession = ""
+		}
+		cost, usage, source := c.PromptCache.LocalEstimate(c.Protocol, model, cacheSession, body, response, price)
 		if cost != nil {
 			a.InputTokens, a.OutputTokens, a.CacheReadTokens = usage.Input, usage.Output, usage.CacheRead
 			a.Currency, a.PriceSnapshot, a.EstimatedCost, a.CostSource = price.Currency, mustJSON(price), cost, source
@@ -342,7 +346,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			localEstimate(data)
 		}
 	}
-	if c.PromptCache != nil {
+	if c.PromptCache != nil && !options.RequestScopedSession {
 		c.PromptCache.Remember(clientProtocol, model, options.SessionID, body)
 	}
 	a.Status = "ok"
@@ -563,6 +567,9 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 	}
 	usage, err := ValidateResponse(c.Protocol, data)
 	if err != nil {
+		if err.Error() == "invalid_upstream_tool_history" {
+			return nil, TokenUsage{}, &CallError{Status: 502, Code: err.Error(), Param: ValidationParameter(err)}
+		}
 		return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_response"}
 	}
 	var responseWarnings []string

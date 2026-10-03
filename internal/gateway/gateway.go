@@ -224,6 +224,7 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 		message = "unsupported_request_feature: " + field + " cannot be represented by the configured upstream protocol"
 	}
 	detail := map[string]any{"type": kind, "message": message, "code": code}
+	addToolHistoryRecovery(detail, code, field)
 	switch code {
 	case "request_too_large":
 		limit := h.config.Limits.Effective().RequestBytes
@@ -487,6 +488,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	if qualifiedModel == "auto" {
 		sessionKey = h.callerSessionKey("auto", protocol, options.SessionID)
 		if !persistentSession {
+			options.RequestScopedSession = true
 			options.SessionID, err = newRequestID()
 			if err != nil {
 				h.reject(w, r, protocol, http.StatusInternalServerError, "request_id_failed")
@@ -534,6 +536,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &mode)
 	if h.config.MaxActiveSessions > 0 && options.SessionID == "" {
+		options.RequestScopedSession = true
 		options.SessionID, err = newRequestID()
 		if err != nil {
 			h.reject(w, r, protocol, http.StatusInternalServerError, "request_id_failed")
@@ -669,6 +672,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		payload := mappedUpstreamErrorPayload(upstreamErr, protocol)
 		if upstreamErr.Category == "" {
 			detail := map[string]any{"type": "api_error", "message": upstreamErr.Code, "code": upstreamErr.Code}
+			addToolHistoryRecovery(detail, upstreamErr.Code, upstreamErr.Param)
 			if upstreamErr.Param != "" {
 				detail["param"] = upstreamErr.Param
 			}

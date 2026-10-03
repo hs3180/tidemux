@@ -139,7 +139,8 @@ def read_response(response):
 
 
 @contextmanager
-def running_gateway(binary, *, request_limit=None, capacity=0, long_seconds=0):
+def running_gateway(binary, *, request_limit=None, capacity=0, long_seconds=0,
+                    upstream_handler=UpstreamHandler, configure=None):
     with tempfile.TemporaryDirectory(prefix="tidemux-client-reliability.") as temporary:
         root = Path(temporary)
         fake_bin = root / "bin"
@@ -150,7 +151,7 @@ def running_gateway(binary, *, request_limit=None, capacity=0, long_seconds=0):
         security.chmod(0o755)
         home = root / "home"
         home.mkdir()
-        upstream = Server(("127.0.0.1", 0), UpstreamHandler)
+        upstream = Server(("127.0.0.1", 0), upstream_handler)
         upstream.lock, upstream.stop, upstream.started = threading.Lock(), threading.Event(), threading.Event()
         upstream.posts, upstream.image_preserved, upstream.long_seconds = 0, False, long_seconds
         threading.Thread(target=upstream.serve_forever, daemon=True).start()
@@ -163,6 +164,8 @@ def running_gateway(binary, *, request_limit=None, capacity=0, long_seconds=0):
                                             "supported_models": ["custom-model"]} for protocol in ("openai", "anthropic")}}
         if request_limit is not None:
             config["limits"] = {"request_bytes": request_limit}
+        if configure is not None:
+            configure(config)
         config_file = root / "config.json"
         config_file.write_text(json.dumps(config))
         env = {"PATH": str(fake_bin) + ":/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(home), "TMPDIR": str(root), "LANG": "C.UTF-8"}
@@ -170,7 +173,8 @@ def running_gateway(binary, *, request_limit=None, capacity=0, long_seconds=0):
         try:
             with (root / "stdout").open("w+") as stdout, (root / "stderr").open("w+") as stderr:
                 process = subprocess.Popen([str(binary), "serve", "--config", str(config_file)], cwd=root, env=env, stdout=stdout, stderr=stderr)
-                gateway = {"process": process, "upstream": upstream, "url": f"http://127.0.0.1:{port}", "ledger": ledger}
+                gateway = {"process": process, "upstream": upstream, "url": f"http://127.0.0.1:{port}",
+                           "ledger": ledger, "root": root, "config": config, "config_file": config_file, "env": env}
                 for _ in range(100):
                     if process.poll() is not None:
                         stderr.seek(0)
