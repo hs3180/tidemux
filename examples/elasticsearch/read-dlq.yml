@@ -1,0 +1,6 @@
+# Copy as logstash.yml in the reader's separate settings directory.
+pipeline.ecs_compatibility: v8
+pipeline.workers: 1
+path.data: ${TIDEMUX_LOGSTASH_DATA}
+dead_letter_queue.enable: false
+xpack.monitoring.enabled: false
