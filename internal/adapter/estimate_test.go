@@ -9,6 +9,7 @@ func TestLocalEstimateUsesSessionPromptPrefixAsCacheHit(t *testing.T) {
 	input, output, hit := 1.0, 2.0, .1
 	price := Price{Currency: "USD", Source: "test", Version: "1", InputCacheMiss: &input, InputCacheHit: &hit, Output: &output}
 	cache := NewPromptCache()
+	t.Cleanup(cache.Close)
 	first := `{"model":"m","messages":[{"role":"user","content":"hello"}]}`
 	second := `{"model":"m","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"world"}]}`
 	firstCost, firstUsage, source := cache.LocalEstimate("openai", "m", "session", []byte(first), []byte(`{"choices":[{"message":{"content":"ok"}}]}`), price)
@@ -28,6 +29,7 @@ func TestLocalEstimateCountsPartialOutput(t *testing.T) {
 	input, output := 1.0, 1.0
 	price := Price{Currency: "USD", Source: "test", Version: "1", InputCacheMiss: &input, InputCacheHit: &input, Output: &output}
 	cache := NewPromptCache()
+	t.Cleanup(cache.Close)
 	cost, usage, source := cache.LocalEstimate("openai", "m", "session", []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`), []byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"), price)
 	if cost == nil || source != "local_estimated_cache_prefix" || usage.Output == nil || *usage.Output == 0 {
 		t.Fatalf("cost=%v usage=%+v source=%s", cost, usage, source)

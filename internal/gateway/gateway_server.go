@@ -119,6 +119,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	return &handler{config: c, ledger: l, budgetBlocked: map[string]struct{}{}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
 		stopReconciliation()
 		sessions.Close()
+		cache.Close()
 		return l.Close()
 	}, nil
 }
