@@ -163,6 +163,31 @@ evidence; it does not certify the 0.3.0 candidate routing model.
 
 ## Streaming and errors
 
+A generic Anthropic `tool_result` belongs in a **user** message, following an
+assistant `tool_use`. Some upstream built-in `webReader` / `analyze_image`
+implementations emit a generic `tool_result` in an assistant response instead
+of their provider-specific server-tool result block. Saving that response can
+poison subsequent history, with or without compaction. This is an upstream
+protocol defect; TideMux does not execute those built-in tools or repair stored
+client history silently.
+
+TideMux rejects already-poisoned native or converted requests before dispatch
+with HTTP 400, `invalid_tool_history`, and an exact path such as
+`messages[1].content[1].type`. Malformed upstream responses produce HTTP 502
+`invalid_upstream_tool_history`; a malformed SSE block is withheld and the
+stream ends with an error event, possibly after HTTP 200 has started. Previously
+delivered valid frames remain delivered. The diagnostic exposes a structural
+path, never tool contents or IDs, and includes `recovery.retryable: false`.
+Unchanged poisoned history must not be retried. Start a clean conversation or
+explicitly repair the saved history in the client, and use client-executed
+tools as a workaround. TideMux preserves valid native `server_tool_use` and
+provider-specific result blocks, valid user `tool_result`, and compaction;
+it cannot guarantee the provider's built-in tool correctness.
+
+The binary-level reproduction and valid two-turn controls are in
+`scripts/test_tool_history_package.py`. Existing server-tool and compaction
+gates remain required.
+
 Frames are delivered incrementally, preserving LF/CRLF. Anthropic event names must
 agree with their payload type. The final frame is held until terminal audit
 storage succeeds. A missing terminal marker, upstream error, read failure or

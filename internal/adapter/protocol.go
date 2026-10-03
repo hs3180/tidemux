@@ -245,6 +245,11 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 		return nil, "", warnings, validationError("tools", "tool_choice")
 	}
 	for index, m := range in.Messages {
+		if protocol == "anthropic" && m.Role == "assistant" {
+			if path := assistantToolResultPath(m.Content, fmt.Sprintf("messages[%d].content", index)); path != "" {
+				return nil, "", warnings, validationError("invalid_tool_history", path)
+			}
+		}
 		// System-role messages are a compatible-provider extension emitted by
 		// gateway clients. Preserve their position; do not promote or rewrite them.
 		allowed := m.Role == "user" || m.Role == "assistant" || m.Role == "system"
@@ -515,6 +520,11 @@ func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
 			}
 		}
 	} else {
+		if r.Role == "assistant" {
+			if path := assistantToolResultPath(r.Content, "content"); path != "" {
+				return TokenUsage{}, validationError("invalid_upstream_tool_history", path)
+			}
+		}
 		if r.Type != "message" || r.Role != "assistant" || !messageContent("anthropic", "assistant", r.Content) {
 			return TokenUsage{}, errors.New("invalid_upstream_response")
 		}
