@@ -49,9 +49,10 @@ python3 scripts/test_install_upgrade_rollback.py \
 Also run the client reliability gate with `--long-stream-seconds 65` on a real
 clock and the packaged PTY provider setup. The Claude gate uses an isolated real
 Claude Code CLI against loopback mocks, including native/conversion and
-compaction follow-ups. It sends no paid provider request. Run the ES smoke with
-an explicit isolated target as documented in
-[the advanced Logstash reference](elasticsearch-logstash.md).
+compaction follow-ups. It sends no paid provider request. Run
+`scripts/test_elasticsearch_package.py` with an explicit isolated target; this
+release smoke exercises the Logstash fixture in `examples/elasticsearch/` and
+is separate from the basic Filebeat example in the README.
 Record source commit, binary/archive hashes, test results and index evidence in
 private operations records; do not put real configuration or credentials in
 public artifacts. The CI archive gates cover normal routing, sessions, budgets,
