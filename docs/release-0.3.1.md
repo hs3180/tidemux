@@ -50,7 +50,8 @@ Also run the client reliability gate with `--long-stream-seconds 65` on a real
 clock and the packaged PTY provider setup. The Claude gate uses an isolated real
 Claude Code CLI against loopback mocks, including native/conversion and
 compaction follow-ups. It sends no paid provider request. Run the ES smoke with
-an explicit isolated target as documented in [elasticsearch.md](elasticsearch.md).
+an explicit isolated target as documented in
+[the advanced Logstash reference](elasticsearch-logstash.md).
 Record source commit, binary/archive hashes, test results and index evidence in
 private operations records; do not put real configuration or credentials in
 public artifacts. The CI archive gates cover normal routing, sessions, budgets,

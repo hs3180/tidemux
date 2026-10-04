@@ -50,8 +50,9 @@ as JSON, and forward the resulting documents to an Elasticsearch data stream
 or index. Configure parsing and mappings for the fields above, and use
 `request_id` to correlate events. It is not a unique event ID and must not be
 used alone for deduplication or as an Elasticsearch document ID. See the
-[minimal Logstash/Elasticsearch reference](elasticsearch.md) for configuration,
-mappings, failure diagnostics and packaged ingestion verification. Keep
+[Filebeat Elasticsearch quick start](elasticsearch.md) for simple collection;
+the optional [advanced Logstash reference](elasticsearch-logstash.md) covers
+typed mappings, failure diagnostics and packaged ingestion verification. Keep
 collector credentials, TLS, buffering, retries, index lifecycle, access
 control, and retention in the collector and Elasticsearch deployment. TideMux
 does not include an Elasticsearch client, endpoint setting, or shipping
