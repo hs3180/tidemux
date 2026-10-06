@@ -33,6 +33,7 @@ type Provider struct {
 	ErrorCodeMappings []adapter.ProviderErrorMapping `json:"error_code_mappings,omitempty"`
 	Prices            map[string]adapter.Price       `json:"prices,omitempty"`
 	Budget            *ledger.BudgetPolicy           `json:"budget,omitempty"`
+	MaxActiveSessions int                            `json:"max_active_sessions,omitempty"`
 	APIKey            string                         `json:"-"`
 	APIKeys           []string                       `json:"-"`
 }
@@ -314,6 +315,9 @@ func (c Config) Validate() error {
 		for name, provider := range c.Providers {
 			if !validProviderName(name) {
 				return errors.New("provider names must be short non-secret labels using letters, numbers, dots, underscores or hyphens")
+			}
+			if provider.MaxActiveSessions < 0 || provider.MaxActiveSessions > 4096 {
+				return errors.New("providers." + name + ".max_active_sessions must be 0..4096")
 			}
 			protocol := normalizeProviderProtocol(provider.Protocol)
 			switch protocol {

@@ -42,7 +42,8 @@ tidemux serve
 Keep `serve` running in this terminal. The gateway API key is local client
 authentication; it is separate from the upstream provider keys. Gateway-wide
 settings such as the listener and active-session limit are shared by all
-provider routes.
+provider routes. From 0.3.2, providers can also have independent logical-session
+caps; see [provider capacity](provider-cli.md#provider-logical-session-capacity-032).
 
 ## Launch a client
 
