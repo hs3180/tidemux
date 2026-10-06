@@ -12,6 +12,28 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
+func TestProviderCapacityConfigBoundsAndRoundTrip(t *testing.T) {
+	c := namedProviderConfig(testConfig("ledger.db", "https://provider.example/v1"), "glm")
+	for _, n := range []int{-1, 0, 5, 4096, 4097} {
+		p := c.Providers["glm"]
+		p.MaxActiveSessions = n
+		c.Providers["glm"] = p
+		if err := c.Validate(); (n >= 0 && n <= 4096) != (err == nil) {
+			t.Fatalf("provider cap=%d err=%v", n, err)
+		}
+		if n >= 0 && n <= 4096 {
+			data, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decodeValidatedConfig(data)
+			if err != nil || decoded.Providers["glm"].MaxActiveSessions != n {
+				t.Fatalf("roundtrip cap=%d got=%d err=%v", n, decoded.Providers["glm"].MaxActiveSessions, err)
+			}
+		}
+	}
+}
+
 type testSecrets map[string]string
 
 func (s testSecrets) Lookup(_ context.Context, r KeychainReference) (string, error) {

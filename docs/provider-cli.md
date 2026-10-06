@@ -1,8 +1,8 @@
 # Provider and gateway setup
 
-The 0.3.1 CLI uses resource-oriented commands. Provider setup and
-lifecycle belong to `tidemux provider`; listener and session limits belong to
-`tidemux gateway`. The legacy top-level `tidemux configure` command is not
+The CLI uses resource-oriented commands. Provider setup, lifecycle and
+provider session limits belong to `tidemux provider`; listener and gateway-wide
+session limits belong to `tidemux gateway`. The legacy top-level `tidemux configure` command is not
 retained. The new routing commands below require v0.3.0 or later.
 
 ## Add a provider
@@ -57,11 +57,38 @@ A running `tidemux serve --config PATH` polls that file and its provider
 Keychain references every second. Add/update/remove, scope, credentials,
 pricing, budget and provider protocol/capabilities form one immutable view.
 The catalog and new requests use that view together. Routing/auto-chain changes
-also use a new view; unchanged auto-chain and shared-model session state survive.
+also use a new view; valid auto-chain and shared-model session state survive.
 Already-admitted requests, including queued work and SSE, finish with their
 original endpoint, keys, price/budget policy and accounting. The ledger,
 concurrency gate and active-session limiter remain shared; reload never creates
 another gateway or retries an admitted request.
+
+The request selects its configuration view once at entry to `ServeHTTP`, before
+body validation, route selection and session admission. A request that has
+selected an older view continues to use it while waiting for admission or an
+execution slot; the next request selects the current view. Invalid requests do
+not gain admission. Publication changes one complete view, never individual
+provider or routing fields visible to readers.
+
+Routing follows configuration rules first, compatible connection reuse second,
+and valid session/cache affinity third. Explicit provider selection, auto-chain
+order for new sessions and `price_priority` remain authoritative. For a shared
+bare model using `random`, the ready candidates whose connection configuration
+was reused from the immediately preceding view form the preferred tier. Random
+selection is uniform within that tier; when it is empty, all ready candidates
+participate. Valid affinity is retained within the chosen tier. The tier records
+configuration compatibility at this reload, not whether a live TCP connection
+happens to be idle. A later reload may place a previously added provider in the
+reused tier. Cooldowns and request-feature eligibility still apply; capacity
+limits remain admission checks and do not create a new provider failover rule.
+
+Endpoint, protocol, API-version or resolved-key changes create a new connection
+generation and discard bindings for that generation. Removing and re-adding the
+same provider reference also creates a fresh generation. Scope restrictions
+discard bindings for models that are no longer permitted. Policy-only changes
+retain compatible transport, key cooldown and local prompt-prefix history while
+using a fresh price/budget snapshot. An older request cannot overwrite bindings
+owned by a newly published view.
 
 CLI provider mutations report **saved / automatic application pending** until
 an authenticated gateway response acknowledges the exact saved file. They report
@@ -96,6 +123,67 @@ is pending with `config_requires_restart`; restore those fields to apply only
 provider changes automatically. Removing every named provider is supported in a
 running gateway and leaves an empty model catalog. No persisted config or ledger
 schema is added by automatic application.
+
+## Provider logical-session capacity (0.3.2)
+
+Configure a cap for one provider without changing the optional gateway-wide
+ceiling:
+
+```sh
+tidemux provider update glm --max-active-sessions 5
+tidemux provider show glm
+```
+
+The persisted field is `providers.glm.max_active_sessions`. Omitted or zero
+means unlimited; accepted values are 0–4096. Negative values are rejected
+without changing the file. A running gateway applies provider cap changes
+automatically; wait for the mutation's applied status. The gateway-wide
+`max_active_sessions` retains its existing startup semantics.
+
+A slot represents a logical conversation within one provider reference, not
+a key, model or HTTP request. Repeated or concurrent requests with the same
+session ID reuse one slot across that provider's models and key retries.
+The gateway ceiling counts that conversation once even when it uses multiple
+providers; each provider counts it separately. Identity includes the local
+caller and client protocol. OpenAI uses `X-TideMux-Session-ID`; Anthropic uses
+that header first, then `metadata.user_id`. Matching raw IDs in different
+client protocols are separate conversations. There is no cross-protocol
+session bridging. IDs and caller credentials are not exposed by capacity
+diagnostics.
+
+Requests without a stable ID are independent, concurrent slots. Their slots
+are released when the request ends, including successful buffered responses;
+generated IDs cannot retain a prompt prefix. Stable successful buffered
+conversations remain admitted until the configured gateway idle timeout
+(default five minutes). Streams, failures and cancellation release only that
+request's reference. Another concurrent request or a previously retained
+successful conversation is preserved; an idle sweep never expires in-flight
+work. Routing affinity has its own lifetime and does not itself reserve capacity.
+
+Both applicable limits must admit the initial request. A full provider returns
+protocol-native HTTP 429 / `active_session_limit` with `scope: "provider"`,
+`provider_ref` and `limit`; a full overall ceiling uses `scope: "gateway"`.
+There is no `Retry-After` value because the release time is unknown; use the
+response's bounded exponential backoff with jitter. Initial refusal dispatches
+no upstream request and releases only newly acquired admission references.
+Capacity is checked again before each target in an already-supported safe
+provider failover. Refusing that target does not remove prior attempts' audit
+or budget settlement and does not add a new reason to reroute a request.
+
+Reloading a profile's cap, endpoint, keys, scope, prices or budget preserves
+its actual occupancy. Reducing the cap does not cancel existing work or stop
+an already admitted conversation from reusing its slot. New distinct sessions
+must meet the new cap. Unlimited providers still track active/retained logical
+sessions so enabling a cap counts existing work. Removing and re-adding the
+same reference cannot erase retained or in-flight occupancy. Renaming the
+reference creates a separate capacity scope.
+
+Authenticated `GET /tidemux/session-status` returns `gateway` and `providers`
+entries with `limit`, `current` and `rejected`. A disabled gateway-wide limiter
+reports zero current sessions; provider counters still track unlimited profiles.
+Provider `current` reflects distinct conversations after idle cleanup. Rejection
+counters last for the lifetime of that capacity scope; retired empty scopes may
+be removed. The endpoint is read-only and contains no session IDs or usage.
 
 ## Add API keys to a provider
 
@@ -308,6 +396,14 @@ TTL; restart clears bindings and resets the preference. Multi-instance
 state sharing is not provided. Auto requests never use billing provider failover,
 which would break the session's provider/model binding.
 
+On chain reorder, addition or partial removal, unexpired bindings retain their
+compatible provider/model identity and receive its new index. Removed entries
+and changed connection generations lose their bindings. Changing chain content
+or order starts new sessions at the new first entry, including after exhaustion;
+an unchanged chain retains its preference and exhausted state. Existing valid
+sessions stay bound even when their entry moves later in the chain. A failure
+from a request using an older changed chain affects only that older view.
+
 Shared bare model IDs remain ambiguous unless a strategy is enabled:
 
 ```sh
@@ -322,7 +418,8 @@ tidemux routing set --billing-exhaustion-failover=false
 The strategy applies to an unqualified bare model ID only. Eligible providers
 must include the model in `supported_models` when a scope is configured, be
 available and outside key cooldown, and accept the request's protocol-specific
-features. `random` selects uniformly from the eligible providers. `price_priority`
+features. `random` selects uniformly within the connection-reuse tier described
+above (all eligible providers at startup). `price_priority`
 chooses the lowest sum of input-cache-hit, input-cache-miss and output rates per
 million tokens. Every candidate must have all three rates in the same currency;
 missing or incomparable rates fail closed with `routing_price_unavailable`.
@@ -332,7 +429,7 @@ are both disabled by default.
 With `random`, set `X-TideMux-Session-ID` to a stable conversation ID. Anthropic
 requests can instead use `metadata.user_id` when the header is absent. The
 header takes precedence; surrounding whitespace is removed. The first request
-atomically chooses an eligible provider uniformly, and later requests with the
+atomically chooses an eligible provider within that tier, and later requests with the
 same caller namespace, client protocol, bare model ID and session ID reuse it.
 Concurrent first requests share one binding. Model IDs remain case-sensitive,
 and upstream model IDs containing slashes are supported. Requests without a
@@ -340,7 +437,8 @@ stable ID keep per-request random selection; generated admission IDs do not
 create routing affinity.
 
 Bindings expire after 24 hours of idle time, refreshed on use. They store only
-a SHA-256 composite key, provider reference and timestamp in process memory.
+a SHA-256 composite key, model/provider references, connection generation and
+timestamp in process memory.
 The current gateway has one authenticated local access token, which defines
 one caller namespace. Credentials, raw session IDs and request bodies are not
 stored in the binding or logged. Restart clears all bindings; separate gateway
