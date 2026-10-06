@@ -42,7 +42,9 @@ protocol, outcome, available token counts, nullable currency and estimated
 cost, token/cost/price provenance and a separate matched supplier amount.
 There are no prompts, responses, tool payloads, credentials, raw session IDs
 or raw upstream errors. Each upstream attempt corresponds to its committed
-audit: an auto-chain failover can produce multiple attempts, including failures.
+audit: opt-in billing-exhaustion failover across providers can produce multiple
+attempts, including failures. An auto-chain failure changes preference for new
+sessions and does not replay the already dispatched request.
 Same-provider credential retries retain the existing single-audit behavior.
 
 `usage_source` distinguishes `provider`, `local_estimate`, `unknown`.
