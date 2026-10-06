@@ -36,6 +36,8 @@ def build_artifacts(dest,commit,version,build_id):
             shutil.copyfile(ROOT/name,stage/name)
         for name in ['docs','licenses','examples']:shutil.copytree(ROOT/name,stage/name)
         shutil.copytree(ROOT/'integrations'/'ccusage',stage/'integrations'/'ccusage',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+        tools=stage/'tools';tools.mkdir()
+        shutil.copyfile(ROOT/'scripts'/'prepare_rollback.py',tools/'prepare_rollback.py')
         info=run('go','version','-m',str(binary));(stage/'BUILD.txt').write_text(f'commit: {commit}\nbuild_id: {build_id or version}\n'+info+'\n')
         timestamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         rootid='SPDXRef-TideMux'
@@ -72,7 +74,7 @@ class Tidemux < Formula
 
   def install
     bin.install "tidemux"
-    pkgshare.install "docs", "licenses", "examples", "integrations", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
+    pkgshare.install "docs", "licenses", "examples", "integrations", "tools", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
   end
 
   test do
