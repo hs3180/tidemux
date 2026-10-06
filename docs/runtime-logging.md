@@ -90,9 +90,9 @@ An operator-managed collector can read TideMux's stderr stream, parse each line
 as JSON, and forward the resulting documents to an Elasticsearch data stream
 or index. Configure parsing and mappings for the fields above, and use
 `request_id` to correlate events. It is not a unique event ID and must not be
-used alone for deduplication or as an Elasticsearch document ID. See the
-[minimal Logstash/Elasticsearch reference](elasticsearch.md) for configuration,
-mappings, failure diagnostics and packaged ingestion verification. Map
+used alone for deduplication or as an Elasticsearch document ID. The short
+Filebeat example in the [README](../README.md#forward-runtime-logs-to-elasticsearch)
+shows the basic setup. Map
 `tidemux.startup_stage` as a keyword in collector templates if filtering
 by startup phase; the additional field preserves schema version 1 and existing
 request/lifecycle mappings. Existing indices can retain the field in `_source`
