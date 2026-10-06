@@ -15,6 +15,7 @@ from test_anthropic_server_tools_package import post
 
 PRIVATE = "tool-history-private-content"
 PRIVATE_ID = "tool-history-private-id"
+SAFE_PREFIX = "safe text before malformed tool block"
 
 
 class ToolUpstream(BaseHTTPRequestHandler):
@@ -47,13 +48,22 @@ class ToolUpstream(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
+                index = 1 if "prefix" in first else 0
                 frames = [
                     ("message_start", {"type": "message_start", "message": {"id": "msg_test", "role": "assistant", "type": "message", "model": "custom-model", "content": [], "usage": {"input_tokens": 2}}}),
-                    ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": generic}),
-                    ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                ]
+                if index:
+                    frames.extend([
+                        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+                        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": SAFE_PREFIX}}),
+                        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                    ])
+                frames.extend([
+                    ("content_block_start", {"type": "content_block_start", "index": index, "content_block": generic}),
+                    ("content_block_stop", {"type": "content_block_stop", "index": index}),
                     ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
                     ("message_stop", {"type": "message_stop"}),
-                ]
+                ])
                 for event, data in frames:
                     self.wfile.write(("event: " + event + "\ndata: " + json.dumps(data) + "\n\n").encode())
                 self.wfile.flush()
@@ -118,6 +128,17 @@ def main():
                 if PRIVATE in body or PRIVATE_ID in body or gateway["upstream"].posts != before + 1:
                     raise RuntimeError("malformed content escaped or upstream was retried")
                 cases += 1
+        for anthropic_client in (True, False):
+            for tool in ("web", "image"):
+                before = gateway["upstream"].posts
+                status, body = post(gateway["url"], request_body("anthropic", "malformed-prefix-" + tool, True), anthropic=anthropic_client)
+                errors = [json.loads(line[6:])["error"] for line in body.splitlines() if line.startswith("data: ") and '"error"' in line]
+                if status != 200 or SAFE_PREFIX not in body or len(errors) != 1 or "message_stop" in body or "[DONE]" in body:
+                    raise RuntimeError("native or converted stream lost legal prefix or emitted false success")
+                recovery(errors[0], "invalid_upstream_tool_history", "content[1].type")
+                if PRIVATE in body or PRIVATE_ID in body or gateway["upstream"].posts != before + 1:
+                    raise RuntimeError("malformed block after legal output escaped or was replayed")
+                cases += 1
         for provider in ("anthropic", "openai"):
             for compacted in (False, True):
                 before = gateway["upstream"].posts
@@ -162,6 +183,7 @@ def main():
             raise RuntimeError("tool content or IDs leaked into ledger/logs")
     print(json.dumps({"binary": str(args.binary), "cases": cases, "native_and_conversion_history_paths": True,
                       "web_and_image_malformed_blocks_withheld": True, "stream_error_after_http_200": True,
+                      "native_and_converted_legal_prefix_before_error": True,
                       "compacted_and_uncompacted_replay_not_dispatched": True, "valid_server_and_client_tools_preserved": True,
                       "tool_roundtrip_and_compaction": True, "privacy": True}))
 
