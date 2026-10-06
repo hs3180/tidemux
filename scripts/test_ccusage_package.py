@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Verify a real installed ccusage against an isolated TideMux package + ledger."""
 import argparse
+from collections import Counter
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 import json
 import math
@@ -20,6 +22,7 @@ from test_runtime_logs_package import Server, free_port, GATEWAY_KEY, PROVIDER_K
 PROMPT = 'usage-private-prompt-sentinel'
 SESSION = 'usage-private-session-sentinel'
 RESPONSE = 'usage-private-response-sentinel'
+METRICS = ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','estimated_cost','matched_supplier_amount')
 
 class Mock(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
@@ -56,9 +59,32 @@ def audits(path):
     with sqlite3.connect(path) as db:
         return [json.loads(row[0]) for row in db.execute('SELECT record_json FROM request_audit ORDER BY rowid')]
 
-def expected(rows, grouping, ledger):
+def statements(ledger):
     with sqlite3.connect(ledger) as db:
-        supplier={row[0]:row[1] for row in db.execute("SELECT request_id,SUM(amount) FROM reconciliation_statements WHERE status='matched' GROUP BY request_id")}
+        return {row[0]:{'revision':row[1],'lines':row[2],'amount':row[3]}
+                for row in db.execute("SELECT request_id,MAX(statement_id),COUNT(*),SUM(amount) FROM reconciliation_statements WHERE status='matched' GROUP BY request_id")}
+
+def record_oracle(audit, supplier):
+    # The ledger is authoritative. Provider tokens times a price are estimates;
+    # only an explicitly matched bill belongs in the independent supplier column.
+    usage_source=audit.get('usage_source') or 'unknown'
+    local=audit.get('cost_source','').startswith('local_estimated')
+    if usage_source=='unknown' and local:usage_source='local_estimate'
+    cost_source='unknown'
+    if audit.get('estimated_cost') is not None:
+        cost_source='local_content_estimate' if local or usage_source=='local_estimate' else ('historical_estimate' if usage_source=='unknown' else 'estimated_from_provider_usage')
+    price=audit.get('price_snapshot')
+    return {'schema_version':1,'source':'tidemux','request_id':audit['id'],
+            'revision':supplier.get('revision',0),'session_group':audit.get('session_group') or None,
+            'provider':audit.get('provider_ref',''),'model':audit['model'],'protocol':audit['protocol'],'outcome':audit['status'],
+            'usage_source':usage_source,**{name:audit.get(name) for name in METRICS if name!='matched_supplier_amount'},
+            'currency':audit.get('currency') or None,'cost_source':cost_source,
+            'price_source':'audit_price_snapshot' if price else 'unknown','price_version':(price.get('version') or None) if price else None,
+            'supplier_amount':supplier.get('amount'),'supplier_statement_lines':supplier.get('lines',0),
+            'supplier_source':'matched_supplier_statement' if supplier.get('lines',0) else 'unknown'}
+
+def expected(rows, grouping, ledger):
+    supplier=statements(ledger)
     groups={}
     for row in rows:
         group=row.get('session_group') if grouping=='session' else None
@@ -67,26 +93,54 @@ def expected(rows, grouping, ledger):
     output={}
     for key,values in groups.items():
         result={'requests':len(values)}
-        for name in ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','estimated_cost','matched_supplier_amount'):
-            numbers=[supplier.get(r['id']) if name=='matched_supplier_amount' else r.get(name) for r in values]
+        for name in METRICS:
+            numbers=[supplier.get(r['id'],{}).get('amount') if name=='matched_supplier_amount' else r.get(name) for r in values]
             known=[n for n in numbers if n is not None]
             result[name]={'total':sum(known) if len(known)==len(numbers) else None,
                           'known_subtotal':sum(known) if known else None,'known_requests':len(known),'unknown_requests':len(numbers)-len(known)}
+        records=[record_oracle(row,supplier.get(row['id'],{})) for row in values]
+        for name in ('usage','cost','supplier'):
+            result[name+'_sources']=dict(Counter(row[name+'_source'] for row in records))
+        result['price_sources']=sorted({row['price_source'] for row in records})
+        result['price_versions']=sorted({row['price_version'] for row in records if row['price_version'] is not None})
+        result['supplier_statement_lines']=sum(row['supplier_statement_lines'] for row in records)
+        result['providers']=sorted({row['provider'] for row in records})
+        result['models']=sorted({row['model'] for row in records})
+        result['outcomes']=dict(Counter(row['outcome'] for row in records))
         output[key]=result
     return output
 
 def verify(report,rows,ledger,grouping):
+    assert (report['schema_version'],report['source'],report['grouping'],report['timezone'])==(1,'tidemux',grouping,'UTC')
     assert report['retained_records']==len(rows),(report['retained_records'],len(rows))
     actual={(r['group'],r['currency']):r for r in report['rows']}
     wanted=expected(rows,grouping,ledger)
     assert actual.keys()==wanted.keys(),(actual.keys(),wanted.keys())
     for key,row in wanted.items():
         assert actual[key]['requests']==row['requests']
-        for column,coverage in row.items():
-            if column=='requests':continue
-            for field,value in coverage.items():
+        for column in METRICS:
+            for field,value in row[column].items():
                 got=actual[key][column][field]
                 assert got==value or (got is not None and value is not None and math.isclose(got,value,rel_tol=1e-12)),(key,column,field,got,value)
+        for column in ('usage_sources','cost_sources','supplier_sources','price_sources','price_versions','supplier_statement_lines','providers','models','outcomes'):
+            assert actual[key][column]==row[column],(key,column,actual[key][column],row[column])
+
+def verify_records(output,rows,ledger):
+    latest={};source_ids=set()
+    for path in sorted(output.glob('usage-*.jsonl')):
+        for line in path.read_text().splitlines():
+            record=json.loads(line);source_ids.add(record['source_id'])
+            previous=latest.get(record['request_id'])
+            if previous is None or record['revision']>previous['revision']:latest[record['request_id']]=record
+            elif record['revision']==previous['revision']:assert record==previous,'conflicting record revision'
+    assert len(source_ids)==1 and all(len(value)==64 and all(c in '0123456789abcdef' for c in value) for value in source_ids)
+    assert latest.keys()=={row['id'] for row in rows},'exported identity coverage differs from committed ledger'
+    supplier=statements(ledger)
+    for row in rows:
+        actual=latest[row['id']];wanted=record_oracle(row,supplier.get(row['id'],{}))
+        for name,value in wanted.items():assert actual[name]==value,(row['id'],name,actual[name],value)
+        assert round(datetime.fromisoformat(actual['timestamp'].replace('Z','+00:00')).timestamp()*1000)==row['timestamp_ms']
+    return list(latest.values())
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -180,6 +234,34 @@ def main():
             start();assert request('usd',SESSION)[0]==200;stop();assert audits(ledger)[-1].get('session_group') is None
             key.write_bytes(saved);cli('usage','export')
             all_rows=audits(ledger)
+            assert len(all_rows)==12
+            final_session=report('session');final_aggregate=report('aggregate')
+            verify(final_session,all_rows,ledger,'session');verify(final_aggregate,all_rows,ledger,'aggregate')
+            final_records=verify_records(output,all_rows,ledger)
+            # Replay after fault recovery must preserve all 12 records and every
+            # source/coverage/amount field, rather than only succeeding as a CLI.
+            cli('usage','export','--backfill')
+            replay_session=report('session');replay_aggregate=report('aggregate')
+            verify(replay_session,all_rows,ledger,'session');verify(replay_aggregate,all_rows,ledger,'aggregate')
+            assert replay_aggregate['replayed_records']>final_aggregate['replayed_records']
+            assert replay_session['rows']==final_session['rows'] and replay_aggregate['rows']==final_aggregate['rows']
+            final_records=verify_records(output,all_rows,ledger)
+            # An explicitly selected TideMux source ignores a client's filename
+            # and rejects client records disguised as TideMux usage input.
+            foreign=output/'client-owned.jsonl'
+            foreign.write_text(json.dumps({'request_id':all_rows[0]['id'],'usage':{'input_tokens':999},'costUSD':999})+'\n')
+            try:assert report('aggregate')==replay_aggregate
+            finally:foreign.unlink()
+            disguised=output/'usage-99999999999999999999.jsonl'
+            disguised.write_text(json.dumps(dict(final_records[0],source='claude'))+'\n')
+            try:
+                rejected=subprocess.run([str(consumer),'tidemux','aggregate','--path',str(output),'--json'],capture_output=True,text=True,timeout=20)
+                assert rejected.returncode and 'invalid TideMux usage record contract' in rejected.stderr
+            finally:disguised.unlink()
+            assert report('aggregate')==replay_aggregate
+            for name,data in [('final-session.json',replay_session),('final-aggregate.json',replay_aggregate),('final-records.json',final_records),
+                              ('final-ledger-oracle.json',[dict(group=group,currency=currency,**expected_row) for (group,currency),expected_row in expected(all_rows,'session',ledger).items()])]:
+                (evidence/name).write_text(json.dumps(data,indent=2)+'\n')
             with sqlite3.connect(ledger) as db:
                 settled=db.execute("SELECT audit_id,charged_amount FROM budget_charges WHERE provider_scope='usd' AND state='settled'").fetchall()
                 assert len(settled)==sum(r.get('provider_ref')=='usd' for r in all_rows)
@@ -190,7 +272,7 @@ def main():
             for sentinel in (PROMPT,SESSION,RESPONSE,GATEWAY_KEY,PROVIDER_KEY,'private-error-sentinel'):
                 assert sentinel.encode() not in blob,'private data leaked'
             for p in output.iterdir():assert p.stat().st_mode&0o077==0
-            summary={'result':'passed','fixture_requests':len(audits(ledger)),'default_off':True,'real_ccusage':str(consumer),'unknown_and_multicurrency':True,'session_restart':True,'supplier_revision_and_replay':True,'half_tail_recovery':True,'export_and_identity_fault_isolation':True,'privacy':True}
+            summary={'result':'passed','fixture_requests':len(audits(ledger)),'final_consumer_records':replay_aggregate['retained_records'],'default_off':True,'real_ccusage':str(consumer),'unknown_and_multicurrency':True,'session_restart':True,'supplier_revision_and_replay':True,'half_tail_recovery':True,'export_and_identity_fault_isolation':True,'fault_recovery_catchup':True,'provenance_checked':True,'record_contract_checked':True,'source_selection':True,'privacy':True}
             (evidence/'result.json').write_text(json.dumps(summary,indent=2)+'\n');print(json.dumps(summary))
         finally:stop();upstream.release.set();upstream.shutdown();upstream.server_close()
 
