@@ -10,7 +10,7 @@ vulnerability details in public issues.
 
 ## Supported versions
 
-Security fixes target the latest published release. Version 0.2.2 supports
+Security fixes target the latest published release. TideMux supports
 macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 
 ## Current boundary
@@ -28,8 +28,8 @@ macOS 15+ on Apple Silicon. No response-time guarantee is provided.
   upload feature is implemented.
 
 See [protocol support](docs/protocols.md) for current gateway boundaries and
-[client compatibility](docs/client-compatibility.md) for the tested 0.1.1
-client matrix.
+[client compatibility](docs/client-compatibility.md) for the current tested
+client matrix and its boundaries.
 
 Security reports should cover the CLI, HTTP service, ledger, credentials,
 and bundled dependencies. Public release materials must identify affected
