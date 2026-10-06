@@ -116,8 +116,10 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
 	}
-	return &handler{config: c, ledger: l, handlerRuntime: &handlerRuntime{budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
+	h := &handler{config: c, ledger: l, handlerRuntime: &handlerRuntime{budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}
+	return h, func() error {
 		stopReconciliation()
+		h.closeProviderSessions()
 		sessions.Close()
 		cache.Close()
 		return l.Close()
