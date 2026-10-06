@@ -47,6 +47,8 @@ type handler struct {
 
 // Mutable admission/accounting state is shared by all immutable config views.
 type handlerRuntime struct {
+	providerSessionMu      sync.Mutex
+	providerSessions       map[string]*limiter.SessionLimiter
 	budgetMu               sync.RWMutex
 	budgetBlocked          map[string]struct{}
 	sharedAffinity         sharedModelAffinity
@@ -239,8 +241,14 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 			detail["type"] = "request_too_large"
 		}
 	case "active_session_limit":
-		detail["message"] = fmt.Sprintf("Gateway capacity of %d active sessions is full; capacity release time is unknown. Retry with bounded exponential backoff and jitter (up to 30 seconds).", h.config.MaxActiveSessions)
-		detail["scope"], detail["limit"] = "gateway", h.config.MaxActiveSessions
+		limit, scope := h.config.MaxActiveSessions, "gateway"
+		if provider, ok := h.providers[field]; ok && field != "" {
+			limit, scope = provider.MaxActiveSessions, "provider"
+			detail["provider_ref"] = field
+			field = ""
+		}
+		detail["message"] = fmt.Sprintf("%s capacity of %d active sessions is full; capacity release time is unknown. Retry with bounded exponential backoff and jitter (up to 30 seconds).", scope, limit)
+		detail["scope"], detail["limit"] = scope, limit
 		detail["retry"] = map[string]any{"strategy": "exponential_backoff_with_jitter", "initial_delay_seconds": 1, "max_delay_seconds": 30}
 	}
 	if protocol == "anthropic" {
@@ -351,6 +359,10 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	}
 	if !valid {
 		h.reject(w, r, protocol, 401, "invalid_api_key")
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/tidemux/session-status" {
+		h.sessionStatus(w)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/tidemux/config-status" && h.reload != nil {
@@ -540,7 +552,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		Stream bool `json:"stream"`
 	}
 	_ = json.Unmarshal(body, &mode)
-	if h.config.MaxActiveSessions > 0 && options.SessionID == "" {
+	if h.sessionCapacityEnabled(routes) && options.SessionID == "" {
 		options.RequestScopedSession = true
 		options.SessionID, err = newRequestID()
 		if err != nil {
@@ -548,7 +560,19 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	lease, err := h.sessions.Acquire(r.Context(), options.SessionID)
+	capacityID := options.SessionID
+	if capacityID == "" {
+		capacityID, err = newRequestID()
+		if err != nil {
+			h.reject(w, r, protocol, http.StatusInternalServerError, "request_id_failed")
+			return
+		}
+	}
+	// Capacity shares a caller/protocol namespace across models and providers.
+	// Anonymous identity stays internal unless the route needs an upstream
+	// request-scoped ID; it never becomes a retained conversation.
+	capacityKey := h.callerSessionKey("", protocol, capacityID)
+	lease, err := h.sessions.Acquire(r.Context(), hex.EncodeToString(capacityKey[:]))
 	if err != nil {
 		if errors.Is(context.Cause(callCtx), adapter.ErrServerShuttingDown) {
 			h.reject(w, r, protocol, http.StatusServiceUnavailable, "server_shutting_down")
@@ -562,7 +586,9 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		return
 	}
 	retainSession := false
-	defer func() { lease.Release(retainSession) }()
+	admission := &requestSessionAdmission{handler: h, id: hex.EncodeToString(capacityKey[:]), global: lease, providers: map[string]*limiter.SessionLease{}}
+	r = r.WithContext(context.WithValue(r.Context(), requestSessionAdmissionKey{}, admission))
+	defer func() { admission.release(retainSession) }()
 
 	var delivered bool
 	send := func(id string, frame []byte) error {
@@ -579,7 +605,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		if err := http.NewResponseController(w).Flush(); err != nil {
 			return err
 		}
-		lease.TouchOutput()
+		admission.touchOutput()
 		return nil
 	}
 
@@ -721,7 +747,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return
 	}
-	lease.TouchOutput()
+	admission.touchOutput()
 	retainSession = persistentSession && !mode.Stream
 }
 
