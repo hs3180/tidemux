@@ -13,6 +13,15 @@ API keys or full prompt/response content. Unknown usage and estimated cost
 remain null. See [accounting](docs/accounting.md) for ledger fields and
 [protocol support](docs/protocols.md) for request-routing boundaries.
 
+Optional [ccusage integration](docs/ccusage.md) is disabled by default. Enabling
+it persists keyed pseudonymous session groups in request audits and writes a
+separate private usage stream with provider/model, outcomes, nullable token and
+cost values, currency and provenance. A private profile key makes groups stable
+across restarts; raw client session IDs and caller credentials are not stored
+there. Groups and accounting metadata can reveal activity patterns. Disabling
+the feature preserves existing files and ledger metadata. Operational runtime
+logs continue to exclude session and usage fields.
+
 Configuration and the ledger remain at the paths you choose. Diagnostic export
 and upload features are not implemented. If you manually share logs or ledger
 extracts, review them first; metadata may reveal usage patterns.

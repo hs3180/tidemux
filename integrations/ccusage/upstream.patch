@@ -1,0 +1,147 @@
+--- a/rust/Cargo.toml
++++ b/rust/Cargo.toml
+@@ -16,6 +16,7 @@
+ # Shared dependency specs. Crates opt in with `<dep>.workspace = true`, which keeps
+ # the per-crate manifests to a list of what that crate actually uses.
+ [workspace.dependencies]
++ccusage-adapter-tidemux = { path = "adapters/tidemux" }
+ ccusage-adapter-all = { path = "crates/ccusage-adapter-all" }
+ ccusage-adapter-amp = { path = "adapters/amp" }
+ ccusage-adapter-antigravity = { path = "adapters/antigravity" }
+--- a/rust/crates/ccusage/Cargo.toml
++++ b/rust/crates/ccusage/Cargo.toml
+@@ -15,6 +15,7 @@
+ fetch-litellm-pricing = ["ccusage-core/fetch-litellm-pricing"]
+
+ [dependencies]
++ccusage-adapter-tidemux.workspace = true
+ ccusage-adapter-all.workspace = true
+ ccusage-adapter-amp.workspace = true
+ ccusage-adapter-antigravity.workspace = true
+--- a/rust/crates/ccusage/src/main.rs
++++ b/rust/crates/ccusage/src/main.rs
+@@ -23,6 +23,10 @@
+ static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+ fn main() -> Result<()> {
++    // Dedicated nullable/multicurrency source; never included in client --all.
++    if std::env::args().nth(1).as_deref() == Some("tidemux") {
++        return adapter::tidemux::run(std::env::args().skip(2).collect());
++    }
+     pricing::set_json_fetcher(http::fetch_json);
+     let cli = cli::parse();
+     match cli.command {
+--- a/rust/crates/ccusage/src/adapter/mod.rs
++++ b/rust/crates/ccusage/src/adapter/mod.rs
+@@ -17,3 +17,5 @@
+ pub(crate) use ccusage_adapter_pi as pi;
+ pub(crate) use ccusage_adapter_qwen as qwen;
+ pub(crate) use ccusage_adapter_zcode as zcode;
++
++pub(crate) use ccusage_adapter_tidemux as tidemux;
+--- a/rust/Cargo.lock
++++ b/rust/Cargo.lock
+@@ -120,6 +120,43 @@
+ version = "0.0.0"
+ dependencies = [
+  "ccusage-adapter-all",
++ "ccusage-adapter-amp",
++ "ccusage-adapter-antigravity",
++ "ccusage-adapter-claude",
++ "ccusage-adapter-codebuff",
++ "ccusage-adapter-codex",
++ "ccusage-adapter-common",
++ "ccusage-adapter-copilot",
++ "ccusage-adapter-droid",
++ "ccusage-adapter-gemini",
++ "ccusage-adapter-goose",
++ "ccusage-adapter-grok",
++ "ccusage-adapter-hermes",
++ "ccusage-adapter-kilo",
++ "ccusage-adapter-kimi",
++ "ccusage-adapter-openclaw",
++ "ccusage-adapter-opencode",
++ "ccusage-adapter-pi",
++ "ccusage-adapter-qwen",
++ "ccusage-adapter-tidemux",
++ "ccusage-adapter-zcode",
++ "ccusage-cli",
++ "ccusage-cli-parser",
++ "ccusage-config",
++ "ccusage-core",
++ "ccusage-test-support",
++ "insta",
++ "mimalloc",
++ "serde",
++ "serde_json",
++ "sqlite",
++ "ureq",
++]
++
++[[package]]
++name = "ccusage-adapter-all"
++version = "0.0.0"
++dependencies = [
+  "ccusage-adapter-amp",
+  "ccusage-adapter-antigravity",
+  "ccusage-adapter-claude",
+@@ -140,42 +177,6 @@
+  "ccusage-adapter-qwen",
+  "ccusage-adapter-zcode",
+  "ccusage-cli",
+- "ccusage-cli-parser",
+- "ccusage-config",
+- "ccusage-core",
+- "ccusage-test-support",
+- "insta",
+- "mimalloc",
+- "serde",
+- "serde_json",
+- "sqlite",
+- "ureq",
+-]
+-
+-[[package]]
+-name = "ccusage-adapter-all"
+-version = "0.0.0"
+-dependencies = [
+- "ccusage-adapter-amp",
+- "ccusage-adapter-antigravity",
+- "ccusage-adapter-claude",
+- "ccusage-adapter-codebuff",
+- "ccusage-adapter-codex",
+- "ccusage-adapter-common",
+- "ccusage-adapter-copilot",
+- "ccusage-adapter-droid",
+- "ccusage-adapter-gemini",
+- "ccusage-adapter-goose",
+- "ccusage-adapter-grok",
+- "ccusage-adapter-hermes",
+- "ccusage-adapter-kilo",
+- "ccusage-adapter-kimi",
+- "ccusage-adapter-openclaw",
+- "ccusage-adapter-opencode",
+- "ccusage-adapter-pi",
+- "ccusage-adapter-qwen",
+- "ccusage-adapter-zcode",
+- "ccusage-cli",
+  "ccusage-core",
+  "ccusage-test-support",
+  "insta",
+@@ -405,6 +406,16 @@
+  "ccusage-adapter-common",
+  "ccusage-core",
+  "ccusage-test-support",
++ "jiff",
++ "serde",
++ "serde_json",
++]
++
++[[package]]
++name = "ccusage-adapter-tidemux"
++version = "0.0.0"
++dependencies = [
++ "ccusage-core",
+  "jiff",
+  "serde",
+  "serde_json",
