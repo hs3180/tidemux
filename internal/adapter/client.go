@@ -130,6 +130,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, ProviderRef: c.ProviderRef, Model: model, Status: "error", Events: []string{}}
+	a.SessionGroup = options.UsageSessionGroup
 	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
 	if e != nil {
 		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e), UpstreamNotAttempted: true}
@@ -157,6 +158,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		}
 		cost, usage, source := c.PromptCache.LocalEstimate(c.Protocol, model, cacheSession, body, response, price)
 		if cost != nil {
+			a.UsageSource = "local_estimate"
 			a.InputTokens, a.OutputTokens, a.CacheReadTokens = usage.Input, usage.Output, usage.CacheRead
 			a.Currency, a.PriceSnapshot, a.EstimatedCost, a.CostSource = price.Currency, mustJSON(price), cost, source
 		}
@@ -337,6 +339,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		return nil, id, err
 	}
 	a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens = usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite
+	if usage.Input != nil || usage.Output != nil || usage.CacheRead != nil || usage.CacheWrite != nil {
+		a.UsageSource = "provider"
+	}
 	if priced {
 		a.Currency = price.Currency
 		a.PriceSnapshot, _ = json.Marshal(price)

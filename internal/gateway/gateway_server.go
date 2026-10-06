@@ -13,6 +13,7 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
+	"github.com/hs3180/tidemux/internal/usage"
 )
 
 // NewHandler resolves providers and initializes the gateway's shared resources.
@@ -92,11 +93,17 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		return nil, nil, startupFailure("ledger", errors.New("cannot open ledger"))
 	}
 	stopReconciliation := startStatementSync(c, l, logger)
+	var usageSigner *usage.Signer
+	if c.UsageLog != nil && c.UsageLog.Enabled {
+		usageSigner, _ = usage.OpenSigner(c.LedgerPath)
+	}
+	stopUsage := startUsageExport(c, usageSigner, logger)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
 	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second
 	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions, idleTTL)
 	if err != nil {
 		stopReconciliation()
+		stopUsage()
 		_ = l.Close()
 		return nil, nil, startupFailure("config", err)
 	}
@@ -106,7 +113,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	keyPools := make(map[string]*providerKeyPool, len(providers))
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
-	runtime := &handlerRuntime{budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
+	runtime := &handlerRuntime{usageSigner: usageSigner, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
 	providerGenerations := make(map[string]uint64, len(providers))
 	for name, provider := range providers {
 		if _, unavailable := unavailableProviders[name]; unavailable {
@@ -122,6 +129,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	}
 	h := &handler{config: c, ledger: l, handlerRuntime: runtime, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
 	return h, func() error {
+		stopUsage()
 		stopReconciliation()
 		h.closeProviderSessions()
 		sessions.Close()

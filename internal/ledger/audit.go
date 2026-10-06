@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -16,6 +17,8 @@ type Audit struct {
 	Protocol         string          `json:"protocol"`
 	Upstream         string          `json:"upstream"`
 	ProviderRef      string          `json:"provider_ref,omitempty"`
+	SessionGroup     string          `json:"session_group,omitempty"` // Opt-in keyed pseudonym; never a raw session ID.
+	UsageSource      string          `json:"usage_source,omitempty"`
 	Model            string          `json:"model"`
 	Status           string          `json:"status"`
 	ErrorCode        string          `json:"error_code,omitempty"`
@@ -51,6 +54,15 @@ func (l *Ledger) AppendAudit(a Audit) error {
 	}
 	if a.Status != "ok" && a.Status != "error" && a.Status != "canceled" {
 		return errors.New("invalid audit status")
+	}
+	if a.SessionGroup != "" {
+		decoded, err := hex.DecodeString(a.SessionGroup)
+		if err != nil || len(decoded) != 32 {
+			return errors.New("invalid pseudonymous session group")
+		}
+	}
+	if a.UsageSource != "" && a.UsageSource != "provider" && a.UsageSource != "local_estimate" && a.UsageSource != "unknown" {
+		return errors.New("invalid usage source")
 	}
 	for _, n := range []*int64{a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens} {
 		if n != nil && *n < 0 {

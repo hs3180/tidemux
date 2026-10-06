@@ -8,6 +8,7 @@ TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatibl
 - **Simple client setup** — run `tidemux claude`, `tidemux kilo` or `tidemux hermes` with secure local credentials.
 - **Concurrency control** — limit active requests and queue the rest.
 - **Local usage ledger** — track outcomes, tokens and cost estimates without storing message bodies.
+- **ccusage reports** — opt in to private session and usage logs with a [dedicated installable ccusage source adapter](docs/ccusage.md).
 - **Automatic reconciliation** — match locally supplied statement CSVs while the gateway runs; query statistics or download billing details with `tidemux billing`.
 - **Daily reports** — generate private HTML reports, schedule macOS notifications, or send concise plain-text webhook summaries to IM platforms.
 
