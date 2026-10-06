@@ -57,11 +57,38 @@ A running `tidemux serve --config PATH` polls that file and its provider
 Keychain references every second. Add/update/remove, scope, credentials,
 pricing, budget and provider protocol/capabilities form one immutable view.
 The catalog and new requests use that view together. Routing/auto-chain changes
-also use a new view; unchanged auto-chain and shared-model session state survive.
+also use a new view; valid auto-chain and shared-model session state survive.
 Already-admitted requests, including queued work and SSE, finish with their
 original endpoint, keys, price/budget policy and accounting. The ledger,
 concurrency gate and active-session limiter remain shared; reload never creates
 another gateway or retries an admitted request.
+
+The request selects its configuration view once at entry to `ServeHTTP`, before
+body validation, route selection and session admission. A request that has
+selected an older view continues to use it while waiting for admission or an
+execution slot; the next request selects the current view. Invalid requests do
+not gain admission. Publication changes one complete view, never individual
+provider or routing fields visible to readers.
+
+Routing follows configuration rules first, compatible connection reuse second,
+and valid session/cache affinity third. Explicit provider selection, auto-chain
+order for new sessions and `price_priority` remain authoritative. For a shared
+bare model using `random`, the ready candidates whose connection configuration
+was reused from the immediately preceding view form the preferred tier. Random
+selection is uniform within that tier; when it is empty, all ready candidates
+participate. Valid affinity is retained within the chosen tier. The tier records
+configuration compatibility at this reload, not whether a live TCP connection
+happens to be idle. A later reload may place a previously added provider in the
+reused tier. Cooldowns and request-feature eligibility still apply; capacity
+limits remain admission checks and do not create a new provider failover rule.
+
+Endpoint, protocol, API-version or resolved-key changes create a new connection
+generation and discard bindings for that generation. Removing and re-adding the
+same provider reference also creates a fresh generation. Scope restrictions
+discard bindings for models that are no longer permitted. Policy-only changes
+retain compatible transport, key cooldown and local prompt-prefix history while
+using a fresh price/budget snapshot. An older request cannot overwrite bindings
+owned by a newly published view.
 
 CLI provider mutations report **saved / automatic application pending** until
 an authenticated gateway response acknowledges the exact saved file. They report
@@ -369,6 +396,14 @@ TTL; restart clears bindings and resets the preference. Multi-instance
 state sharing is not provided. Auto requests never use billing provider failover,
 which would break the session's provider/model binding.
 
+On chain reorder, addition or partial removal, unexpired bindings retain their
+compatible provider/model identity and receive its new index. Removed entries
+and changed connection generations lose their bindings. Changing chain content
+or order starts new sessions at the new first entry, including after exhaustion;
+an unchanged chain retains its preference and exhausted state. Existing valid
+sessions stay bound even when their entry moves later in the chain. A failure
+from a request using an older changed chain affects only that older view.
+
 Shared bare model IDs remain ambiguous unless a strategy is enabled:
 
 ```sh
@@ -383,7 +418,8 @@ tidemux routing set --billing-exhaustion-failover=false
 The strategy applies to an unqualified bare model ID only. Eligible providers
 must include the model in `supported_models` when a scope is configured, be
 available and outside key cooldown, and accept the request's protocol-specific
-features. `random` selects uniformly from the eligible providers. `price_priority`
+features. `random` selects uniformly within the connection-reuse tier described
+above (all eligible providers at startup). `price_priority`
 chooses the lowest sum of input-cache-hit, input-cache-miss and output rates per
 million tokens. Every candidate must have all three rates in the same currency;
 missing or incomparable rates fail closed with `routing_price_unavailable`.
@@ -393,7 +429,7 @@ are both disabled by default.
 With `random`, set `X-TideMux-Session-ID` to a stable conversation ID. Anthropic
 requests can instead use `metadata.user_id` when the header is absent. The
 header takes precedence; surrounding whitespace is removed. The first request
-atomically chooses an eligible provider uniformly, and later requests with the
+atomically chooses an eligible provider within that tier, and later requests with the
 same caller namespace, client protocol, bare model ID and session ID reuse it.
 Concurrent first requests share one binding. Model IDs remain case-sensitive,
 and upstream model IDs containing slashes are supported. Requests without a
@@ -401,7 +437,8 @@ stable ID keep per-request random selection; generated admission IDs do not
 create routing affinity.
 
 Bindings expire after 24 hours of idle time, refreshed on use. They store only
-a SHA-256 composite key, provider reference and timestamp in process memory.
+a SHA-256 composite key, model/provider references, connection generation and
+timestamp in process memory.
 The current gateway has one authenticated local access token, which defines
 one caller namespace. Credentials, raw session IDs and request bodies are not
 stored in the binding or logged. Restart clears all bindings; separate gateway
