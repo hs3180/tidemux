@@ -28,52 +28,103 @@ func streamStart(protocol string) string {
 }
 
 func TestShutdownInterruptsIncompleteRequestBody(t *testing.T) {
-	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "http://127.0.0.1:1")
-	listener, server, closeGateway, err := Open(c, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeGateway()
-	defer server.Close()
-	go server.Serve(listener)
-	connection, err := net.Dial("tcp", listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(3 * time.Second))
-	io.WriteString(connection, "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nx-api-key: local-secret\r\nContent-Length: 1000\r\n\r\n{\"model\":")
-	h := server.Handler.(*handler)
-	deadline := time.Now().Add(time.Second)
-	for {
-		h.activeMu.Lock()
-		active := len(h.activeCalls)
-		h.activeMu.Unlock()
-		if active == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("body reader was not admitted")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
-	response, err := http.ReadResponse(bufio.NewReader(connection), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil || response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "server_shutting_down") {
-		t.Fatalf("incomplete-body shutdown: %d %s error=%v", response.StatusCode, body, err)
-	}
-	rows, err := h.ledger.Recent(context.Background(), 10)
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("incomplete request reached provider: %+v %v", rows, err)
+	for _, delay := range []time.Duration{0, 75 * time.Millisecond} {
+		t.Run(delay.String(), func(t *testing.T) {
+			var upstreamCalls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				upstreamCalls.Add(1)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer upstream.Close()
+			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL)
+			listener, server, closeGateway, err := Open(c, upstream.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeGateway()
+			defer server.Close()
+			h := server.Handler.(*handler)
+			server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.ServeHTTP(w, r)
+				// A bounded delay reproduces CI scheduling/handler cleanup that
+				// misses net/http's first quiescence poll after its 500ms TCP
+				// reset-avoidance delay. Application cancellation is tested below
+				// independently of that connection shutdown bookkeeping.
+				time.Sleep(delay)
+			})
+			serveDone := make(chan error, 1)
+			go func() { serveDone <- server.Serve(listener) }()
+			connection, err := net.Dial("tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			if err := connection.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(connection, "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nx-api-key: local-secret\r\nContent-Length: 1000\r\n\r\n{\"model\":"); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(time.Second)
+			for {
+				h.activeMu.Lock()
+				active := len(h.activeCalls)
+				h.activeMu.Unlock()
+				if active == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("body reader was not admitted")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			// Keep the application's cancellation/503 deadline at one second.
+			// HTTP connection draining has a separate bounded deadline because
+			// net/http sleeps to avoid truncating responses with a TCP reset,
+			// then polls shutdown with intervals up to another 500ms.
+			if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			shutdownDone := make(chan error, 1)
+			go func() { shutdownDone <- server.Shutdown(ctx) }()
+			response, err := http.ReadResponse(bufio.NewReader(connection), nil)
+			if err != nil {
+				t.Fatal("incomplete body was not interrupted promptly: ", err)
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "server_shutting_down") {
+				t.Fatalf("incomplete-body shutdown: %d %s error=%v", response.StatusCode, body, err)
+			}
+			h.activeMu.Lock()
+			active := len(h.activeCalls)
+			h.activeMu.Unlock()
+			if active != 0 {
+				t.Fatalf("body cancellation left %d application calls active", active)
+			}
+			rows, err := h.ledger.Recent(context.Background(), 10)
+			if err != nil || len(rows) != 0 || upstreamCalls.Load() != 0 {
+				t.Fatalf("incomplete request reached provider: calls=%d audits=%+v error=%v", upstreamCalls.Load(), rows, err)
+			}
+			select {
+			case err := <-shutdownDone:
+				if err != nil {
+					t.Fatal("HTTP connection shutdown did not complete: ", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("HTTP connection shutdown did not complete: ", ctx.Err())
+			}
+			select {
+			case err := <-serveDone:
+				if err != http.ErrServerClosed {
+					t.Fatalf("server did not stop its listener: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("server did not stop its listener: ", ctx.Err())
+			}
+		})
 	}
 }
 
