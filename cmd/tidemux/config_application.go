@@ -52,5 +52,5 @@ func configurationApplicationStatus(path string, out io.Writer) {
 			}
 		}
 	}
-	fmt.Fprintln(out, "Configuration saved; automatic application pending (no running gateway acknowledged this configuration). A running 0.3.1 gateway watches this file; otherwise it is loaded at startup.")
+	fmt.Fprintln(out, "Configuration saved; automatic application pending (no running gateway acknowledged this configuration). A running gateway watches this file; otherwise it is loaded at startup.")
 }
