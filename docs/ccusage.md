@@ -1,7 +1,7 @@
 # ccusage usage reports
 
 Usage export is **off by default**. Enabling it adds private local accounting
-metadata and keyed session groups to the ledger; the operational stdout JSONL
+metadata and keyed session groups to the ledger; the operational stderr JSONL
 schema remains unchanged. Gateway requests never start or wait for ccusage.
 
 ```sh
