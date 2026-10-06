@@ -39,19 +39,24 @@ type handler struct {
 	logger               *slog.Logger
 	randomIndex          func(int) int
 	autoChain            *autoChainState
+	providerGenerations  map[string]uint64
+	reusedConnections    map[string]bool
+	routingEpoch         uint64
+	preparedRouting      *routingReload
 }
 
 // Mutable admission/accounting state is shared by all immutable config views.
 type handlerRuntime struct {
-	budgetMu       sync.RWMutex
-	budgetBlocked  map[string]struct{}
-	sharedAffinity sharedModelAffinity
-	activeMu       sync.Mutex
-	draining       bool
-	activeCalls    map[uint64]context.CancelCauseFunc
-	nextCallID     uint64
-	gate           *limiter.ConcurrencyGate
-	cache          *adapter.PromptCache
+	budgetMu               sync.RWMutex
+	budgetBlocked          map[string]struct{}
+	sharedAffinity         sharedModelAffinity
+	activeMu               sync.Mutex
+	draining               bool
+	activeCalls            map[uint64]context.CancelCauseFunc
+	nextCallID             uint64
+	gate                   *limiter.ConcurrencyGate
+	cache                  *adapter.PromptCache
+	nextProviderGeneration uint64 // config preparation is serialized by the watcher
 }
 
 type requestLogContextKey struct{}

@@ -13,19 +13,23 @@ const sharedModelSessionIdleTTL = 24 * time.Hour
 type sharedModelSessionKey [sha256.Size]byte
 
 type sharedModelBinding struct {
-	provider string
-	lastUsed time.Time
+	provider   string
+	lastUsed   time.Time
+	model      string
+	generation uint64
 }
 
-// sharedModelAffinity stores only hashed routing keys, provider references and
-// timestamps. It belongs to one handler and is independent of model:auto and
-// active-session admission. Selection and insertion share one lock so concurrent
+// sharedModelAffinity stores only hashed routing keys, model/provider references,
+// connection generations and timestamps. It belongs to the shared runtime and
+// is independent of model:auto and active-session admission. Selection and
+// insertion share one lock so concurrent
 // first requests cannot pick different providers for the same session.
 type sharedModelAffinity struct {
-	mu        sync.Mutex
-	bindings  map[sharedModelSessionKey]sharedModelBinding
-	nextSweep time.Time
-	now       func() time.Time
+	mu          sync.Mutex
+	bindings    map[sharedModelSessionKey]sharedModelBinding
+	nextSweep   time.Time
+	now         func() time.Time
+	activeEpoch uint64
 }
 
 func newSharedModelSessionKey(namespace, protocol, model, sessionID string) sharedModelSessionKey {
@@ -65,6 +69,21 @@ func (h *handler) callerSessionKey(model, protocol, sessionID string) *sharedMod
 }
 
 func (a *sharedModelAffinity) selectProvider(key sharedModelSessionKey, candidates []string, available func(string) bool, choose func(int) int) (string, bool) {
+	return a.selectProviderForView(key, "", 0, candidates, available, choose, func(string) uint64 { return 0 })
+}
+
+func (a *sharedModelAffinity) activate(epoch uint64, valid func(sharedModelBinding) bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.activeEpoch = epoch
+	for key, binding := range a.bindings {
+		if !valid(binding) {
+			delete(a.bindings, key)
+		}
+	}
+}
+
+func (a *sharedModelAffinity) selectProviderForView(key sharedModelSessionKey, model string, epoch uint64, candidates []string, available func(string) bool, choose func(int) int, generation func(string) uint64) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
@@ -88,12 +107,16 @@ func (a *sharedModelAffinity) selectProvider(key sharedModelSessionKey, candidat
 			eligible = append(eligible, provider)
 		}
 	}
-	if binding, exists := a.bindings[key]; exists && now.Sub(binding.lastUsed) < sharedModelSessionIdleTTL && containsModel(eligible, binding.provider) {
+	if binding, exists := a.bindings[key]; exists && now.Sub(binding.lastUsed) < sharedModelSessionIdleTTL && containsModel(eligible, binding.provider) && binding.generation == generation(binding.provider) {
 		binding.lastUsed = now
-		a.bindings[key] = binding
+		if epoch == a.activeEpoch {
+			a.bindings[key] = binding
+		}
 		return binding.provider, true
 	}
-	delete(a.bindings, key)
+	if epoch == a.activeEpoch {
+		delete(a.bindings, key)
+	}
 	if len(eligible) == 0 {
 		return "", false
 	}
@@ -102,6 +125,8 @@ func (a *sharedModelAffinity) selectProvider(key sharedModelSessionKey, candidat
 		index = 0
 	}
 	provider := eligible[index]
-	a.bindings[key] = sharedModelBinding{provider: provider, lastUsed: now}
+	if epoch == a.activeEpoch {
+		a.bindings[key] = sharedModelBinding{provider: provider, lastUsed: now, model: model, generation: generation(provider)}
+	}
 	return provider, true
 }
