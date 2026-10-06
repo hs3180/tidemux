@@ -6,11 +6,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hs3180/tidemux/internal/adapter"
 )
 
 const sharedModelSessionIdleTTL = 24 * time.Hour
 
 type sharedModelSessionKey [sha256.Size]byte
+
+type sharedModelRoute struct {
+	provider   string
+	model      string
+	generation uint64
+}
 
 type sharedModelBinding struct {
 	provider   string
@@ -25,11 +33,12 @@ type sharedModelBinding struct {
 // insertion share one lock so concurrent
 // first requests cannot pick different providers for the same session.
 type sharedModelAffinity struct {
-	mu          sync.Mutex
-	bindings    map[sharedModelSessionKey]sharedModelBinding
-	nextSweep   time.Time
-	now         func() time.Time
-	activeEpoch uint64
+	mu           sync.Mutex
+	bindings     map[sharedModelSessionKey]sharedModelBinding
+	nextSweep    time.Time
+	now          func() time.Time
+	activeEpoch  uint64
+	failedRoutes map[sharedModelRoute]time.Time
 }
 
 func newSharedModelSessionKey(namespace, protocol, model, sessionID string) sharedModelSessionKey {
@@ -72,18 +81,34 @@ func (a *sharedModelAffinity) selectProvider(key sharedModelSessionKey, candidat
 	return a.selectProviderForView(key, "", 0, candidates, available, choose, func(string) uint64 { return 0 })
 }
 
-func (a *sharedModelAffinity) activate(epoch uint64, valid func(sharedModelBinding) bool) {
+func (a *sharedModelAffinity) activate(epoch uint64, valid func(sharedModelBinding) bool, generation ...func(string) uint64) {
+	var currentGeneration func(string) uint64
+	if len(generation) > 0 {
+		currentGeneration = generation[0]
+	}
+	a.activateForView(epoch, valid, currentGeneration, nil)
+}
+
+func (a *sharedModelAffinity) activateForView(epoch uint64, valid func(sharedModelBinding) bool, generation func(string) uint64, available func(string) bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.activeEpoch = epoch
+	for route := range a.failedRoutes {
+		if !valid(sharedModelBinding{provider: route.provider, model: route.model, generation: route.generation}) || generation != nil && route.generation != generation(route.provider) {
+			delete(a.failedRoutes, route)
+		}
+	}
 	for key, binding := range a.bindings {
-		if !valid(binding) {
+		if !valid(binding) || available != nil && !available(binding.provider) {
 			delete(a.bindings, key)
+		} else if generation != nil {
+			binding.generation = generation(binding.provider)
+			a.bindings[key] = binding
 		}
 	}
 }
 
-func (a *sharedModelAffinity) selectProviderForView(key sharedModelSessionKey, model string, epoch uint64, candidates []string, available func(string) bool, choose func(int) int, generation func(string) uint64) (string, bool) {
+func (a *sharedModelAffinity) selectProviderForView(key sharedModelSessionKey, model string, epoch uint64, candidates []string, available func(string) bool, choose func(int) int, generation func(string) uint64, prefer ...func([]string) []string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
@@ -103,7 +128,13 @@ func (a *sharedModelAffinity) selectProviderForView(key sharedModelSessionKey, m
 	}
 	eligible := make([]string, 0, len(candidates))
 	for _, provider := range candidates {
-		if available(provider) {
+		route := sharedModelRoute{provider: provider, model: model, generation: generation(provider)}
+		until, failed := a.failedRoutes[route]
+		if failed && !until.IsZero() && !now.Before(until) {
+			delete(a.failedRoutes, route)
+			failed = false
+		}
+		if !failed && available(provider) {
 			eligible = append(eligible, provider)
 		}
 	}
@@ -120,6 +151,9 @@ func (a *sharedModelAffinity) selectProviderForView(key sharedModelSessionKey, m
 	if len(eligible) == 0 {
 		return "", false
 	}
+	if len(prefer) > 0 && prefer[0] != nil {
+		eligible = prefer[0](eligible)
+	}
 	index := choose(len(eligible))
 	if index < 0 || index >= len(eligible) {
 		index = 0
@@ -129,4 +163,35 @@ func (a *sharedModelAffinity) selectProviderForView(key sharedModelSessionKey, m
 		a.bindings[key] = sharedModelBinding{provider: provider, lastUsed: now, model: model, generation: generation(provider)}
 	}
 	return provider, true
+}
+
+// recordFailure invalidates only the failed provider/model and connection
+// generation. It affects future requests, never replays a dispatched request.
+// Old admitted views cannot invalidate the active view's bindings.
+func (a *sharedModelAffinity) recordFailure(epoch uint64, provider, model string, generation uint64, callErr *adapter.CallError, ctxErr error, delivered bool) {
+	if !autoChainFailureAdvances(callErr, ctxErr, delivered) || callErr.Category == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if epoch != a.activeEpoch {
+		return
+	}
+	if a.failedRoutes == nil {
+		a.failedRoutes = make(map[sharedModelRoute]time.Time)
+	}
+	until := time.Time{}
+	if callErr.Category != adapter.ProviderErrorModelNotFound {
+		now := time.Now()
+		if a.now != nil {
+			now = a.now()
+		}
+		until = now.Add(billingExhaustionCooldown)
+	}
+	a.failedRoutes[sharedModelRoute{provider: provider, model: model, generation: generation}] = until
+	for key, binding := range a.bindings {
+		if binding.provider == provider && binding.model == model && binding.generation == generation {
+			delete(a.bindings, key)
+		}
+	}
 }

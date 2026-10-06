@@ -107,12 +107,12 @@ func TestReloadAutoChainSemanticBindingsAndPublication(t *testing.T) {
 	p.APIKey = "rotated-test-key"
 	changed.Providers["a"] = p
 	rotated := reloadTestView(t, root, view, changed, partial, upstream.Client())
-	if len(rotated.autoChain.sessions) != 0 || rotated.providerGenerations["a"] == view.providerGenerations["a"] {
-		t.Fatal("credential change reused stale chain/cache generation")
+	if len(rotated.autoChain.sessions) != 3 || rotated.providerGenerations["a"] == view.providerGenerations["a"] {
+		t.Fatal("credential change lost healthy bindings or reused stale cache generation")
 	}
 }
 
-func TestReloadRulesThenReusableConnectionsThenAffinity(t *testing.T) {
+func TestReloadRulesThenValidAffinityThenReusableConnections(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"shared-model"}]}`)
 	}))
@@ -145,8 +145,8 @@ func TestReloadRulesThenReusableConnectionsThenAffinity(t *testing.T) {
 	p.APIKey = "changed-test-key"
 	next.Providers["b"] = p
 	view := reloadTestView(t, root, root, next, c, upstream.Client())
-	if resolve(view, "shared-model", key) != "a" {
-		t.Fatal("stale affinity overrode reusable connection")
+	if resolve(view, "shared-model", key) != "b" {
+		t.Fatal("connection change lost valid semantic affinity")
 	}
 	if resolve(view, "b/shared-model", key) != "b" {
 		t.Fatal("reuse overrode explicit provider rule")
@@ -155,9 +155,16 @@ func TestReloadRulesThenReusableConnectionsThenAffinity(t *testing.T) {
 	for range 10 {
 		resolve(root, "shared-model", key)
 	}
-	if view.sharedAffinity.bindings[*key].provider != "a" {
+	if view.sharedAffinity.bindings[*key].provider != "b" {
 		t.Fatal("old view poisoned current affinity")
 	}
+	view.keyPools["b"].CooldownAt(0, time.Minute, time.Now())
+	if resolve(view, "shared-model", key) != "a" {
+		t.Fatal("valid affinity overrode readiness")
+	}
+	view.keyPools["b"].mu.Lock()
+	view.keyPools["b"].cooldowns[0] = time.Now().Add(-time.Second)
+	view.keyPools["b"].mu.Unlock()
 	view.keyPools["a"].CooldownAt(0, time.Minute, time.Now())
 	if resolve(view, "shared-model", key) != "b" {
 		t.Fatal("reuse tier overrode readiness")
@@ -165,10 +172,9 @@ func TestReloadRulesThenReusableConnectionsThenAffinity(t *testing.T) {
 	view.keyPools["a"].mu.Lock()
 	view.keyPools["a"].cooldowns[0] = time.Now().Add(-time.Second)
 	view.keyPools["a"].mu.Unlock()
-	// b has a valid binding for this generation, but a is again a ready reused
-	// connection. Reuse takes precedence over that valid affinity as well.
-	if resolve(view, "shared-model", key) != "a" {
-		t.Fatal("valid affinity overrode the reusable connection tier")
+	// A recovered reusable connection must not replace a valid active binding.
+	if resolve(view, "shared-model", key) != "b" {
+		t.Fatal("reusable connection replaced a valid affinity")
 	}
 
 	prices := copyRoutingConfig(next)

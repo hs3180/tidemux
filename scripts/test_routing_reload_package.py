@@ -232,13 +232,64 @@ print(d[k])
                     if {row[0] for row in charges if row[1] in (held_id, queued_id)} != {row[0] for row in original_pending}:
                         raise RuntimeError('old requests did not settle their original reservations exactly once')
                 finish('auto', ('a-new', 'one'), SESSION + '-fresh', KEY + '-new', new_prices)
-                # Rules-equivalent random candidates prefer compatible b before old a affinity.
-                finish('shared', ('b', 'shared'), SESSION + '-shared')
+                # A healthy identity survives endpoint/key changes and uses the new view.
+                finish('shared', ('a-new', 'shared'), SESSION + '-shared', KEY + '-new', new_prices)
+                # A fresh random binding still prefers the reusable connection.
+                finish('shared', ('b', 'shared'), SESSION + '-shared-fresh')
                 finish('a/shared', ('a-new', 'shared'), SESSION + '-explicit', KEY + '-new', new_prices)
                 removed = copy.deepcopy(changed)
                 del removed['providers']['a']
                 removed['auto_chain'] = [{'provider': 'b', 'model': 'two'}]
-                apply(removed)
+                upstream.started.clear()
+                upstream.release.clear()
+                deletion_session = SESSION + '-deleted-live'
+                deletion_held_marker = register(('a-new', 'one'), KEY + '-new', new_prices)
+                def deletion_request(marker):
+                    # Finalize on the main thread so concurrent queued requests
+                    # cannot mutate the historical-audit oracle together.
+                    with call('auto', deletion_session, marker=marker) as response:
+                        content = response.read()
+                        if response.status != 200:
+                            raise RuntimeError('provider-deletion request rejected: ' + content.decode())
+                        return response.headers['X-TideMux-Request-ID']
+                with call('auto', deletion_session, stream=True, marker=deletion_held_marker) as held, ThreadPoolExecutor(max_workers=2) as pool:
+                    if not upstream.started.wait(5):
+                        raise RuntimeError('provider-deletion SSE did not start')
+                    deletion_held_id = held.headers['X-TideMux-Request-ID']
+                    dispatch(deletion_held_marker)
+                    while held.readline().strip():
+                        pass
+                    deletion_queued_marker = register(('a-new', 'one'), KEY + '-new', new_prices)
+                    deletion_queued = pool.submit(deletion_request, deletion_queued_marker)
+                    wait_for(lambda: len(pending()) == 2, 'provider-deletion old held/queued reservations', 5)
+                    deletion_pending = pending()
+                    if any(row[1] != '' or row[2:6] != ('a', 'EUR', 0, 'pending') for row in deletion_pending):
+                        raise RuntimeError('provider-deletion old requests lost admitted provider/budget policy')
+                    old_reservations = {row[0] for row in deletion_pending}
+                    apply(removed)
+                    if pending() != deletion_pending:
+                        raise RuntimeError('provider deletion changed old held/queued reservations')
+                    future_marker = register(('b', 'two'))
+                    future = pool.submit(deletion_request, future_marker)
+                    wait_for(lambda: len(pending()) == 3, 'provider-deletion new-view queued reservation', 5)
+                    live_pending = pending()
+                    if [row for row in live_pending if row[0] in old_reservations] != deletion_pending:
+                        raise RuntimeError('new-view admission changed old provider reservations')
+                    future_pending = [row for row in live_pending if row[0] not in old_reservations]
+                    if len(future_pending) != 1 or not future_pending[0][0] or future_pending[0][1] != '' or future_pending[0][2:6] != ('b', 'USD', 0, 'pending'):
+                        raise RuntimeError('new-view request did not reserve the surviving provider/budget')
+                    upstream.release.set()
+                    tail = held.read().decode()
+                    terminal = '[DONE]' if client_path == '/v1/chat/completions' else 'event: message_stop'
+                    if terminal not in tail or 'event: error' in tail:
+                        raise RuntimeError('provider deletion interrupted the admitted SSE')
+                    deletion_queued_id = deletion_queued.result(timeout=10)
+                    future_id = future.result(timeout=10)
+                    held_reservation = finalized(deletion_held_marker, deletion_held_id)
+                    queued_reservation = finalized(deletion_queued_marker, deletion_queued_id)
+                    future_reservation = finalized(future_marker, future_id)
+                    if {held_reservation, queued_reservation} != old_reservations or future_reservation != future_pending[0][0]:
+                        raise RuntimeError('provider-deletion requests did not settle their exact admitted reservations')
                 finish('auto', ('b', 'two'))
                 with call('a/one') as response:
                     if response.status != 404:
@@ -275,7 +326,7 @@ print(d[k])
                 process.wait()
             upstream.shutdown()
             upstream.server_close()
-    return {'client_protocol': 'openai' if client_path == '/v1/chat/completions' else 'anthropic', 'one_process': True, 'requests': verified, 'dispatches': len(verified), 'historical_audit_json_and_charges_unchanged': True, 'held_queued_original_reservations_settled': True}
+    return {'client_protocol': 'openai' if client_path == '/v1/chat/completions' else 'anthropic', 'one_process': True, 'requests': verified, 'dispatches': len(verified), 'historical_audit_json_and_charges_unchanged': True, 'held_queued_original_reservations_settled': True, 'provider_removed_while_queued_sse_rebinds_future': True}
 
 
 def main():
@@ -283,7 +334,7 @@ def main():
     parser.add_argument('--binary', required=True, type=Path)
     binary = parser.parse_args().binary.resolve()
     results = [verify(binary, path) for path in ('/v1/chat/completions', '/v1/messages')]
-    print(json.dumps({'binary': str(binary), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'one_process_per_protocol': True, 'chain_reorder_partial_remove_readd': True, 'rule_connection_affinity_priority': True, 'queued_sse_original_endpoint_keys_prices_budget': True, 'per_request_dispatch_credentials_prices_and_charges': True, 'historical_audit_json_and_charges_unchanged': True, 'both_protocols': True, 'unique_dispatch_audit_settlement': True, 'privacy': True, 'results': results}))
+    print(json.dumps({'binary': str(binary), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'one_process_per_protocol': True, 'chain_reorder_partial_remove_readd': True, 'valid_affinity_then_connection_reuse': True, 'queued_sse_original_endpoint_keys_prices_budget': True, 'provider_removed_while_queued_sse_rebinds_future': True, 'per_request_dispatch_credentials_prices_and_charges': True, 'historical_audit_json_and_charges_unchanged': True, 'both_protocols': True, 'unique_dispatch_audit_settlement': True, 'privacy': True, 'results': results}))
 
 
 if __name__ == '__main__':

@@ -602,10 +602,14 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			var callErr error
 			var handled bool
 			for preDispatch := 0; ; preDispatch++ {
-				if route.sessionKey != nil {
+				if route.sessionKey != nil || route.autoChainIndex != nil {
 					// Recheck after admission and on a proven pre-dispatch cooldown
 					// race. Once the adapter may have sent a request, do not rebind.
-					rebound, code, status := h.resolveRoutes(route.model, protocol, body, route.sessionKey)
+					model, key := route.model, route.sessionKey
+					if route.autoChainIndex != nil {
+						model, key = "auto", sessionKey
+					}
+					rebound, code, status := h.resolveRoutes(model, protocol, body, key)
 					if code != "" {
 						parameter := "model"
 						if code == "unsupported_request_feature" {
@@ -619,7 +623,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 				r = withRequestLogDetails(r, route.provider, route.model)
 				response, id, callErr, handled = h.callRouteCandidate(w, r, protocol, route, body, options, sink)
 				var preDispatchErr *adapter.CallError
-				if route.sessionKey == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || preDispatchErr.Code != "provider_keys_cooling_down" {
+				if route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || preDispatchErr.Code != "provider_keys_cooling_down" {
 					break
 				}
 			}
@@ -637,6 +641,9 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			lastErr = adapterErr
 			if route.autoChainIndex != nil {
 				h.autoChain.recordFailure(*route.autoChainIndex, len(h.config.AutoChain), adapterErr, r.Context().Err(), delivered)
+			}
+			if route.sessionKey != nil {
+				h.sharedAffinity.recordFailure(h.routingEpoch, route.provider, route.model, h.providerGenerations[route.provider], adapterErr, r.Context().Err(), delivered)
 			}
 			if firstBalanceErr == nil && adapterErr.Category == adapter.ProviderErrorInsufficientBalance {
 				firstBalanceErr, firstBalanceID = adapterErr, id

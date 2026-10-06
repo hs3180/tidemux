@@ -12,21 +12,24 @@ func providerCacheNamespace(generation uint64) string {
 }
 
 type routingReload struct {
-	source   *autoChainState
-	preserve map[AutoChainEntry]bool
-	reset    bool
+	source           *autoChainState
+	preserve         map[AutoChainEntry]bool
+	preserveFailures map[AutoChainEntry]bool
+	reset            bool
 }
 
 func (h *handler) prepareRouting(previous *handler, changedChain bool) {
 	preserve := make(map[AutoChainEntry]bool, len(h.config.AutoChain))
+	preserveFailures := make(map[AutoChainEntry]bool, len(h.config.AutoChain))
 	compatible := true
 	for _, entry := range h.config.AutoChain {
-		preserve[entry] = h.reusedConnections[entry.Provider] && h.supportScopeAllows(entry.Provider, entry.Model)
-		compatible = compatible && preserve[entry]
+		preserve[entry] = h.supportScopeAllows(entry.Provider, entry.Model) && h.providerRouteAvailable(entry.Provider)
+		preserveFailures[entry] = h.reusedConnections[entry.Provider] && h.supportScopeAllows(entry.Provider, entry.Model)
+		compatible = compatible && preserveFailures[entry] && preserve[entry]
 	}
 	if changedChain || !compatible {
-		h.preparedRouting = &routingReload{source: previous.autoChain, preserve: preserve, reset: changedChain}
-		h.autoChain = previous.autoChain.reconfigured(h.config.AutoChain, time.Duration(h.config.ActiveSessionIdleTimeoutSeconds)*time.Second, preserve, changedChain)
+		h.preparedRouting = &routingReload{source: previous.autoChain, preserve: preserve, preserveFailures: preserveFailures, reset: changedChain}
+		h.autoChain = previous.autoChain.reconfiguredWithFailures(h.config.AutoChain, time.Duration(h.config.ActiveSessionIdleTimeoutSeconds)*time.Second, preserve, preserveFailures, changedChain)
 	}
 }
 
@@ -36,15 +39,18 @@ func (h *handler) prepareRouting(previous *handler, changedChain bool) {
 // requests keep the old auto-chain state and cannot overwrite current affinity.
 func (h *handler) activateRouting() {
 	if prepared := h.preparedRouting; prepared != nil {
-		h.autoChain = prepared.source.reconfigured(h.config.AutoChain, time.Duration(h.config.ActiveSessionIdleTimeoutSeconds)*time.Second, prepared.preserve, prepared.reset)
+		for _, entry := range h.config.AutoChain {
+			prepared.preserve[entry] = h.supportScopeAllows(entry.Provider, entry.Model) && h.providerRouteAvailable(entry.Provider)
+		}
+		h.autoChain = prepared.source.reconfiguredWithFailures(h.config.AutoChain, time.Duration(h.config.ActiveSessionIdleTimeoutSeconds)*time.Second, prepared.preserve, prepared.preserveFailures, prepared.reset)
 		h.preparedRouting = nil
 	}
-	h.sharedAffinity.activate(h.routingEpoch, func(binding sharedModelBinding) bool {
-		return h.clients[binding.provider] != nil && h.providerGenerations[binding.provider] == binding.generation && h.supportScopeAllows(binding.provider, binding.model)
-	})
+	h.sharedAffinity.activateForView(h.routingEpoch, func(binding sharedModelBinding) bool {
+		return h.clients[binding.provider] != nil && h.supportScopeAllows(binding.provider, binding.model)
+	}, func(provider string) uint64 { return h.providerGenerations[provider] }, h.providerRouteAvailable)
 }
 
-// Rule-equivalent random candidates prefer connections preserved by this
+// New bindings among rule-equivalent random candidates prefer connections preserved by this
 // reload. Explicit providers, price order and auto-chain order are rules and
 // therefore never pass through this tie-breaker. This is configuration reuse,
 // not a guess about the live TCP pool or a new health/failover policy.

@@ -352,7 +352,7 @@ func TestNativeAnthropicToolsRouteOnlyToAnthropicProvider(t *testing.T) {
 	}
 }
 
-func TestAutoModelDoesNotSwitchAfterStreamOutput(t *testing.T) {
+func TestAutoModelDoesNotReplayAfterStreamOutputAndRebindsNextRequest(t *testing.T) {
 	var requested []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -386,12 +386,13 @@ func TestAutoModelDoesNotSwitchAfterStreamOutput(t *testing.T) {
 	}
 	defer closeDB()
 	body := `{"model":"auto","stream":true,"messages":[{"role":"user","content":"hello"}]}`
-	response := routingRequest(t, h, "openai", body)
+	response := affinityGatewayRequest(h, "openai", "stream-session", body)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "partial") || !strings.Contains(response.Body.String(), "event: error") || strings.Join(requested, ",") != "model-one" {
 		t.Fatalf("status=%d requested=%v body=%s", response.Code, requested, response.Body.String())
 	}
-	if h.(*handler).autoChain.next != 0 {
-		t.Fatal("stream output advanced the preference for new sessions")
+	next := affinityGatewayRequest(h, "openai", "stream-session", `{"model":"auto","messages":[{"role":"user","content":"next"}]}`)
+	if next.Code != http.StatusOK || strings.Join(requested, ",") != "model-one,model-two" {
+		t.Fatalf("confirmed stream failure did not rebind the next request: status=%d requested=%v body=%s", next.Code, requested, next.Body.String())
 	}
 }
 
