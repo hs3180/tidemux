@@ -80,7 +80,13 @@ func TestProviderCapacityGLMFiveIndependentFromOtherAndGlobal(t *testing.T) {
 			if calls.Load() != 5 {
 				t.Fatalf("rejected request dispatched: %d", calls.Load())
 			}
-			for _, r := range []struct{ session, ref, model string }{{"0", "glm", "other-model"}, {"sixth", "other", "custom-model"}, {"0", "other", "custom-model"}} {
+			if _, current, _ := h.sessions.Stats(); current != 5 {
+				t.Fatalf("first provider refusal left a global lease: %d", current)
+			}
+			if _, current, _ := h.providerSessions["glm"].Stats(); current != 5 {
+				t.Fatalf("first provider refusal changed provider occupancy: %d", current)
+			}
+			for _, r := range []struct{ session, ref, model string }{{"0", "glm", "other-model"}, {"different-sixth", "other", "custom-model"}, {"0", "other", "custom-model"}} {
 				if out := providerCapacityRequest(h, protocol, r.session, r.ref, r.model); out.Code != 200 {
 					t.Fatalf("reuse/independence: %d %s", out.Code, out.Body)
 				}
@@ -322,53 +328,83 @@ func TestProviderCapacityTTLDoesNotExpireInFlightAndSameSessionConcurrent(t *tes
 }
 
 func TestProviderCapacityFailoverKeepsPriorAuditAndBudget(t *testing.T) {
-	h, c, _ := providerCapacityFixture(t, 1, 3, nil)
-	// Fill the target before an allowed insufficient-balance failover reaches it.
-	if out := providerCapacityRequest(h, "openai", "occupied", "glm", "custom-model"); out.Code != 200 {
-		t.Fatal(out.Body)
-	}
-	var upstreamCalls atomic.Int64
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
-			return
+	for _, protocol := range []string{"openai", "anthropic"} {
+		for _, retained := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/retained_%v", protocol, retained), func(t *testing.T) {
+				h, c, targetCalls := providerCapacityFixture(t, 1, 3, func(w http.ResponseWriter, r *http.Request) {
+					io.WriteString(w, responseBody(protocol))
+				})
+				var upstreamCalls atomic.Int64
+				var exhausted atomic.Bool
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == "GET" {
+						io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+						return
+					}
+					upstreamCalls.Add(1)
+					if exhausted.Load() {
+						w.WriteHeader(402)
+						io.WriteString(w, `{"error":{"code":"insufficient_balance","message":"synthetic"}}`)
+						return
+					}
+					io.WriteString(w, responseBody(protocol))
+				}))
+				defer upstream.Close()
+				p := c.Providers["other"]
+				p.Protocol = protocol
+				p.BaseURL = upstream.URL + "/v1"
+				p.MaxActiveSessions = 1
+				p.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "insufficient_balance", HTTPStatus: 402, Category: adapter.ProviderErrorInsufficientBalance}}
+				p.Prices = map[string]adapter.Price{"custom-model": testPrice()}
+				p.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 100, WeeklyLimit: 100, Mode: "hard", AlertThreshold: .8}
+				c.Providers["other"] = p
+				target := c.Providers["glm"]
+				target.Protocol = protocol
+				c.Providers["glm"] = target
+				c.Routing = &RoutingConfig{BillingExhaustionFailover: true}
+				view, err := h.prepareConfigView(context.Background(), c, h.config, h, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if out := providerCapacityRequest(view, protocol, "occupied", "glm", "custom-model"); out.Code != 200 {
+					t.Fatal(out.Body)
+				}
+				kept := 0
+				if retained {
+					kept = 1
+					if out := providerCapacityRequest(view, protocol, "retained", "other", "custom-model"); out.Code != 200 {
+						t.Fatal(out.Body)
+					}
+				}
+				exhausted.Store(true)
+				out := providerCapacityRequest(view, protocol, "retained", "other", "custom-model")
+				requireCapacityRejection(t, out, "provider", 1)
+				if upstreamCalls.Load() != int64(kept+1) || targetCalls.Load() != 1 {
+					t.Fatalf("actual source/target dispatch=%d/%d", upstreamCalls.Load(), targetCalls.Load())
+				}
+				var audits, charges, pending int
+				if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM request_audit").Scan(&audits); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM budget_charges WHERE state='settled'").Scan(&charges); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM budget_charges WHERE state='pending'").Scan(&pending); err != nil {
+					t.Fatal(err)
+				}
+				if audits != kept+2 || charges != kept+1 || pending != 0 {
+					t.Fatalf("prior settlement lost audits=%d charges=%d pending=%d", audits, charges, pending)
+				}
+				if _, current, _ := h.sessions.Stats(); current != kept+1 {
+					t.Fatalf("refusal removed existing/global lease or leaked new lease: %d", current)
+				}
+				for ref, want := range map[string]int{"glm": 1, "other": kept} {
+					if _, current, _ := h.providerSessions[ref].Stats(); current != want {
+						t.Fatalf("refusal changed retained provider %s: %d", ref, current)
+					}
+				}
+			})
 		}
-		upstreamCalls.Add(1)
-		w.WriteHeader(402)
-		io.WriteString(w, `{"error":{"code":"insufficient_balance","message":"synthetic"}}`)
-	}))
-	defer upstream.Close()
-	p := c.Providers["other"]
-	p.BaseURL = upstream.URL + "/v1"
-	p.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "insufficient_balance", HTTPStatus: 402, Category: adapter.ProviderErrorInsufficientBalance}}
-	p.Prices = map[string]adapter.Price{"custom-model": testPrice()}
-	p.Budget = &ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 100, WeeklyLimit: 100, Mode: "hard", AlertThreshold: .8}
-	c.Providers["other"] = p
-	c.Routing = &RoutingConfig{BillingExhaustionFailover: true}
-	view, err := h.prepareConfigView(context.Background(), c, h.config, h, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := providerCapacityRequest(view, "openai", "new", "other", "custom-model")
-	requireCapacityRejection(t, out, "provider", 1)
-	if upstreamCalls.Load() != 1 {
-		t.Fatalf("prior dispatch=%d", upstreamCalls.Load())
-	}
-	var audits, charges, pending int
-	if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM request_audit").Scan(&audits); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM budget_charges WHERE state='settled'").Scan(&charges); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM budget_charges WHERE state='pending'").Scan(&pending); err != nil {
-		t.Fatal(err)
-	}
-	if audits != 2 || charges != 1 || pending != 0 {
-		t.Fatalf("prior settlement lost audits=%d charges=%d pending=%d", audits, charges, pending)
-	}
-	if _, current, _ := h.sessions.Stats(); current != 1 {
-		t.Fatalf("rejected global leaked=%d", current)
 	}
 }
 
