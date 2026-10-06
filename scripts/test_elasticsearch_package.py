@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import ssl
 import subprocess
@@ -22,6 +23,12 @@ from test_runtime_logs_package import GATEWAY_KEY, PROVIDER_KEY, REQUEST_SENTINE
 
 ROOT=Path(__file__).resolve().parents[1]
 IMAGE='docker.elastic.co/logstash/logstash:8.19.5'
+
+def event_time(value):
+    # Older Python versions accept only three/six fraction digits, while Go's
+    # RFC3339Nano output omits trailing zeroes. Compare at microsecond precision.
+    normalized=re.sub(r'\.(\d+)(?=Z|[+-]\d{2}:)',lambda match:'.'+match[1][:6].ljust(6,'0'),value)
+    return datetime.fromisoformat(normalized.replace('Z','+00:00'))
 
 class Upstream(BaseHTTPRequestHandler):
     def log_message(self,*_):pass
@@ -64,6 +71,19 @@ def main():
         gateway['process'].terminate();gateway['process'].wait(timeout=10)
         runtime=(gateway['root']/'stderr').read_text()
         events=[json.loads(line) for line in runtime.splitlines()]
+    # Exercise the real binary's event path before config/Keychain reads.
+    # These synthetic early failures cannot contact a provider or production ES.
+    startup_failures=[]
+    for options,stage,code in [(['--startup-private-argument'], 'arguments', 'invalid_arguments'),
+                               (['--config',str(root/'startup-private-missing-config')], 'config', 'config_load_failed')]:
+        failed=subprocess.run([str(a.binary.resolve()),'serve',*options],capture_output=True,text=True,timeout=10,
+                              env={'PATH':'/usr/bin:/bin','HOME':str(root)})
+        failure_events=[json.loads(line) for line in failed.stderr.splitlines() if line.strip()]
+        if failed.returncode!=1 or len(failure_events)!=1:raise RuntimeError('missing unique early startup failure')
+        failure=failure_events[0]
+        if (failure.get('event'),failure.get('outcome'),failure.get('startup_stage'),failure.get('error_code'))!=('gateway_start','error',stage,code):raise RuntimeError('early startup classification mismatch')
+        if 'startup-private' in failed.stderr or str(root) in failed.stderr:raise RuntimeError('startup input leaked')
+        runtime+=failed.stderr;events+=failure_events;startup_failures.append((stage,code))
     if any(marker in runtime for marker in (GATEWAY_KEY,PROVIDER_KEY,REQUEST_SENTINEL,SESSION_SENTINEL)):raise RuntimeError('private data in runtime events')
     (root/'runtime.jsonl').write_text(runtime)
     now=datetime.now(timezone.utc).isoformat().replace('+00:00','Z')
@@ -119,6 +139,11 @@ def main():
     find(success,'request_terminal','success',200);find(stream,'request_terminal','error',200);find(rejected,'local_rejection','rejected',401)
     for event in ('gateway_start','gateway_shutdown'):
         if not any(s.get('event',{}).get('action')==event for s in sources):raise RuntimeError('lifecycle missing')
+    for stage,code in startup_failures:
+        result=es('POST','/'+a.index_prefix+'*/_search',{'query':{'bool':{'filter':[{'term':{'event.action':'gateway_start'}},{'term':{'tidemux.outcome':'error'}},{'term':{'tidemux.startup_stage':stage}},{'term':{'tidemux.error_code':code}}]}}})
+        if result['hits']['total']['value']!=1:raise RuntimeError('early startup typed query failed')
+        source=result['hits']['hits'][0]['_source'];timestamp=event_time(source['@timestamp']);native=event_time(source['tidemux']['time'])
+        if abs(timestamp.timestamp()-native.timestamp())>.002:raise RuntimeError('early startup timestamp mismatch')
     shared=[s for s in sources if s.get('tidemux',{}).get('request_id')=='shared-smoke-id']
     if len(shared)!=2:raise RuntimeError('request_id overwrote distinct events')
     sample=next(s for s in shared if s['tidemux']['event']=='schema_smoke')
@@ -128,7 +153,7 @@ def main():
     mapping=es('GET','/'+a.index_prefix+'*/_mapping');(root/'mapping.json').write_text(json.dumps(mapping,indent=2))
     for entry in mapping.values():
         properties=entry['mappings']['properties']['tidemux']['properties']
-        for field,kind in [('request_id','keyword'),('event','keyword'),('latency_ms','long'),('http_status','long'),('record_persisted','boolean'),('time','date_nanos')]:
+        for field,kind in [('request_id','keyword'),('event','keyword'),('startup_stage','keyword'),('latency_ms','long'),('http_status','long'),('record_persisted','boolean'),('time','date_nanos')]:
             if properties[field]['type']!=kind:raise RuntimeError('ES mapping type mismatch')
     # A reader uses separate data and no DLQ writer, so it can run alongside main.
     reader=docker_run(dict(env,TIDEMUX_LOGSTASH_DATA='/work/dlq-reader'),name+'-dlq')
@@ -149,7 +174,7 @@ def main():
     failures=[json.loads(line) for line in (collector/'mapping-failures.jsonl').read_text().splitlines()]
     if not any(f.get('tidemux',{}).get('request_id')=='mapping-smoke-id' and 'latency_ms' in f['collector'].get('reason','') for f in failures):raise RuntimeError('mapping failure has no retained event/reason')
     (root/'documents.json').write_text(json.dumps(documents,indent=2))
-    result={'binary':str(a.binary),'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
+    result={'binary':str(a.binary),'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'startup_failure_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
     (root/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 
 if __name__=='__main__':main()

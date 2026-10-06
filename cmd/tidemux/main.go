@@ -82,6 +82,9 @@ func run(args []string, stdout, stderr *os.File) error {
 		return errors.New(usage)
 	}
 	command := args[0]
+	if command == "serve" {
+		return serveCommand(args[1:], stdout, stderr)
+	}
 	if command == "claude" || command == "kilo" || command == "hermes" || command == "kilo-ide" {
 		return launch(args, stdout, stderr)
 	}
@@ -110,7 +113,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		fmt.Fprintln(stdout, version)
 		return nil
 	}
-	if command != "serve" && command != "doctor" {
+	if command != "doctor" {
 		return errors.New(usage)
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -151,8 +154,6 @@ func run(args []string, stdout, stderr *os.File) error {
 		}
 		fmt.Fprintln(stdout, "doctor: configuration, Keychain references, and ledger directory are ready")
 		return nil
-	case "serve":
-		return serveConfigFile(resolved, *configPath, stdout, stderr)
 	default:
 		return errors.New(usage)
 	}
@@ -213,14 +214,8 @@ func serveWithSignalsUsingConfig(config gateway.Config, stdout, stderr io.Writer
 	logger := observability.JSONLogger(stderr)
 	listener, server, closeGateway, err := gateway.OpenWithLogger(config, nil, logger)
 	if err != nil {
-		logger.Error("gateway failed to start",
-			slog.Int("schema_version", observability.SchemaVersion),
-			slog.String("event", "gateway_start"),
-			slog.String("outcome", "error"),
-			slog.String("error_code", "gateway_start_failed"),
-		)
-		fmt.Fprintf(stdout, "TideMux could not start: %v\n", err)
-		return &runtimeLoggedError{err: err}
+		stage, code := gateway.StartupFailure(err)
+		return logStartupFailure(logger, stdout, stage, code, err)
 	}
 	if path != "" {
 		stopReload := gateway.WatchConfig(server.Handler, path, config, gateway.MacOSKeychain{}, nil)
@@ -248,7 +243,7 @@ func serveWithSignalsUsingConfig(config gateway.Config, stdout, stderr io.Writer
 	host, _, err := net.SplitHostPort(listener.Addr().String())
 	ip := net.ParseIP(host)
 	if err != nil || ip == nil {
-		return errors.New("gateway did not bind an IP listener")
+		return logStartupFailure(logger, stdout, "listener", "listener_bind_failed", errors.New("gateway did not bind an IP listener"))
 	}
 	if !ip.IsLoopback() {
 		fmt.Fprintf(stdout, "WARNING: external gateway access is enabled on %s; protect the network and gateway token.\n", listener.Addr())
