@@ -34,6 +34,7 @@ commands:
   routing     configure shared-model selection and billing failover
   gateway     configure settings or check the running gateway
   billing     inspect local usage and cost records (--details for requests)
+  usage       configure opt-in ccusage logs, inspect status or export committed data
   report      generate, schedule, deliver and retry reports; configure webhooks
               inspect delivery attempts with report deliveries --id N
               use --diagnostics [--json] for recent local rejections
@@ -99,6 +100,9 @@ func run(args []string, stdout, stderr *os.File) error {
 	}
 	if command == "billing" {
 		return billing(args[1:], stdout, stderr)
+	}
+	if command == "usage" {
+		return usageCommand(args[1:], stdout, stderr)
 	}
 	if command == "report" {
 		return report(args[1:], stdout, stderr)

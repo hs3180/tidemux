@@ -13,6 +13,7 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
+	"github.com/hs3180/tidemux/internal/usage"
 )
 
 // NewHandler resolves providers and initializes the gateway's shared resources.
@@ -92,11 +93,17 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		return nil, nil, errors.New("cannot open ledger")
 	}
 	stopReconciliation := startStatementSync(c, l, logger)
+	var usageSigner *usage.Signer
+	if c.UsageLog != nil && c.UsageLog.Enabled {
+		usageSigner, _ = usage.OpenSigner(c.LedgerPath)
+	}
+	stopUsage := startUsageExport(c, usageSigner, logger)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
 	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second
 	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions, idleTTL)
 	if err != nil {
 		stopReconciliation()
+		stopUsage()
 		_ = l.Close()
 		return nil, nil, err
 	}
@@ -116,7 +123,8 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
 	}
-	return &handler{config: c, ledger: l, handlerRuntime: &handlerRuntime{budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
+	return &handler{config: c, ledger: l, handlerRuntime: &handlerRuntime{usageSigner: usageSigner, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
+		stopUsage()
 		stopReconciliation()
 		sessions.Close()
 		cache.Close()
