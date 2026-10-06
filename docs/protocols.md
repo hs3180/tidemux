@@ -1,4 +1,4 @@
-# Protocol support — 0.3.0
+# Protocol support — 0.3.2
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
@@ -45,8 +45,8 @@ providers. Cross-provider failover is opt-in and only follows an exact
 `insufficient_balance` error mapping to a provider using the same client protocol
 and requested model. Session-bound shared-model requests and auto-chain requests
 do not switch providers. Arbitrary 403 responses do not trigger failover.
-Gateway authentication, active-session limits and the local ledger remain
-shared.
+Gateway authentication and the local ledger remain shared. An optional
+gateway-wide logical-session ceiling coexists with independent provider limits.
 
 The 0.1.x single-provider configuration remains a migration/compatibility path.
 New 0.3.0 routing fields are omitted until enabled, so an unchanged 0.2.2
@@ -158,8 +158,9 @@ actionable `unsupported_request_feature` error on `tools`. Audio, Responses API,
 embeddings, batches and token-counting endpoints are not implemented. These
 remain explicit boundaries; normal tested client workflows do not prove every
 client feature or every upstream model is supported. See the
-[0.1.1 client acceptance matrix](client-compatibility.md) for prior-release
-evidence; it does not certify the 0.3.1 candidate routing model.
+[current client acceptance matrix](client-compatibility.md) for the tested
+versions, route combinations and artifact boundaries; historical release
+evidence is identified separately on that page.
 
 ## Streaming and errors
 
@@ -225,13 +226,17 @@ progress is never replayed.
 
 Local session-capacity exhaustion is HTTP 429 with
 `error.code: "active_session_limit"` in both protocols, distinct from an
-upstream rate limit. The error includes `scope: "gateway"`, the configured
-`limit`, and a `retry` object with `strategy: "exponential_backoff_with_jitter"`,
+upstream rate limit. The error includes `scope: "gateway"` for the overall
+ceiling or `scope: "provider"` and `provider_ref` for a provider limit, the
+configured `limit`, and a `retry` object with `strategy: "exponential_backoff_with_jitter"`,
 `initial_delay_seconds: 1` and `max_delay_seconds: 30`. There is no `Retry-After`
 header because ongoing activity makes capacity-release timing unknown. Clients
 can retry an unadmitted request using full jitter: choose a random delay between
 zero and `min(30, 2^attempt)` seconds, starting at attempt zero, while respecting
-their own deadline. No upstream request is sent for this rejection.
+their own deadline. An initial capacity rejection sends no upstream request.
+During an already-supported provider failover, a full target is not dispatched;
+previous attempts' audit and budget records remain intact. Capacity exhaustion
+does not introduce a new reason to switch providers.
 
 SIGTERM, Ctrl-C and graceful server shutdown stop admission of new model calls
 and cancel active upstream calls and queued requests. Before headers are sent,

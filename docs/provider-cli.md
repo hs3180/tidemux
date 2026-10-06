@@ -53,6 +53,9 @@ changes are validated and atomically installed.
 
 ## Automatic provider application (0.3.1)
 
+Provider automatic application was added in 0.3.1. The 0.3.2 contract also
+coordinates compatible route and session state across configuration changes.
+
 A running `tidemux serve --config PATH` polls that file and its provider
 Keychain references every second. Add/update/remove, scope, credentials,
 pricing, budget and provider protocol/capabilities form one immutable view.
@@ -369,7 +372,9 @@ tidemux auto-chain clear
 
 `set` replaces the entire chain, and `clear` removes the optional top-level
 `auto_chain` field. Entries can span providers and models; the limit is 64
-distinct pairs. Restart a running gateway after changing the chain. Use only
+distinct pairs. A running gateway validates and applies chain changes
+automatically to new requests; already-admitted requests keep their previous
+configuration. Use only
 `model:auto`; `REF/auto` returns `auto_model_must_be_unqualified`.
 
 The first auto request for a stable `X-TideMux-Session-ID` (or Anthropic
