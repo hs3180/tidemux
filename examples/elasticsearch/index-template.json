@@ -57,6 +57,10 @@
               "type": "keyword",
               "ignore_above": 1024
             },
+            "startup_stage": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
             "error_class": {
               "type": "keyword",
               "ignore_above": 1024
