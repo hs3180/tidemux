@@ -1,6 +1,11 @@
 # Installation
 
-TideMux v0.3.1 targets macOS 15+ on Apple Silicon. Install your coding client
+TideMux targets macOS 15+ on Apple Silicon. The current public stable release is
+**v0.3.1**; **0.3.2 is an unpublished candidate**. The installation commands below
+select the public stable release. A version-pinned 0.3.2 URL becomes usable only
+after its exact assets are published and verified. Use a local checksum-verified
+archive for candidate testing; see the [0.3.2 release guide](release-0.3.2.md).
+Install your coding client
 separately; TideMux does not install Claude Code, Kilo CLI or Hermes Agent.
 
 ## Homebrew (recommended)
@@ -42,20 +47,47 @@ it. The installer does not change configuration or Keychain credentials.
 
 ## Upgrade and rollback
 
-TideMux 0.3.1 preserves the existing config and SQLite table formats. Before
-upgrading, back up your config, launchd plist, old executable and ledger using
-SQLite's online backup API. Stop the old gateway before replacing its binary,
-then restart it and verify `tidemux version`, `tidemux doctor` and
-`tidemux gateway check`. See the [0.3.1 release guide](release-0.3.1.md) for the
-full integrity and service checks.
+Before a 0.3.1 → 0.3.2 upgrade, preserve the old executable, config, launchd plist,
+consumer settings and a consistent SQLite backup. Use SQLite's backup API;
+copying only an active `.db` can miss committed WAL records. Preserve the usage
+identity key, status and dedicated JSONL/checkpoint directory if export is enabled.
+Do not modify Filebeat registry or delete accounting/export data. Stop the gateway
+and exporter before replacing the executable, then check the accepted binary
+hash, `version`, `doctor`, authenticated `gateway check`, configuration application
+and retained ledger history. Candidate testing does not authorize a production
+replacement. See [upgrade compatibility](upgrade-compatibility.md).
 
-For an emergency rollback to 0.3.0, stop the gateway and restore the retained
-0.3.0 executable, or inspect that version's installer and run it with
-`TIDEMUX_VERSION=0.3.0`. Keep the current ledger and config; do not restore an
-older ledger over newer accounting records. The 0.3.0 binary can read them,
-but restores its known live-report, prompt-cache and tool-history defects.
-The `.gateway.lock` sidecar belongs to 0.3.1's running gateway; do not remove
-it while that process owns the ledger.
+An emergency rollback to **0.3.1** must remove the new top-level `usage_log` and
+each provider's `max_active_sessions`; the old strict decoder rejects either
+field even when its value disables the feature. The gateway-wide
+`max_active_sessions` is an older field and remains unchanged. The candidate
+archive supplies a Python 3 helper (the installer installs only the binary):
+
+```sh
+python3 /path/to/extracted/tidemux-0.3.2/tools/prepare_rollback.py \
+  --input /private/path/config-0.3.2.json \
+  --output /private/path/config-rollback-0.3.1.json
+```
+
+The output must be a new file. The helper creates it with mode 0600, preserves
+the source, retains all other settings and Keychain references, and prints only
+removed field names/counts. Review it, stop the gateway/exporter, and activate
+that converted configuration with the retained 0.3.1 executable. Keep the
+original 0.3.2 config for re-upgrade. Ensure service `--config` and CLI default
+configuration point to the intended converted configuration.
+
+Keep the latest ledger, usage key and export files. Older reports omit the new
+optional audit metadata while the stored JSON remains intact; requests made
+during rollback cannot acquire the newer session/source metadata retroactively.
+Provider caps and JSONL export are disabled, and 0.3.1 restores its earlier
+reload/session and client-recovery behavior. The same accepted combined archive
+must pass the [upgrade/rollback gate](release-0.3.2.md#upgrade-and-rollback-gate)
+before compatibility is certified. Never restore a pre-upgrade ledger over
+newer records or remove `.gateway.lock` while a process owns it.
+
+For the older 0.3.1 → 0.3.0 emergency path, use the
+[0.3.1 release guide](release-0.3.1.md). Earlier versions restore their known
+report/cache/tool-history limitations.
 
 ### Returning to versions before 0.3.0
 

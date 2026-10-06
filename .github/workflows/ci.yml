@@ -25,6 +25,7 @@ jobs:
           sh -n scripts/install.sh
           python3 scripts/test_install.py
           python3 scripts/test_client_commands.py
+          python3 scripts/test_prepare_rollback.py
       - name: Build candidate
         run: python3 scripts/release.py --build-id commit
       - name: Verify packaged routing, budgets and logs
@@ -39,6 +40,9 @@ jobs:
               with tarfile.open(archives[0]) as archive:
                   archive.extractall(temporary)
               binary, = Path(temporary).glob("tidemux-*/tidemux")
+              helper, = Path(temporary).glob("tidemux-*/tools/prepare_rollback.py")
+              subprocess.run(["python3", str(helper), "--help"], check=True,
+                             stdout=subprocess.DEVNULL)
               for script in ["test_anthropic_server_tools_package.py",
                              "test_tool_history_package.py",
                              "test_shared_model_affinity_package.py",
