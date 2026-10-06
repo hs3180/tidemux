@@ -35,6 +35,7 @@ def build_artifacts(dest,commit,version,build_id):
         for name in ['LICENSE','NOTICE','README.md','PRIVACY.md','SECURITY.md','THIRD_PARTY_NOTICES.md','CHANGELOG.md','SBOM.md']:
             shutil.copyfile(ROOT/name,stage/name)
         for name in ['docs','licenses','examples']:shutil.copytree(ROOT/name,stage/name)
+        shutil.copytree(ROOT/'integrations'/'ccusage',stage/'integrations'/'ccusage',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
         tools=stage/'tools';tools.mkdir()
         shutil.copyfile(ROOT/'scripts'/'prepare_rollback.py',tools/'prepare_rollback.py')
         info=run('go','version','-m',str(binary));(stage/'BUILD.txt').write_text(f'commit: {commit}\nbuild_id: {build_id or version}\n'+info+'\n')
@@ -42,6 +43,9 @@ def build_artifacts(dest,commit,version,build_id):
         rootid='SPDXRef-TideMux'
         packages=[{'SPDXID':rootid,'name':'TideMux','versionInfo':version,'downloadLocation':'NOASSERTION','filesAnalyzed':False,'licenseConcluded':'Apache-2.0','licenseDeclared':'Apache-2.0','copyrightText':'NOASSERTION','checksums':[{'algorithm':'SHA256','checksumValue':digest(binary)}],'sourceInfo':'git commit '+commit}]
         relationships=[{'spdxElementId':'SPDXRef-DOCUMENT','relationshipType':'DESCRIBES','relatedSpdxElement':rootid}]
+        packages.append({'SPDXID':'SPDXRef-ccusage-tidemux-adapter','name':'ccusage TideMux source adapter','versionInfo':'1','downloadLocation':'https://github.com/hs3180/tidemux','filesAnalyzed':False,'licenseConcluded':'Apache-2.0','licenseDeclared':'Apache-2.0','copyrightText':'NOASSERTION','sourceInfo':'Source-only optional consumer integration in integrations/ccusage; source commit '+commit})
+        packages.append({'SPDXID':'SPDXRef-ccusage-upstream','name':'ccusage','versionInfo':'20.0.26','downloadLocation':'https://github.com/ccusage/ccusage/tree/e12b7dd9c14494808057df1897d07edc999081eb','filesAnalyzed':False,'licenseConcluded':'MIT','licenseDeclared':'MIT','copyrightText':'Copyright (c) 2025 ryoppippi','sourceInfo':'Optional consumer build input; upstream is fetched by the installer, not linked into TideMux; pinned archive SHA256 51e6c3a62ed93c323c0dc9c46f53ebc92e757233a96ceac35c40df2d6cc31502'})
+        relationships.extend([{'spdxElementId':rootid,'relationshipType':'CONTAINS','relatedSpdxElement':'SPDXRef-ccusage-tidemux-adapter'},{'spdxElementId':'SPDXRef-ccusage-tidemux-adapter','relationshipType':'DEPENDS_ON','relatedSpdxElement':'SPDXRef-ccusage-upstream'}])
         for i,(name,mod) in enumerate(sorted(dependencies().items())):
             ident=f'SPDXRef-module-{i}'
             packages.append({'SPDXID':ident,'name':name,'versionInfo':mod['Version'],'downloadLocation':'NOASSERTION','filesAnalyzed':False,'licenseConcluded':'NOASSERTION','licenseDeclared':LICENSES.get(name,'BSD-3-Clause'),'copyrightText':'NOASSERTION','sourceInfo':'Go module sum '+mod.get('Sum','unknown')+'; original and nested notices in licenses/','externalRefs':[{'referenceCategory':'PACKAGE-MANAGER','referenceType':'purl','referenceLocator':f"pkg:golang/{name}@{mod['Version']}"}]})
@@ -70,7 +74,7 @@ class Tidemux < Formula
 
   def install
     bin.install "tidemux"
-    pkgshare.install "docs", "licenses", "examples", "tools", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
+    pkgshare.install "docs", "licenses", "examples", "integrations", "tools", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
   end
 
   test do

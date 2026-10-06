@@ -78,7 +78,8 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 		return nil, "model_not_found", http.StatusNotFound
 	}
 	if h.config.EffectiveRouting().SharedModelStrategy == "random" && sessionKey != nil {
-		selected, ok := h.sharedAffinity.selectProvider(*sessionKey, candidates, h.providerRouteAvailable, h.chooseRandomProvider)
+		candidates = h.reusableRandomCandidates(candidates)
+		selected, ok := h.sharedAffinity.selectProviderForView(*sessionKey, model, h.routingEpoch, candidates, h.providerRouteAvailable, h.chooseRandomProvider, func(provider string) uint64 { return h.providerGenerations[provider] })
 		if !ok {
 			return nil, "provider_keys_cooling_down", http.StatusServiceUnavailable
 		}
@@ -100,6 +101,9 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 	}
 	if len(available) == 0 {
 		return nil, "provider_keys_cooling_down", http.StatusServiceUnavailable
+	}
+	if h.config.EffectiveRouting().SharedModelStrategy == "random" {
+		available = h.reusableRandomCandidates(available)
 	}
 	ordered, err := h.orderSharedModelProviders(model, available)
 	if err != nil {

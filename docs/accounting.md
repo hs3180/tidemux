@@ -330,6 +330,14 @@ or restart, local estimation uses cache-miss input until a new prefix is known.
 Provider-reported usage and prices still take precedence; these limits do not
 change upstream prompt caching or supplier billing.
 
+Local prefix history is partitioned by provider connection generation, protocol,
+model and stable session identity. Compatible policy-only reloads keep this
+history; endpoint/protocol/API-version/key changes and provider removal/re-addition
+use a fresh partition. Old admitted requests keep their original partition and
+cannot seed prefix estimates for a new connection generation. Expired partitions
+remain subject to the same entry, byte and idle-retention bounds. This local
+estimate does not certify a provider-side cache hit.
+
 Pre-release budget tables and the older daily/monthly policy fields are not
 converted to rolling windows. Running `tidemux provider budget REF` replaces
 those incompatible fields with a newly configured provider policy.
@@ -417,6 +425,13 @@ generates the current local-day report and delivers the configured channel
 generated report and does not fabricate a missed balance snapshot.
 
 ## Legacy data
+
+For session and usage reports with actual ccusage, see [ccusage integration](ccusage.md).
+The optional dedicated JSONL export is disabled by default, follows committed
+audits and matched-statement revisions, and preserves unknown values and each
+currency. Provider-reported tokens produce estimates when multiplied by prices;
+supplier charges remain a separate column. Export errors do not participate in
+request or budget transactions.
 
 The `ledger` command has been removed. Update scripts to use
 `tidemux billing --details --json` for request records and

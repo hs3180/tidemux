@@ -30,10 +30,13 @@ type Client struct {
 	Prices                                          map[string]Price
 	ErrorCodeMappings                               []ProviderErrorMapping
 	PromptCache                                     *PromptCache
-	HTTP                                            *http.Client
-	Ledger                                          *ledger.Ledger
-	Gate                                            *limiter.ConcurrencyGate
-	waitRateLimit                                   func(context.Context, time.Duration) error
+	// CacheNamespace separates local prefix history across provider connections.
+	// It is internal only; SessionID remains unchanged at the upstream boundary.
+	CacheNamespace string
+	HTTP           *http.Client
+	Ledger         *ledger.Ledger
+	Gate           *limiter.ConcurrencyGate
+	waitRateLimit  func(context.Context, time.Duration) error
 }
 type CallError struct {
 	Status int
@@ -127,6 +130,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, ProviderRef: c.ProviderRef, Model: model, Status: "error", Events: []string{}}
+	a.SessionGroup = options.UsageSessionGroup
 	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
 	if e != nil {
 		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e), UpstreamNotAttempted: true}
@@ -148,12 +152,13 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		if !priced || a.EstimatedCost != nil {
 			return
 		}
-		cacheSession := options.SessionID
+		cacheSession := c.cacheSession(clientProtocol, options.SessionID)
 		if options.RequestScopedSession {
 			cacheSession = ""
 		}
 		cost, usage, source := c.PromptCache.LocalEstimate(c.Protocol, model, cacheSession, body, response, price)
 		if cost != nil {
+			a.UsageSource = "local_estimate"
 			a.InputTokens, a.OutputTokens, a.CacheReadTokens = usage.Input, usage.Output, usage.CacheRead
 			a.Currency, a.PriceSnapshot, a.EstimatedCost, a.CostSource = price.Currency, mustJSON(price), cost, source
 		}
@@ -334,6 +339,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		return nil, id, err
 	}
 	a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens = usage.Input, usage.Output, usage.CacheRead, usage.CacheWrite
+	if usage.Input != nil || usage.Output != nil || usage.CacheRead != nil || usage.CacheWrite != nil {
+		a.UsageSource = "provider"
+	}
 	if priced {
 		a.Currency = price.Currency
 		a.PriceSnapshot, _ = json.Marshal(price)
@@ -347,10 +355,17 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		}
 	}
 	if c.PromptCache != nil && !options.RequestScopedSession {
-		c.PromptCache.Remember(clientProtocol, model, options.SessionID, body)
+		c.PromptCache.Remember(c.Protocol, model, c.cacheSession(clientProtocol, options.SessionID), body)
 	}
 	a.Status = "ok"
 	return data, id, nil
+}
+
+func (c *Client) cacheSession(clientProtocol, session string) string {
+	if session == "" || c.CacheNamespace == "" {
+		return session
+	}
+	return c.CacheNamespace + "\x00" + clientProtocol + "\x00" + session
 }
 
 func (c *Client) doAttemptWithRateLimitRetries(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, onRateLimit func(*CallError), onRetry func()) ([]byte, TokenUsage, error) {

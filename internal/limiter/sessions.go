@@ -73,6 +73,19 @@ func (l *SessionLimiter) Acquire(ctx context.Context, id string) (*SessionLease,
 	if l.max == 0 {
 		return &SessionLease{}, nil
 	}
+	return l.AcquireWithLimit(ctx, id, l.max)
+}
+
+// AcquireWithLimit tracks sessions even when max is zero (unlimited). The
+// request's immutable configuration supplies max; existing leases and retained
+// entries survive limit changes and continue to count when a cap is enabled.
+func (l *SessionLimiter) AcquireWithLimit(ctx context.Context, id string, max int) (*SessionLease, error) {
+	if l == nil {
+		return nil, errors.New("session limiter is nil")
+	}
+	if max < 0 {
+		return nil, errors.New("active session limit cannot be negative")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -87,7 +100,7 @@ func (l *SessionLimiter) Acquire(ctx context.Context, id string) (*SessionLease,
 	l.expireLocked(now)
 	entry, ok := l.sessions[id]
 	if !ok {
-		if len(l.sessions) >= l.max {
+		if max > 0 && len(l.sessions) >= max {
 			l.rejected++
 			return nil, ErrActiveSessionLimit
 		}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
+	"github.com/hs3180/tidemux/internal/usage"
 )
 
 type KeychainReference struct {
@@ -33,6 +34,7 @@ type Provider struct {
 	ErrorCodeMappings []adapter.ProviderErrorMapping `json:"error_code_mappings,omitempty"`
 	Prices            map[string]adapter.Price       `json:"prices,omitempty"`
 	Budget            *ledger.BudgetPolicy           `json:"budget,omitempty"`
+	MaxActiveSessions int                            `json:"max_active_sessions,omitempty"`
 	APIKey            string                         `json:"-"`
 	APIKeys           []string                       `json:"-"`
 }
@@ -107,6 +109,7 @@ type SecretLookup interface {
 }
 
 type Config struct {
+	UsageLog                        *usage.Config            `json:"usage_log,omitempty"`
 	LegacyBudget                    *ledger.BudgetPolicy     `json:"budget,omitempty"` // accepted only by the provider-budget migration command
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
@@ -244,6 +247,11 @@ func decodeConfig(data []byte) (Config, error) {
 	return c, nil
 }
 func (c Config) Validate() error {
+	if c.UsageLog != nil {
+		if err := c.UsageLog.Validate(); err != nil {
+			return err
+		}
+	}
 	if c.LegacyBudget != nil {
 		return errors.New("global budget settings are no longer supported; assign them with `tidemux provider budget REF`")
 	}
@@ -314,6 +322,9 @@ func (c Config) Validate() error {
 		for name, provider := range c.Providers {
 			if !validProviderName(name) {
 				return errors.New("provider names must be short non-secret labels using letters, numbers, dots, underscores or hyphens")
+			}
+			if provider.MaxActiveSessions < 0 || provider.MaxActiveSessions > 4096 {
+				return errors.New("providers." + name + ".max_active_sessions must be 0..4096")
 			}
 			protocol := normalizeProviderProtocol(provider.Protocol)
 			switch protocol {
