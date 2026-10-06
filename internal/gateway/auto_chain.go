@@ -46,6 +46,43 @@ func newAutoChainState(entries []AutoChainEntry, idleTTL time.Duration) *autoCha
 	}
 }
 
+// reconfigured copies only unexpired, compatible semantic routes. Changing the
+// chain is an explicit new ordering for new sessions, including an exhausted
+// chain. Existing valid sessions remain pinned to their provider/model rather
+// than to an index that may now mean a different route. The old view is intact.
+func (s *autoChainState) reconfigured(entries []AutoChainEntry, idleTTL time.Duration, preserve map[AutoChainEntry]bool, resetPreference bool) *autoChainState {
+	next := newAutoChainState(entries, idleTTL)
+	if s == nil {
+		return next
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next.now = s.now
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	indices := make(map[AutoChainEntry]int, len(entries))
+	for index, entry := range entries {
+		indices[entry] = index
+	}
+	for key, binding := range s.sessions {
+		if now.Sub(binding.lastTouch) >= s.ttl || binding.index < 0 || binding.index >= len(s.entries) {
+			continue
+		}
+		entry := s.entries[binding.index]
+		if index, exists := indices[entry]; exists && preserve[entry] {
+			binding.index = index
+			next.sessions[key] = binding
+		}
+	}
+	if !resetPreference {
+		next.next = s.next
+	}
+	next.lastPrune = now
+	return next
+}
+
 func (s *autoChainState) selectForSession(sessionID string, sticky bool) (autoChainSelection, bool) {
 	if s == nil || sessionID == "" || len(s.entries) == 0 {
 		return autoChainSelection{}, false
