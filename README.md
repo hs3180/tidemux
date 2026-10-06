@@ -24,7 +24,7 @@ If Homebrew asks you to trust the formula, run
 
 TideMux v0.3.1 adds automatic provider application, bounded prompt retention,
 safer live budget/report handling, tool-history diagnostics and a minimal
-Elasticsearch collector reference.
+Elasticsearch log forwarding example.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -271,6 +271,59 @@ tidemux gateway configure --listen loopback
 tidemux claude --model REF_FROM_LIST/model-a
 ```
 
+## Forward runtime logs to Elasticsearch
+
+`tidemux serve` writes JSON Lines to `stderr`. Keep it separate from
+human-readable `stdout` and let an external collector ship it; TideMux does not
+connect to Elasticsearch:
+
+```sh
+tidemux serve --config /path/to/config.json \
+  >> /var/log/tidemux/console.log 2>> /var/log/tidemux/runtime.jsonl
+```
+
+For example, point Filebeat at that `stderr` file and set its Elasticsearch
+output. Replace the paths and endpoint:
+
+```yaml
+filebeat.inputs:
+  - type: filestream
+    id: tidemux-runtime
+    paths: ["/var/log/tidemux/runtime.jsonl"]
+    parsers:
+      - ndjson:
+          target: tidemux
+          add_error_key: true
+
+output.elasticsearch:
+  hosts: ["https://elasticsearch.example:9200"]
+  index: tidemux-runtime
+  api_key: "${TIDEMUX_ES_API_KEY}"
+
+setup.ilm.enabled: false
+setup.template.enabled: false
+```
+
+Once, as the same user that runs Filebeat, create its keystore and store the
+API key under the referenced name; then check the configuration:
+
+```sh
+filebeat keystore create
+filebeat keystore add TIDEMUX_ES_API_KEY
+filebeat test config
+```
+
+The `tidemux` namespace avoids conflicts between TideMux's string `event` field
+and ECS. `tidemux.time` retains the event time; without an Elasticsearch ingest
+pipeline, `@timestamp` is the collector time. Grant the collector read access
+to the log and only the required write access in Elasticsearch. Use HTTPS with
+a trusted CA; this example uses dynamic mappings and one index, so manage index
+lifecycle and retention in Elasticsearch. See
+[runtime log fields and privacy](docs/runtime-logging.md) and the official
+[Filebeat filestream](https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-input-filestream.html)
+and [Elasticsearch output](https://www.elastic.co/guide/en/beats/filebeat/current/elasticsearch-output.html)
+references for collector details.
+
 ## Documentation
 
 [Provider and gateway CLI](docs/provider-cli.md) ·
@@ -278,7 +331,6 @@ tidemux claude --model REF_FROM_LIST/model-a
 [Agent installation and setup](docs/agent-install.md) ·
 [Runtime JSON logs](docs/runtime-logging.md) ·
 [0.3.1 release guide](docs/release-0.3.1.md) ·
-[Elasticsearch collection](docs/elasticsearch.md) ·
 [0.2.2 release plan](docs/release-0.2.2.md) ·
 [0.2.1 release history](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·
