@@ -164,7 +164,7 @@ retained as a compatibility alias. Gateway-wide settings belong under
 | `tidemux provider list [--json]` | List provider references, endpoint, protocol, key count, model scope and budget status. Never reveal credentials. |
 | `tidemux provider show REF` | Show one provider's effective settings, including its budget, but not its API key. |
 | `tidemux provider validate REF` | Check a provider's configuration and Keychain credentials locally without an upstream request or displaying key material. |
-| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model MODELS|all] [--anthropic-version DATE] [--rotate-key]` | With no field options, open a short line-by-line form; otherwise change only the supplied fields. `--model` replaces the allowlist and `--model all` allows every model. |
+| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model MODELS|all] [--max-active-sessions N] [--anthropic-version DATE] [--rotate-key]` | With no field options, open a short line-by-line form; otherwise change only the supplied fields. `--model` replaces the allowlist and `--model all` allows every model. From 0.3.2, the provider session cap applies automatically; zero disables it. |
 | `tidemux provider key add REF` | Add another hidden-input API key to the selected provider profile. All keys share that profile's endpoint, protocol and model scope. |
 | `tidemux provider key list REF` | List redacted key slots only; never reveal credentials or Keychain account details. |
 | `tidemux provider key remove REF INDEX [--yes]` | Remove one key from the profile. A provider must retain at least one key; the Keychain item is deleted only when no remaining provider references it. |
@@ -247,7 +247,10 @@ created for a provider addition are rolled back if its config write fails.
 Provider-specific values (endpoint, credentials, protocol, model scope, prices
 and spending budget) stay with the provider. Budget limits and accrued usage are
 isolated per provider, even when providers use the same currency. Gateway-wide
-values such as listen mode and active-session limits apply to the whole gateway.
+values such as listen mode and the optional overall active-session ceiling apply
+to the whole gateway. From 0.3.2, each provider can additionally set its own
+logical-session cap with `provider update REF --max-active-sessions N`; see
+[provider capacity](docs/provider-cli.md#provider-logical-session-capacity-032).
 An automatically recognized built-in rate may be used when no explicit rate
 exists; otherwise cost remains unknown rather than guessed. An enabled budget
 requires a matching price for each requested model at request time. Report
