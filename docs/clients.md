@@ -1,10 +1,9 @@
 # Client setup
 
-This guide describes the 0.2.2 named-provider CLI. Install the client you
+This guide describes the current named-provider CLI. Install the client you
 want to use separately; TideMux does not install Claude Code, Kilo CLI or
-Hermes Agent. The tested 0.1.1 release matrix is documented in
-[client compatibility](client-compatibility.md); its single-provider routing
-is historical and does not describe the current provider model.
+Hermes Agent. Tested versions and error-display differences are documented in
+[client compatibility](client-compatibility.md).
 
 ## Add the provider routes
 
@@ -22,7 +21,10 @@ supplied, TideMux identifies the provider protocol from bounded authenticated
 `/models` schema probes, not the endpoint's name. All models are allowed by
 default; pass `--model MODEL[,MODEL...]` to restrict a provider during setup, or use
 `tidemux provider models REF --only ...` later. If the gateway is already
-running when a provider is added, restart `tidemux serve` before using it. A
+running when a provider is added or updated, its valid provider configuration
+is applied automatically to new requests. Already admitted requests keep their
+original configuration. An invalid update leaves the last valid configuration
+active; check the gateway's runtime log for `config_reload` failures. A
 bare upstream model ID routes when exactly one configured model scope matches;
 otherwise choose the provider reference shown by `provider list` and use
 `REF/MODEL_ID` (for example, `openrouter/stealth/union-alpha`). The gateway
@@ -97,8 +99,77 @@ bodies.
 
 The gateway must already be running with the same configuration. Connection
 errors distinguish an unreachable gateway, rejected local credentials and an
-unavailable model-list endpoint. Claude Code requires an
-interactive terminal and a bidirectional streaming HTTP connection.
+unavailable model-list endpoint. Interactive Claude Code requires a terminal;
+its `-p` mode also supports noninteractive use. Both require a bidirectional
+streaming HTTP connection.
+
+## Recover after a tool-history error
+
+If a reply stops after some normal text, check the terminal running `tidemux
+serve` for its `request_terminal` JSON event. HTTP 200 can still have
+`outcome: "error"`; use `error_code` to identify the failure. If the operator
+collects runtime logs in a file, search that file, for example:
+
+```sh
+rg 'invalid_upstream_tool_history|invalid_tool_history' /path/to/tidemux-runtime.jsonl
+```
+
+Use only the timestamp, request ID and safe error code when reporting the
+problem. The gateway log does not contain your prompt or tool output. See
+[runtime logging](runtime-logging.md) for log locations and fields. Kilo 7.8.1
+also displays the code and recovery instructions in its error. Claude Code
+2.1.283 displays a generic mid-response error. Hermes 0.21.2 can instead report
+that no answer was produced because of an output-token limit; confirm the
+gateway code before changing model limits.
+
+`invalid_upstream_tool_history` means the provider returned a generic
+`tool_result` in an assistant response. TideMux withheld that malformed block;
+the safe structure path, such as `content[1].type`, refers to its position and
+does not reveal its content. Start a new conversation. These examples create a
+new session; choose your configured model and provide the task again:
+
+```sh
+tidemux claude --model REF/MODEL_ID -- -p 'Start this task in a new conversation.'
+tidemux kilo --model REF/MODEL_ID -- run 'Start this task in a new conversation.'
+tidemux hermes --model REF/MODEL_ID -- -q 'Start this task in a new conversation.' -Q --oneshot
+```
+
+Do not add the client's `--continue` or `--resume` options when creating this
+clean conversation. Claude and Hermes can send their own continuation attempts
+after a stream failure; those are separate client requests. TideMux does not
+replay a dispatched request after output has begun. Once the new conversation
+works, normal client continuation is available again.
+
+`invalid_tool_history` means the submitted saved conversation already contains
+an invalid assistant `tool_result`. Repeating that unchanged history is not a
+network retry and will fail again. To retain that history, first back it up and
+use the client's supported history export/editor/import tools to explicitly
+repair the identified block. TideMux does not modify saved conversations. A
+fork that retains the malformed block also retains the problem. Keep valid
+user-side `tool_result` blocks and their matching tool calls.
+
+When the provider's built-in tool repeatedly produces malformed history, use
+the client's own file, shell or other execution tools instead, with your usual
+permission checks. Valid provider-hosted tools remain supported on native
+Anthropic routes; their cross-protocol limits are described in
+[protocol support](protocols.md). Network failures and rate limits have separate
+error codes and recovery policies.
+
+## Recover after capacity is full
+
+`active_session_limit` / HTTP 429 means that the selected provider or the whole
+gateway has reached its configured logical-session capacity. It is separate
+from an upstream rate limit and from invalid tool history. Check the safe
+error's `scope`, provider reference and limit, or the gateway's runtime error
+code when the client hides its retries.
+
+Wait for active work to finish and for retained sessions to reach their idle
+timeout, then retry with bounded exponential backoff and jitter. The gateway
+cannot predict an exact release time. Changing to a new conversation does not
+free a different occupied session and can require another slot. If automatic
+client retries stop, repeat the command once capacity is available; history
+repair is not needed for this error. An operator can inspect the configured
+limits and current session counts before deciding whether to increase a limit.
 
 ## Experimental implementation
 

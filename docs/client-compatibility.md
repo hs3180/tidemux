@@ -1,64 +1,126 @@
-# Client compatibility — 0.1.1
+# Client compatibility
 
-Verified on macOS arm64 on 2026-09-11 with real DeepSeek `deepseek-flash`.
-The 0.1.1 release carries forward the verified client matrix from the 0.1.0
-repair; use BUILD.txt and binary SHA256 to identify the exact release artifact.
-This is 0.1.1 release evidence only; it does not certify the 0.2.2
-named-provider routing or its client/provider compatibility matrix. See
-[protocol support](protocols.md) for the current routing contract.
+The current CLI matrix was verified on macOS arm64 on 2026-10-06 with actual
+installed clients, isolated profiles and a scripted loopback provider. Each
+client ran through the TideMux launcher. The provider was a test fixture;
+these results do not certify a paid model's reasoning, pricing or invoice.
+The first verification used the v0.3.1 source baseline `4886a58`; the same
+acceptance script must pass against the final 0.3.2 archive before release.
+Use BUILD.txt and binary SHA256 to identify the artifact being tested.
 
-The gateway exposes both client APIs in every profile: OpenAI clients call
-`/v1/chat/completions`, and Anthropic clients call `/v1/messages`. The selected
-`protocol` controls only the provider side. Matching client/provider pairs pass
-through; the other two combinations use the bidirectional adapter.
+| Client | Client → provider API | Real read/edit/test | New conversation recovery | Persistent continuation |
+| --- | --- | --- | --- | --- |
+| Claude Code 2.1.283 | Anthropic → Anthropic | Passed | Passed | Passed |
+| Kilo CLI 7.8.1 | OpenAI → Anthropic | Passed | Passed | Passed |
+| Hermes Agent 0.21.2 (2026.9.11), upstream `952c941e` | OpenAI → Anthropic | Passed | Passed | Passed |
 
-| Client | Installed CLI read/edit/test | Persistent continuation | Status |
+The workflows read a fixture and the source file, repair a small function, run
+`python3 -m unittest -v` through the client's actual shell tool, verify the test
+file is unchanged, and continue the successful conversation in a new client
+process. The mock model scripts the tool choices; TideMux does not execute the
+tools. These checks use Claude's print mode, Kilo's `run` mode and Hermes's
+oneshot mode. Interactive TUI rendering and the VS Code extension are outside
+this verification.
+
+## Error display and recovery
+
+The controlled failure sends a legal text block before an assistant generic
+`tool_result`. In all three routes the wire preserves the legal prefix, then
+emits one safe terminal error with `code: invalid_upstream_tool_history`,
+`param: content[1].type` and `recovery.retryable: false`. The malformed content
+and its tool ID are withheld. HTTP remains 200 after streaming begins, while
+the gateway terminal log and audit record report failure.
+
+| Client | Observed noninteractive display | Client requests in this fixture |
+| --- | --- | --- |
+| Claude Code 2.1.283 | Shows the safe text, then “API Error: Server error mid-response. The response above may be incomplete.” It does not expose the TideMux code or recovery object. | Four streaming requests: the original and three client-generated continuations. |
+| Kilo CLI 7.8.1 | Shows safe text and `invalid_upstream_tool_history`, `content[1].type`, and the instruction to start a clean conversation or explicitly repair saved history. | One streaming request. |
+| Hermes 0.21.2 | Does not display the safe text or TideMux code; reports “No visible answer was produced” and attributes it to an output-token limit. Confirm the gateway error code before following that suggestion. | One nonstreaming auxiliary request and four streaming requests. |
+
+These request counts describe this fixture and these versions. Client retry
+behavior can change. Each client request caused exactly one upstream dispatch;
+the gateway never replayed a dispatched request after partial output. Each
+failed request produced one terminal error. Logs and the ledger contained
+neither the withheld tool content nor its ID.
+
+The tested recovery starts a new conversation without `--continue` or
+`--resume`, performs the complete tool workflow, then resumes that successful
+conversation. [Client setup and recovery](clients.md#recover-after-a-tool-history-error)
+provides the commands and a safe log-based diagnostic path when a client hides
+the protocol error. Repairing arbitrary historical client files is a manual,
+client-specific operation; the gateway does not rewrite them automatically.
+
+## Protocol and profile boundaries
+
+The gateway exposes OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`.
+The selected model chooses the provider; the provider's `protocol` controls its
+upstream API. Matching pairs pass through and the other combinations use the
+bidirectional adapter. See [protocol support](protocols.md) for the current
+native server-tool, compaction and conversion boundaries.
+
+Launchers read only the local gateway credential, check authenticated model
+discovery and configure isolated persistent client profiles. Upstream keys are
+not passed to clients. Hermes uses an explicit custom provider with Chat
+Completions transport; its OpenAI provider can select Responses API, which
+TideMux does not serve. Kilo uses an environment-variable credential reference.
+
+The package wire regression separately checks native Anthropic and converted
+OpenAI output after a legal prefix, web/image malformed blocks, local rejection
+of unchanged poisoned history with and without compaction, valid native server
+tools, and valid client tool-result continuation. It does not imply that
+provider-hosted tools can be translated to every client protocol.
+
+## Capacity rejection and recovery
+
+The installed-client check also occupies one logical session, then starts each
+real CLI against a full gateway limit and, separately, a full provider limit.
+Both cases must return `active_session_limit`, the correct `scope` and limit,
+bounded backoff guidance, and no invented `Retry-After`. Rejected requests cause
+zero upstream dispatches. The fixture releases the occupied session after the
+first rejection and uses a one-second idle retention; that duration is a test
+setting, not the production default or a promised release time.
+
+| Client | Gateway limit | Provider limit | Observed recovery |
 | --- | --- | --- | --- |
-| Claude Code 2.1.263 | Passed | Passed | CLI verified |
-| Kilo CLI 7.6.2 | Passed | Passed | CLI verified |
-| Hermes Agent 0.21.1 | Passed | Passed | CLI verified |
+| Claude Code 2.1.283 | Passed | Passed | Retried automatically and completed after capacity became available. |
+| Kilo CLI 7.8.1 | Passed | Passed | Retried automatically and completed after capacity became available. |
+| Hermes 0.21.2 | Passed | Passed | Retried automatically and completed after capacity became available. |
 
-VS Code extension compatibility is outside the 0.1.1 release scope. Existing
-experimental code and historical development evidence are retained, without
-a pending IDE acceptance requirement.
+These capacity checks used the combined 0.3.2 development binary; they remain
+subject to the final archive gate. A client can hide a transient 429 while its
+SDK retries. The evidence records actual client HTTP requests and the gateway's
+`local_rejection` or `request_terminal` events as well as the final CLI output;
+an eventual successful answer does not mean no rejection occurred. Use the
+[capacity recovery instructions](clients.md#recover-after-capacity-is-full)
+when the slot does not become available promptly.
 
-## Verified CLI behavior
+## Reproduce acceptance
 
-- Product launchers read the local gateway credential from Keychain, check
-  authenticated model discovery and configure isolated persistent profiles.
-- Real workflows stream output, read a fixture, repair a small function, execute
-  unittest without modifying the test file, and continue in a new client process.
-- Controlled local upstream tests cover missing usage, truncation, cancellation,
-  queueing and recovery from upstream 429/5xx. Hermes may recover a truncated
-  stream through a non-streaming retry; each attempt remains independently audited.
-- Client-delivered input/output/cache usage and configured DeepSeek peak pricing
-  reconcile with installed gateway records. Failed/unknown amounts remain
-  null. These checks validate usage and estimates, not provider invoices.
-- Package checksums, SPDX/build provenance, Homebrew install/rollback/reinstall
-  and dual-protocol old/new/old configuration and ledger compatibility passed.
+Install the three CLIs separately and put them on `PATH`. On macOS, use the
+extracted candidate binary with the repository's acceptance scripts:
 
-## Compatibility decisions
+```sh
+python3 scripts/test_tool_history_package.py --binary /path/to/extracted/tidemux
+python3 scripts/test_client_recovery_package.py --binary /path/to/extracted/tidemux --evidence /path/to/private/evidence
+```
 
-Hermes uses an explicit custom provider with Chat Completions transport. Its
-OpenAI provider can select Responses API, which TideMux does not serve. Optional
-Ollama-style capability probes return 404 without blocking the tested workflow.
-No token-counting request appeared in the observed core client workflows; the
-endpoint remains unsupported rather than returning a fabricated token count.
+The real-client script requires all three clients and both capacity scopes by
+default; `--client claude`,
+`--client kilo` or `--client hermes` selects a diagnostic subset and does not
+satisfy the three-client release gate. `--capacity-scope gateway` checks the
+older baseline that lacks provider limits and does not satisfy the 0.3.2 gate.
+It records exact versions, commands,
+terminal output, safe wire errors, dispatch counts and audit outcomes. It uses
+synthetic Keychain responses, temporary child-process homes/profiles and local
+HTTP endpoints; it does not use production profiles or provider credentials.
+The required wire regression runs in CI. The real-client check is a separate
+installed-client acceptance gate, since CI does not install these clients.
 
-DeepSeek rejects Hermes's JSON-schema auxiliary request. TideMux preserves a safe
-400 response, allowing Hermes to retry without response_format. A LiteLLM control
-experiment confirmed the same client-side fallback unless parameter dropping
-was explicitly enabled. No silent parameter removal is performed by TideMux.
+## Historical evidence
 
-Claude's observed beta headers, thinking signatures, cache markers and tool
-history survive forwarding. DeepSeek accepts mid-conversation system messages;
-this extension and other advanced behavior are not guaranteed on every
-Anthropic-compatible service. Kilo credentials use a trusted environment-variable
-reference, not a secret in workspace configuration.
-
-This page records 0.1.1 compatibility evidence, not setup instructions.
-Current launcher commands are in [client setup](clients.md); the
-[0.2.2 protocol boundaries](protocols.md) describe provider routing.
-Image/audio, provider server tools and other unimplemented APIs remain explicit limitations.
-The original failed baseline and complete private test evidence remain archived;
-they are not substituted for passing repair results. Release artifacts are available from the project’s GitHub Releases page.
+The 2026-09-11 v0.1.1 matrix used Claude Code 2.1.263, Kilo 7.6.2 and Hermes
+0.21.1 with real DeepSeek `deepseek-flash`. Its read/edit/test, persistent
+continuation, usage estimates and install/rollback checks remain historical
+release evidence. They do not certify the current named-provider routing,
+current CLI versions or the 0.3.2 artifact. The original private evidence is
+retained separately and is not substituted for the current acceptance results.

@@ -116,8 +116,8 @@ for periods, synchronization status, statement coverage and the CSV format.
 For current client launch commands and profile behavior, see the
 [client setup guide](docs/clients.md). Agent-led installation for Claude Code,
 Codex, Hermes and dsh is covered in the [agent installation guide](docs/agent-install.md).
-The tested 0.1.1 release matrix is
-documented separately in [client compatibility](docs/client-compatibility.md).
+The current installed-client matrix, error displays and artifact boundaries are
+documented in [client compatibility](docs/client-compatibility.md).
 
 ## Compatibility
 
@@ -128,25 +128,27 @@ TideMux uses the provider's configured upstream protocol and strips `REF/`
 before forwarding an explicitly qualified model. Provider selection is
 independent of the client's protocol, so either client API can reach any
 provider, with conversion only when required. There is no default provider or
-model. A 429 retries on the same key for up to three total attempts, honoring
+model. An upstream 429 retries on the same key for up to three total attempts, honoring
 `Retry-After`; if those attempts fail, TideMux returns a rate-limit error
 without trying another key or provider. Eligible 401/403 and transport failures
 before request headers are written can still fail over within the selected
 provider's key group. TideMux stops retrying once response content may have
-reached the client. Gateway auth, session limits and ledger accounting remain
-shared.
-The three CLI workflows were verified for the 0.1.1 release; that evidence does
-not certify the 0.2.2 named-provider routing. Other compatible providers can be
-configured, though they have not all been tested.
+reached the client. Gateway authentication and ledger accounting remain shared.
+An optional gateway-wide session ceiling coexists with independent provider
+session limits. The current installed Claude Code, Kilo and Hermes workflows
+were verified with isolated profiles and a local mock provider. The final 0.3.2
+archive must pass the same gate; a development result does not certify it.
+Other compatible providers can be configured, though they have not all been tested.
 
 Responses API, audio and IDE extensions are outside this release's scope.
 Anthropic images, documents, citations and server-tool blocks pass through on
 native Anthropic routes but cannot be converted to OpenAI Chat Completions.
 Provider-specific features without an equivalent in the selected protocol are
 reported with a field-specific error. See the
-[0.1.1 tested-client matrix](docs/client-compatibility.md) for historical
-release evidence and [protocol support](docs/protocols.md) for the 0.3.0
-routing contract.
+[current tested-client matrix](docs/client-compatibility.md) for exact versions
+and verification scope, its [historical evidence](docs/client-compatibility.md#historical-evidence)
+section for the 0.1.1 release, and [protocol support](docs/protocols.md) for the
+current routing contract.
 
 ## CLI design principles
 
