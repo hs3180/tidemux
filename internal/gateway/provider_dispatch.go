@@ -9,6 +9,7 @@ import (
 
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
+	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
 )
 
@@ -41,6 +42,25 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		h.reject(w, r, clientProtocol, http.StatusBadRequest, "invalid_request", "model")
 		return nil, "", nil, true
 	}
+	admission, _ := r.Context().Value(requestSessionAdmissionKey{}).(*requestSessionAdmission)
+	if admission != nil {
+		if err := admission.acquireProvider(r.Context(), route.provider, provider.MaxActiveSessions); err != nil {
+			if errors.Is(err, limiter.ErrActiveSessionLimit) {
+				h.reject(w, r, clientProtocol, http.StatusTooManyRequests, "active_session_limit", route.provider)
+			} else if errors.Is(context.Cause(r.Context()), adapter.ErrServerShuttingDown) {
+				h.reject(w, r, clientProtocol, http.StatusServiceUnavailable, "server_shutting_down")
+			} else {
+				h.reject(w, r, clientProtocol, http.StatusBadRequest, "invalid_session_id")
+			}
+			return nil, "", nil, true
+		}
+	}
+	keepProvider := false
+	defer func() {
+		if admission != nil && !keepProvider {
+			admission.releaseProvider(route.provider)
+		}
+	}()
 
 	pool := h.keyPools[route.provider]
 	var candidates []providerKeyCandidate
@@ -144,6 +164,7 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		return providerClient.CallFromKeyCandidates(clientProtocol, r.Context(), routeBody, route.model, sink, options, keys, callbacks)
 	}
 	response, id, callErr := call()
+	keepProvider = callErr == nil
 	var classifiedErr *adapter.CallError
 	if h.config.EffectiveRouting().BillingExhaustionFailover && errors.As(callErr, &classifiedErr) && classifiedErr.Category == adapter.ProviderErrorInsufficientBalance {
 		pool.CooldownAll(billingExhaustionCooldown)
