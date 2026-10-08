@@ -22,6 +22,7 @@ jobs:
           go test -race ./...
           python3 scripts/test_provider_add_pty.py
           python3 -m py_compile scripts/test_elasticsearch_package.py
+          python3 -m py_compile scripts/test_client_recovery_package.py
           sh -n scripts/install.sh
           python3 scripts/test_install.py
           python3 scripts/test_client_commands.py
@@ -44,10 +45,12 @@ jobs:
                              "test_shared_model_affinity_package.py",
                              "test_auto_chain_package.py",
                              "test_hot_reload_package.py",
+                             "test_provider_sessions_package.py",
                              "test_budget_recovery_package.py",
                              "test_budget_reservation_package.py",
                              "test_report_budget_package.py",
                              "test_client_reliability_package.py",
+                             "test_startup_logs_package.py",
                              "test_runtime_logs_package.py"]:
                   subprocess.run(["python3", "scripts/" + script, "--binary", str(binary)], check=True)
           PY

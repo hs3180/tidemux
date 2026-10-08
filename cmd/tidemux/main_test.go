@@ -120,7 +120,7 @@ func TestServeStartupErrorIsStructuredAndHumanReadable(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &event); err != nil {
 		t.Fatalf("stderr was not one JSON lifecycle event: %v: %s", err, stderr.String())
 	}
-	if event["event"] != "gateway_start" || event["outcome"] != "error" || event["error_code"] != "gateway_start_failed" {
+	if event["event"] != "gateway_start" || event["outcome"] != "error" || event["error_code"] != "config_load_failed" || event["startup_stage"] != "config" {
 		t.Fatalf("unexpected startup failure event: %#v", event)
 	}
 	if strings.Contains(stderr.String(), "max_in_flight") || strings.Contains(stderr.String(), "provider-secret") {

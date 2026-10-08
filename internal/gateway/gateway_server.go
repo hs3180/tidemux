@@ -25,31 +25,31 @@ func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, 
 func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger) (http.Handler, func() error, error) {
 	logger = observability.LoggerOrDiscard(logger)
 	if err := c.Validate(); err != nil {
-		return nil, nil, err
+		return nil, nil, startupFailure("config", err)
 	}
 	if len(c.Providers) == 0 && c.BaseURL == "" {
-		return nil, nil, errors.New("no upstream provider is configured; run `tidemux provider add`")
+		return nil, nil, startupFailure("providers", errors.New("no upstream provider is configured; run `tidemux provider add`"))
 	}
 	if c.AccessToken == "" {
-		return nil, nil, errors.New("distinct resolved credentials are required")
+		return nil, nil, startupFailure("credentials", errors.New("distinct resolved credentials are required"))
 	}
 	if len(c.Providers) == 0 {
 		if c.APIKey == "" || c.APIKey == c.AccessToken {
-			return nil, nil, errors.New("distinct resolved credentials are required")
+			return nil, nil, startupFailure("credentials", errors.New("distinct resolved credentials are required"))
 		}
 	} else {
 		for _, provider := range c.Providers {
 			keys := provider.ResolvedAPIKeys()
 			if len(keys) == 0 {
-				return nil, nil, errors.New("distinct resolved credentials are required")
+				return nil, nil, startupFailure("credentials", errors.New("distinct resolved credentials are required"))
 			}
 			seen := make(map[string]struct{}, len(keys))
 			for _, key := range keys {
 				if key == "" || key == c.AccessToken {
-					return nil, nil, errors.New("distinct resolved credentials are required")
+					return nil, nil, startupFailure("credentials", errors.New("distinct resolved credentials are required"))
 				}
 				if _, exists := seen[key]; exists {
-					return nil, nil, errors.New("provider API keys must be unique within a key group")
+					return nil, nil, startupFailure("credentials", errors.New("provider API keys must be unique within a key group"))
 				}
 				seen[key] = struct{}{}
 			}
@@ -58,7 +58,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	legacySingleProvider := len(c.Providers) == 0
 	providers, unavailableProviders, err := resolveProvidersPartial(c, httpClient)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, startupFailure("providers", err)
 	}
 	unavailableNames := make([]string, 0, len(unavailableProviders))
 	for name := range unavailableProviders {
@@ -66,7 +66,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	}
 	sort.Strings(unavailableNames)
 	if len(unavailableProviders) == len(providers) {
-		return nil, nil, errors.New("no provider protocol could be resolved for " + strings.Join(unavailableNames, ", ") + "; set it with `tidemux provider update REF --protocol openai|anthropic`")
+		return nil, nil, startupFailure("providers", errors.New("no provider protocol could be resolved for "+strings.Join(unavailableNames, ", ")+"; set it with `tidemux provider update REF --protocol openai|anthropic`"))
 	}
 	for _, name := range unavailableNames {
 		logger.Warn("provider protocol could not be resolved",
@@ -85,11 +85,11 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		c.Providers = providers
 	}
 	if err := c.Validate(); err != nil {
-		return nil, nil, err
+		return nil, nil, startupFailure("config", err)
 	}
 	l, err := ledger.OpenForGateway(c.LedgerPath)
 	if err != nil {
-		return nil, nil, errors.New("cannot open ledger")
+		return nil, nil, startupFailure("ledger", errors.New("cannot open ledger"))
 	}
 	stopReconciliation := startStatementSync(c, l, logger)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
@@ -98,7 +98,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	if err != nil {
 		stopReconciliation()
 		_ = l.Close()
-		return nil, nil, err
+		return nil, nil, startupFailure("config", err)
 	}
 	autoChain := newAutoChainState(c.AutoChain, idleTTL)
 	cache := adapter.NewPromptCache()
@@ -116,8 +116,10 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
 		}
 	}
-	return &handler{config: c, ledger: l, handlerRuntime: &handlerRuntime{budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}, func() error {
+	h := &handler{config: c, ledger: l, handlerRuntime: &handlerRuntime{budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger}
+	return h, func() error {
 		stopReconciliation()
+		h.closeProviderSessions()
 		sessions.Close()
 		cache.Close()
 		return l.Close()
@@ -139,7 +141,7 @@ func OpenWithLogger(c Config, client *http.Client, logger *slog.Logger) (net.Lis
 	listener, err := net.Listen("tcp", c.ListenAddr)
 	if err != nil {
 		closeLedger()
-		return nil, nil, nil, errors.New("cannot bind configured listener")
+		return nil, nil, nil, startupFailure("listener", errors.New("cannot bind configured listener"))
 	}
 	server := &http.Server{Handler: h, ErrorLog: observability.HTTPServerErrorLogger(logger), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	server.RegisterOnShutdown(h.(*handler).beginShutdown)

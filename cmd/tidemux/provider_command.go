@@ -622,7 +622,7 @@ func providerShow(args []string, stdout, stderr *os.File) error {
 	if p.Budget != nil {
 		budget = fmt.Sprintf("%s; 5h=%g; 7d=%g; threshold=%g; mode=%s", p.Budget.Currency, p.Budget.FiveHourLimit, p.Budget.WeeklyLimit, p.Budget.AlertThreshold, p.Budget.Mode)
 	}
-	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nAPI keys: %d\nModel scope: %s\nBudget: %s\n", ref, p.Protocol, p.BaseURL, configuredProviderKeyCount(p), scope, budget)
+	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nAPI keys: %d\nModel scope: %s\nBudget: %s\nMax active sessions: %d (0 disables provider cap)\n", ref, p.Protocol, p.BaseURL, configuredProviderKeyCount(p), scope, budget, p.MaxActiveSessions)
 	return nil
 }
 

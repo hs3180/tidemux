@@ -117,8 +117,8 @@ for periods, synchronization status, statement coverage and the CSV format.
 For current client launch commands and profile behavior, see the
 [client setup guide](docs/clients.md). Agent-led installation for Claude Code,
 Codex, Hermes and dsh is covered in the [agent installation guide](docs/agent-install.md).
-The tested 0.1.1 release matrix is
-documented separately in [client compatibility](docs/client-compatibility.md).
+The current installed-client matrix, error displays and artifact boundaries are
+documented in [client compatibility](docs/client-compatibility.md).
 
 ## Compatibility
 
@@ -129,25 +129,27 @@ TideMux uses the provider's configured upstream protocol and strips `REF/`
 before forwarding an explicitly qualified model. Provider selection is
 independent of the client's protocol, so either client API can reach any
 provider, with conversion only when required. There is no default provider or
-model. A 429 retries on the same key for up to three total attempts, honoring
+model. An upstream 429 retries on the same key for up to three total attempts, honoring
 `Retry-After`; if those attempts fail, TideMux returns a rate-limit error
 without trying another key or provider. Eligible 401/403 and transport failures
 before request headers are written can still fail over within the selected
 provider's key group. TideMux stops retrying once response content may have
-reached the client. Gateway auth, session limits and ledger accounting remain
-shared.
-The three CLI workflows were verified for the 0.1.1 release; that evidence does
-not certify the 0.2.2 named-provider routing. Other compatible providers can be
-configured, though they have not all been tested.
+reached the client. Gateway authentication and ledger accounting remain shared.
+An optional gateway-wide session ceiling coexists with independent provider
+session limits. The current installed Claude Code, Kilo and Hermes workflows
+were verified with isolated profiles and a local mock provider. The final 0.3.2
+archive must pass the same gate; a development result does not certify it.
+Other compatible providers can be configured, though they have not all been tested.
 
 Responses API, audio and IDE extensions are outside this release's scope.
 Anthropic images, documents, citations and server-tool blocks pass through on
 native Anthropic routes but cannot be converted to OpenAI Chat Completions.
 Provider-specific features without an equivalent in the selected protocol are
 reported with a field-specific error. See the
-[0.1.1 tested-client matrix](docs/client-compatibility.md) for historical
-release evidence and [protocol support](docs/protocols.md) for the 0.3.0
-routing contract.
+[current tested-client matrix](docs/client-compatibility.md) for exact versions
+and verification scope, its [historical evidence](docs/client-compatibility.md#historical-evidence)
+section for the 0.1.1 release, and [protocol support](docs/protocols.md) for the
+current routing contract.
 
 ## CLI design principles
 
@@ -163,7 +165,7 @@ retained as a compatibility alias. Gateway-wide settings belong under
 | `tidemux provider list [--json]` | List provider references, endpoint, protocol, key count, model scope and budget status. Never reveal credentials. |
 | `tidemux provider show REF` | Show one provider's effective settings, including its budget, but not its API key. |
 | `tidemux provider validate REF` | Check a provider's configuration and Keychain credentials locally without an upstream request or displaying key material. |
-| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model MODELS|all] [--anthropic-version DATE] [--rotate-key]` | With no field options, open a short line-by-line form; otherwise change only the supplied fields. `--model` replaces the allowlist and `--model all` allows every model. |
+| `tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model MODELS|all] [--max-active-sessions N] [--anthropic-version DATE] [--rotate-key]` | With no field options, open a short line-by-line form; otherwise change only the supplied fields. `--model` replaces the allowlist and `--model all` allows every model. From 0.3.2, the provider session cap applies automatically; zero disables it. |
 | `tidemux provider key add REF` | Add another hidden-input API key to the selected provider profile. All keys share that profile's endpoint, protocol and model scope. |
 | `tidemux provider key list REF` | List redacted key slots only; never reveal credentials or Keychain account details. |
 | `tidemux provider key remove REF INDEX [--yes]` | Remove one key from the profile. A provider must retain at least one key; the Keychain item is deleted only when no remaining provider references it. |
@@ -246,7 +248,10 @@ created for a provider addition are rolled back if its config write fails.
 Provider-specific values (endpoint, credentials, protocol, model scope, prices
 and spending budget) stay with the provider. Budget limits and accrued usage are
 isolated per provider, even when providers use the same currency. Gateway-wide
-values such as listen mode and active-session limits apply to the whole gateway.
+values such as listen mode and the optional overall active-session ceiling apply
+to the whole gateway. From 0.3.2, each provider can additionally set its own
+logical-session cap with `provider update REF --max-active-sessions N`; see
+[provider capacity](docs/provider-cli.md#provider-logical-session-capacity-032).
 An automatically recognized built-in rate may be used when no explicit rate
 exists; otherwise cost remains unknown rather than guessed. An enabled budget
 requires a matching price for each requested model at request time. Report
@@ -272,6 +277,59 @@ tidemux gateway configure --listen loopback
 tidemux claude --model REF_FROM_LIST/model-a
 ```
 
+## Forward runtime logs to Elasticsearch
+
+`tidemux serve` writes JSON Lines to `stderr`. Keep it separate from
+human-readable `stdout` and let an external collector ship it; TideMux does not
+connect to Elasticsearch:
+
+```sh
+tidemux serve --config /path/to/config.json \
+  >> /var/log/tidemux/console.log 2>> /var/log/tidemux/runtime.jsonl
+```
+
+For example, point Filebeat at that `stderr` file and set its Elasticsearch
+output. Replace the paths and endpoint:
+
+```yaml
+filebeat.inputs:
+  - type: filestream
+    id: tidemux-runtime
+    paths: ["/var/log/tidemux/runtime.jsonl"]
+    parsers:
+      - ndjson:
+          target: tidemux
+          add_error_key: true
+
+output.elasticsearch:
+  hosts: ["https://elasticsearch.example:9200"]
+  index: tidemux-runtime
+  api_key: "${TIDEMUX_ES_API_KEY}"
+
+setup.ilm.enabled: false
+setup.template.enabled: false
+```
+
+Once, as the same user that runs Filebeat, create its keystore and store the
+API key under the referenced name; then check the configuration:
+
+```sh
+filebeat keystore create
+filebeat keystore add TIDEMUX_ES_API_KEY
+filebeat test config
+```
+
+The `tidemux` namespace avoids conflicts between TideMux's string `event` field
+and ECS. `tidemux.time` retains the event time; without an Elasticsearch ingest
+pipeline, `@timestamp` is the collector time. Grant the collector read access
+to the log and only the required write access in Elasticsearch. Use HTTPS with
+a trusted CA; this example uses dynamic mappings and one index, so manage index
+lifecycle and retention in Elasticsearch. See
+[runtime log fields and privacy](docs/runtime-logging.md) and the official
+[Filebeat filestream](https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-input-filestream.html)
+and [Elasticsearch output](https://www.elastic.co/guide/en/beats/filebeat/current/elasticsearch-output.html)
+references for collector details.
+
 ## Documentation
 
 [Provider and gateway CLI](docs/provider-cli.md) ·
@@ -279,7 +337,6 @@ tidemux claude --model REF_FROM_LIST/model-a
 [Agent installation and setup](docs/agent-install.md) ·
 [Runtime JSON logs](docs/runtime-logging.md) ·
 [0.3.1 release guide](docs/release-0.3.1.md) ·
-[Elasticsearch collection](docs/elasticsearch.md) ·
 [0.2.2 release plan](docs/release-0.2.2.md) ·
 [0.2.1 release history](docs/release-0.2.1.md) ·
 [Accounting](docs/accounting.md) ·

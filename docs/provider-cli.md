@@ -1,8 +1,8 @@
 # Provider and gateway setup
 
-The 0.3.1 CLI uses resource-oriented commands. Provider setup and
-lifecycle belong to `tidemux provider`; listener and session limits belong to
-`tidemux gateway`. The legacy top-level `tidemux configure` command is not
+The CLI uses resource-oriented commands. Provider setup, lifecycle and
+provider session limits belong to `tidemux provider`; listener and gateway-wide
+session limits belong to `tidemux gateway`. The legacy top-level `tidemux configure` command is not
 retained. The new routing commands below require v0.3.0 or later.
 
 ## Add a provider
@@ -53,6 +53,9 @@ changes are validated and atomically installed.
 
 ## Automatic provider application (0.3.1)
 
+Provider automatic application was added in 0.3.1. The 0.3.2 contract also
+coordinates compatible route and session state across configuration changes.
+
 A running `tidemux serve --config PATH` polls that file and its provider
 Keychain references every second. Add/update/remove, scope, credentials,
 pricing, budget and provider protocol/capabilities form one immutable view.
@@ -96,6 +99,67 @@ is pending with `config_requires_restart`; restore those fields to apply only
 provider changes automatically. Removing every named provider is supported in a
 running gateway and leaves an empty model catalog. No persisted config or ledger
 schema is added by automatic application.
+
+## Provider logical-session capacity (0.3.2)
+
+Configure a cap for one provider without changing the optional gateway-wide
+ceiling:
+
+```sh
+tidemux provider update glm --max-active-sessions 5
+tidemux provider show glm
+```
+
+The persisted field is `providers.glm.max_active_sessions`. Omitted or zero
+means unlimited; accepted values are 0–4096. Negative values are rejected
+without changing the file. A running gateway applies provider cap changes
+automatically; wait for the mutation's applied status. The gateway-wide
+`max_active_sessions` retains its existing startup semantics.
+
+A slot represents a logical conversation within one provider reference, not
+a key, model or HTTP request. Repeated or concurrent requests with the same
+session ID reuse one slot across that provider's models and key retries.
+The gateway ceiling counts that conversation once even when it uses multiple
+providers; each provider counts it separately. Identity includes the local
+caller and client protocol. OpenAI uses `X-TideMux-Session-ID`; Anthropic uses
+that header first, then `metadata.user_id`. Matching raw IDs in different
+client protocols are separate conversations. There is no cross-protocol
+session bridging. IDs and caller credentials are not exposed by capacity
+diagnostics.
+
+Requests without a stable ID are independent, concurrent slots. Their slots
+are released when the request ends, including successful buffered responses;
+generated IDs cannot retain a prompt prefix. Stable successful buffered
+conversations remain admitted until the configured gateway idle timeout
+(default five minutes). Streams, failures and cancellation release only that
+request's reference. Another concurrent request or a previously retained
+successful conversation is preserved; an idle sweep never expires in-flight
+work. Routing affinity has its own lifetime and does not itself reserve capacity.
+
+Both applicable limits must admit the initial request. A full provider returns
+protocol-native HTTP 429 / `active_session_limit` with `scope: "provider"`,
+`provider_ref` and `limit`; a full overall ceiling uses `scope: "gateway"`.
+There is no `Retry-After` value because the release time is unknown; use the
+response's bounded exponential backoff with jitter. Initial refusal dispatches
+no upstream request and releases only newly acquired admission references.
+Capacity is checked again before each target in an already-supported safe
+provider failover. Refusing that target does not remove prior attempts' audit
+or budget settlement and does not add a new reason to reroute a request.
+
+Reloading a profile's cap, endpoint, keys, scope, prices or budget preserves
+its actual occupancy. Reducing the cap does not cancel existing work or stop
+an already admitted conversation from reusing its slot. New distinct sessions
+must meet the new cap. Unlimited providers still track active/retained logical
+sessions so enabling a cap counts existing work. Removing and re-adding the
+same reference cannot erase retained or in-flight occupancy. Renaming the
+reference creates a separate capacity scope.
+
+Authenticated `GET /tidemux/session-status` returns `gateway` and `providers`
+entries with `limit`, `current` and `rejected`. A disabled gateway-wide limiter
+reports zero current sessions; provider counters still track unlimited profiles.
+Provider `current` reflects distinct conversations after idle cleanup. Rejection
+counters last for the lifetime of that capacity scope; retired empty scopes may
+be removed. The endpoint is read-only and contains no session IDs or usage.
 
 ## Add API keys to a provider
 
@@ -281,7 +345,9 @@ tidemux auto-chain clear
 
 `set` replaces the entire chain, and `clear` removes the optional top-level
 `auto_chain` field. Entries can span providers and models; the limit is 64
-distinct pairs. Restart a running gateway after changing the chain. Use only
+distinct pairs. A running gateway validates and applies chain changes
+automatically to new requests; already-admitted requests keep their previous
+configuration. Use only
 `model:auto`; `REF/auto` returns `auto_model_must_be_unqualified`.
 
 The first auto request for a stable `X-TideMux-Session-ID` (or Anthropic
