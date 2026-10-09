@@ -32,13 +32,13 @@ log.
 Example terminal event:
 
 ```json
-{"time":"2026-09-29T12:00:00Z","level":"INFO","msg":"request summary","schema_version":1,"event":"request_terminal","request_id":"0123456789abcdef0123456789abcdef","protocol":"anthropic","provider_protocol":"openai","endpoint":"messages","provider_ref":"glm","model":"glm-5.3","outcome":"success","error_code":"","http_status":200,"latency_ms":815,"queue_time_ms":4,"upstream_attempted":true,"record_persisted":true}
+{"time":"2026-09-29T12:00:00Z","level":"INFO","msg":"request summary","schema_version":1,"event":"request_terminal","request_id":"0123456789abcdef0123456789abcdef","protocol":"anthropic","provider_protocol":"openai","endpoint":"messages","provider_ref":"glm","model":"glm-5.3","outcome":"success","error_code":"","http_status":200,"latency_ms":815,"queue_time_ms":4,"upstream_attempted":true,"record_persisted":true,"timestamp":"2026-09-29T12:00:00.000Z","requestId":"0123456789abcdef0123456789abcdef","type":"assistant","message":{"id":"0123456789abcdef0123456789abcdef","model":"glm-5.3","usage":{"input_tokens":120,"output_tokens":24}}}
 ```
 
 Other events cover `gateway_start` (with `outcome: "error"`, a stable
 `error_code` and `startup_stage` if startup fails), `gateway_shutdown`,
 `unexpected_server_error`, `http_server_error`, `provider_unavailable`,
-`statement_sync_failure`, `request_audit_write_failure`, and
+`statement_sync_failure`, `request_audit_write_failure`,
 `budget_settlement_failure`, and `usage_log_write_failure`. The latter is
 rate-limited to one warning per minute while writing usage logs fails; it
 contains no paths or raw filesystem errors.
