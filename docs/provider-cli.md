@@ -47,9 +47,9 @@ bare upstream model ID when its configured scope selects one provider, or use
 Provider credentials are stored in macOS Keychain, never in command arguments
 or configuration JSON. Existing 0.1.x single-provider configurations are
 migrated to a named provider when one is added; listener, report, ledger and
-gateway credential settings are retained. A development-era global budget must
-be assigned explicitly with `tidemux provider budget REF`. Configuration
-changes are validated and atomically installed.
+gateway credential settings are retained. Remove an obsolete top-level `budget`
+field before configuring a provider policy with `tidemux provider budget REF`.
+Configuration changes are validated and atomically installed.
 
 ## Automatic provider application (0.3.1)
 
@@ -545,13 +545,11 @@ enabled budget requires a price whose currency matches the budget currency for
 every model used while that budget is active. Other providers' usage does not
 count against this provider's limits.
 
-If a profile still has the former gateway-wide budget, the first
-`provider budget REF` operation moves it to the selected provider. Existing
-ledger charges without a provider label are conservatively counted toward each
-provider's budget until they age out of the rolling windows.
-Older daily/monthly budget fields cannot be translated to rolling windows; this
-command replaces them with the newly configured provider policy (or removes
-them with `--disable`).
+Only `providers.REF.budget` is supported. Remove any obsolete top-level
+`budget` field before loading the configuration or running provider commands,
+then configure the desired policy with `tidemux provider budget REF`.
+Existing ledger charges without a provider label are conservatively counted
+toward each provider's budget until they age out of the rolling windows.
 
 To start one of a provider's budget windows over, stop the gateway and run:
 

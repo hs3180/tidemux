@@ -45,7 +45,7 @@ func providerBudgetCommand(args []string, stdin *os.File, stdout, stderr *os.Fil
 	if err != nil {
 		return errors.New("cannot read config")
 	}
-	c, legacyBudget, legacyFieldsReplaced, err := gateway.LoadConfigForProviderBudgetMigration(path)
+	c, err := gateway.LoadConfig(path)
 	if err != nil {
 		return err
 	}
@@ -66,20 +66,10 @@ func providerBudgetCommand(args []string, stdin *os.File, stdout, stderr *os.Fil
 	if !ok {
 		return fmt.Errorf("provider %q not found", ref)
 	}
-	legacyMigration := legacyBudget != (ledger.BudgetPolicy{})
 	var current ledger.BudgetPolicy
 	if provider.Budget != nil {
 		current = *provider.Budget
 	}
-	if legacyMigration {
-		if current != (ledger.BudgetPolicy{}) && !*disable {
-			return fmt.Errorf("global budget and provider %q already have separate policies; use --disable to discard the old global policy", ref)
-		}
-		if current == (ledger.BudgetPolicy{}) && !*disable {
-			current = legacyBudget
-		}
-	}
-
 	interactive := !*disable && !flagWasSet(flags, "budget-5h", "budget-weekly", "budget-currency", "budget-mode", "budget-alert-threshold")
 	if interactive {
 		current, err = promptBudget(stdin, stdout, current)
@@ -126,16 +116,6 @@ func providerBudgetCommand(args []string, stdin *os.File, stdout, stderr *os.Fil
 	c.Providers[ref] = provider
 	if err := writeCommandConfig(path, c, before); err != nil {
 		return err
-	}
-	if legacyMigration {
-		if *disable {
-			fmt.Fprintln(stdout, "Removed the former global budget policy.")
-		} else {
-			fmt.Fprintf(stdout, "Moved the former global budget policy to provider %s.\n", ref)
-		}
-	}
-	if legacyFieldsReplaced {
-		fmt.Fprintln(stdout, "Replaced the incompatible legacy budget fields with the current provider policy.")
 	}
 	fmt.Fprintf(stdout, "Budget configuration updated for provider %s.\n", ref)
 	return nil

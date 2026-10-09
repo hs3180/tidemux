@@ -361,43 +361,29 @@ func TestNamedProviderBudgetAcceptsMatchingBuiltInPrice(t *testing.T) {
 	}
 }
 
-func TestLegacyBudgetConfigReportsConflict(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"budget":{"daily_limit":1,"monthly_limit":2,"timezone":"UTC","reserve_amount":1}}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := LoadConfig(path)
-	if err == nil || !strings.Contains(err.Error(), "legacy budget fields cannot be migrated automatically") {
-		t.Fatalf("error=%v", err)
-	}
-}
-
-func TestGlobalBudgetMustBeAssignedToAProvider(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	policy := ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 5, WeeklyLimit: 80, AlertThreshold: .8, Mode: "hard"}
-	c := namedProviderConfig(testConfig(path, "https://example.com/v1"), "test")
-	c.Providers["test"] = Provider{
-		Protocol: "openai", BaseURL: "https://example.com/v1",
-		UpstreamID: "test", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "default"},
-		Prices: map[string]adapter.Price{"custom-model": testPrice()},
-	}
-	c.LegacyBudget = &policy
-	data, err := json.Marshal(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "tidemux provider budget REF") {
-		t.Fatalf("global budget loaded without reassignment: %v", err)
-	}
-	loaded, moved, replaced, err := LoadConfigForProviderBudgetMigration(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if moved != policy || replaced || loaded.LegacyBudget != nil {
-		t.Fatalf("migration result config=%+v budget=%+v replaced=%t", loaded, moved, replaced)
+func TestConfigRejectsGlobalBudget(t *testing.T) {
+	for name, budget := range map[string]string{
+		"empty":   "{}",
+		"null":    "null",
+		"rolling": `{"currency":"USD","five_hour_limit":5,"weekly_limit":80,"alert_threshold":0.8,"mode":"hard"}`,
+		"legacy":  `{"daily_limit":1,"monthly_limit":2,"timezone":"UTC","reserve_amount":1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			data, err := json.Marshal(struct {
+				Config
+				Budget json.RawMessage `json:"budget"`
+			}{Config: namedProviderConfig(testConfig(path, "https://example.com/v1"), "test"), Budget: json.RawMessage(budget)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadConfig(path); err == nil {
+				t.Fatal("global budget field was accepted")
+			}
+		})
 	}
 }
 

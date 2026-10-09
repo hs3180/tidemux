@@ -96,97 +96,57 @@ func TestProviderBudgetCommandScopesSettingsToSelectedProvider(t *testing.T) {
 	}
 }
 
-func TestProviderBudgetCommandMovesFormerGlobalPolicy(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	config := providerBudgetTestConfig(path)
-	former := ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 5, WeeklyLimit: 80, AlertThreshold: .7, Mode: "soft"}
-	config.LegacyBudget = &former
-	data, err := json.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := os.CreateTemp(dir, "stdout")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stdout.Close()
-	stderr, err := os.CreateTemp(dir, "stderr")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stderr.Close()
-	args := []string{"p2", "--budget-weekly", "100", "--config", path}
-	if err := providerBudgetCommand(args, os.Stdin, stdout, stderr); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := gateway.LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := former
-	want.WeeklyLimit = 100
-	if loaded.Providers["p2"].Budget == nil || *loaded.Providers["p2"].Budget != want || loaded.Providers["p1"].Budget != nil {
-		t.Fatalf("migrated budgets: p1=%+v p2=%+v", loaded.Providers["p1"].Budget, loaded.Providers["p2"].Budget)
-	}
-	if _, err := stdout.Seek(0, 0); err != nil {
-		t.Fatal(err)
-	}
-	message, _ := os.ReadFile(stdout.Name())
-	if !strings.Contains(string(message), "Moved the former global budget policy to provider p2") {
-		t.Fatalf("migration notice missing: %s", message)
-	}
-}
-
-func TestProviderBudgetCommandReplacesIncompatibleLegacyFields(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	data, err := json.Marshal(providerBudgetTestConfig(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	raw["budget"] = json.RawMessage(`{"currency":"USD","daily_limit":5,"monthly_limit":50,"timezone":"UTC","reserve_amount":1}`)
-	data, err = json.Marshal(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := os.CreateTemp(dir, "stdout")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stdout.Close()
-	stderr, err := os.CreateTemp(dir, "stderr")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stderr.Close()
-	args := []string{"p1", "--budget-5h", "5", "--budget-weekly", "80", "--config", path}
-	if err := providerBudgetCommand(args, os.Stdin, stdout, stderr); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := gateway.LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Providers["p1"].Budget == nil || loaded.Providers["p1"].Budget.FiveHourLimit != 5 || loaded.Providers["p1"].Budget.WeeklyLimit != 80 {
-		t.Fatalf("legacy policy not replaced: %+v", loaded.Providers["p1"].Budget)
-	}
-	if _, err := stdout.Seek(0, 0); err != nil {
-		t.Fatal(err)
-	}
-	message, _ := os.ReadFile(stdout.Name())
-	if !strings.Contains(string(message), "Replaced the incompatible legacy budget fields") {
-		t.Fatalf("legacy replacement notice missing: %s", message)
+func TestProviderBudgetRejectsGlobalPolicyWithoutChangingConfig(t *testing.T) {
+	for name, budget := range map[string]string{
+		"empty":   "{}",
+		"null":    "null",
+		"rolling": `{"currency":"USD","five_hour_limit":5,"weekly_limit":80,"alert_threshold":0.8,"mode":"hard"}`,
+		"legacy":  `{"daily_limit":1,"monthly_limit":2,"timezone":"UTC","reserve_amount":1}`,
+	} {
+		for _, disable := range []bool{false, true} {
+			mode := "set"
+			if disable {
+				mode = "disable"
+			}
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "config.json")
+				data, err := json.Marshal(struct {
+					gateway.Config
+					Budget json.RawMessage `json:"budget"`
+				}{Config: providerBudgetTestConfig(path), Budget: json.RawMessage(budget)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				stdout, err := os.CreateTemp(dir, "stdout")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stdout.Close()
+				stderr, err := os.CreateTemp(dir, "stderr")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stderr.Close()
+				args := []string{"p1", "--budget-5h", "5", "--config", path}
+				if disable {
+					args = []string{"p1", "--disable", "--config", path}
+				}
+				if err := providerBudgetCommand(args, os.Stdin, stdout, stderr); err == nil {
+					t.Fatal("global budget field was accepted")
+				}
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(after) != string(data) {
+					t.Fatal("rejected budget command changed the configuration")
+				}
+			})
+		}
 	}
 }
 
