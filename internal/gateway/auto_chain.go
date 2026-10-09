@@ -32,7 +32,7 @@ type autoChainState struct {
 	ttl       time.Duration
 	lastPrune time.Time
 	sessions  map[string]autoChainBinding
-	failed    map[int]bool
+	failed    map[int]*routeFailure
 	now       func() time.Time // injectable clock, sampled while mu is held
 }
 
@@ -44,7 +44,7 @@ func newAutoChainState(entries []AutoChainEntry, idleTTL time.Duration) *autoCha
 		entries:  append([]AutoChainEntry(nil), entries...),
 		ttl:      idleTTL,
 		sessions: make(map[string]autoChainBinding),
-		failed:   make(map[int]bool),
+		failed:   make(map[int]*routeFailure),
 	}
 }
 
@@ -72,10 +72,10 @@ func (s *autoChainState) reconfiguredWithFailures(entries []AutoChainEntry, idle
 	for index, entry := range entries {
 		indices[entry] = index
 	}
-	for index := range s.failed {
+	for index, failure := range s.failed {
 		entry := s.entries[index]
 		if newIndex, exists := indices[entry]; exists && preserveFailures[entry] {
-			next.failed[newIndex] = true
+			next.failed[newIndex] = &routeFailure{retryAt: failure.retryAt}
 		}
 	}
 	for key, binding := range s.sessions {
@@ -126,7 +126,7 @@ func (s *autoChainState) selectForSessionAvailable(sessionID string, sticky bool
 		s.lastPrune = now
 	}
 	valid := func(index int) bool {
-		return index >= 0 && index < len(s.entries) && !s.failed[index] && (available == nil || available(s.entries[index]))
+		return index >= 0 && index < len(s.entries) && s.failed[index].eligible(now) && (available == nil || available(s.entries[index]))
 	}
 	if sticky {
 		key := hashAutoChainSessionID(sessionID)
@@ -138,6 +138,14 @@ func (s *autoChainState) selectForSessionAvailable(sessionID string, sticky bool
 		delete(s.sessions, key)
 	}
 	index := s.next
+	// Reconsider failed earlier entries in configured order for new bindings.
+	// Healthy existing sessions above retain their current provider/model.
+	for earlier := 0; earlier < index && earlier < len(s.entries); earlier++ {
+		if s.failed[earlier] != nil && valid(earlier) {
+			index = earlier
+			break
+		}
+	}
 	for index < len(s.entries) && !valid(index) {
 		index++
 	}
@@ -202,14 +210,56 @@ func (s *autoChainState) recordFailure(index, _ int, callErr *adapter.CallError,
 	if index < 0 || index >= len(s.entries) {
 		return
 	}
-	s.failed[index] = true
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	s.failed[index] = &routeFailure{retryAt: now.Add(recoveryCooldown(callErr))}
 	for key, binding := range s.sessions {
 		if binding.index == index {
 			delete(s.sessions, key)
 		}
 	}
-	for s.next < len(s.entries) && s.failed[s.next] {
+	for s.next < len(s.entries) && s.failed[s.next] != nil {
 		s.next++
+	}
+}
+
+func (s *autoChainState) beginRecovery(index int) (*routeFailure, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	probe := s.failed[index]
+	if !probe.eligible(now) {
+		return nil, false
+	}
+	if probe != nil {
+		probe.probing = true
+	}
+	return probe, true
+}
+
+func (s *autoChainState) finishRecovery(index int, probe *routeFailure, handled bool, callErr, ctxErr error) {
+	if probe == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failed[index] != probe {
+		return // Another in-flight failure superseded this probe.
+	}
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	if completeRecovery(probe, now, handled, callErr, ctxErr) {
+		delete(s.failed, index)
+		if index < s.next {
+			s.next = index
+		}
 	}
 }
 
