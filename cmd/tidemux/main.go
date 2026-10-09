@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	version = "0.3.1"
+	version = "0.3.2"
 	usage   = `usage: tidemux <command> [options]
 
 commands:

@@ -8,7 +8,7 @@ TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatibl
 - **Simple client setup** — run `tidemux claude`, `tidemux kilo` or `tidemux hermes` with secure local credentials.
 - **Concurrency control** — limit active requests and queue the rest.
 - **Local usage ledger** — track outcomes, tokens and cost estimates without storing message bodies.
-- **Usage logs** — write private [ccusage-compatible JSONL](docs/ccusage.md) by default for an external report reader.
+- **Usage logs** — write private [Claude-compatible JSONL](docs/ccusage.md) for external usage reports and log collection.
 - **Automatic reconciliation** — match locally supplied statement CSVs while the gateway runs; query statistics or download billing details with `tidemux billing`.
 - **Daily reports** — generate private HTML reports, schedule macOS notifications, or send concise plain-text webhook summaries to IM platforms.
 
@@ -23,9 +23,9 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-TideMux v0.3.1 adds automatic provider application, bounded prompt retention,
-safer live budget/report handling, tool-history diagnostics and a minimal
-Elasticsearch log forwarding example.
+TideMux 0.3.2 supports coordinated route reloads, independent provider session
+limits, and one Claude-compatible JSONL format for external ccusage and
+Elasticsearch. The Homebrew command installs the latest published release.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -33,7 +33,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.3.1 CLI**.
+This walkthrough describes the **0.3.2 CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -57,7 +57,7 @@ if you want to restrict a provider; the selection can also be supplied as
 `--model MODEL[,MODEL...]`. A bare model ID routes when exactly one provider's
 configured scope matches it; use `REF/MODEL` to select a provider explicitly
 when scopes overlap. `/v1/models` lists qualified IDs. If you add a provider
-while the gateway is running, 0.3.1 automatically validates and applies it. The CLI reports pending until the gateway acknowledges the saved configuration. To
+while the gateway is running, TideMux automatically validates and applies it. The CLI reports pending until the gateway acknowledges the saved configuration. To
 configure just one protocol, add only its endpoint.
 
 TideMux 0.3.0 also accepts Anthropic provider-hosted tools such as
@@ -174,7 +174,7 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.3.1 CLI.
+`tidemux gateway`. The commands below describe the 0.3.2 CLI.
 
 | Command | Semantics |
 | --- | --- |

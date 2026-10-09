@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.2 — Unreleased
+
+- Coordinate hot-reloaded routes by provider/model identity. New configuration
+  rules take priority over compatible connection reuse and retained session
+  affinity; queued requests and streams keep their admitted configuration.
+- Add independent provider logical-session limits, live CLI updates and an
+  authenticated capacity status endpoint. Retain the optional gateway limit and
+  count anonymous requests only while they are in flight.
+- Use one Claude-compatible JSONL format for usage and diagnostics. External
+  ccusage reads private session files directly; Elasticsearch can collect the
+  same records. Missing usage stays unknown, and anonymous session identifiers
+  remain stable across gateway restarts with the same credential. Provider
+  accounting continues through `tidemux billing`.
+- Document current Claude Code, Kilo and Hermes recovery behavior after a
+  streamed invalid upstream tool-history error, with reproducible client and
+  protocol gates and steps to start a clean conversation.
+- Emit one private-safe structured failure for early `serve` startup errors,
+  including argument, configuration, credential, ledger and listener failures.
+
 ## 0.3.1 — 2026-10-03
 
 - Automatically validate and apply provider additions, updates, removals, model
