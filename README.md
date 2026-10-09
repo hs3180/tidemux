@@ -8,7 +8,7 @@ TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatibl
 - **Simple client setup** — run `tidemux claude`, `tidemux kilo` or `tidemux hermes` with secure local credentials.
 - **Concurrency control** — limit active requests and queue the rest.
 - **Local usage ledger** — track outcomes, tokens and cost estimates without storing message bodies.
-- **Usage logs** — write private [ccusage-compatible JSONL](docs/ccusage.md) by default for an external report reader.
+- **Usage logs** — write private [Claude-compatible JSONL](docs/ccusage.md) for external usage reports and log collection.
 - **Automatic reconciliation** — match locally supplied statement CSVs while the gateway runs; query statistics or download billing details with `tidemux billing`.
 - **Daily reports** — generate private HTML reports, schedule macOS notifications, or send concise plain-text webhook summaries to IM platforms.
 
@@ -23,10 +23,9 @@ brew install hs3180/tap/tidemux
 If Homebrew asks you to trust the formula, run
 `brew trust --formula hs3180/tap/tidemux`, then retry the install command.
 
-The published stable release is v0.3.1. This source tree prepares 0.3.2 with
-coordinated route reloads, independent provider session limits, opt-in ccusage
-reports and client recovery guidance. A local candidate is available only after
-building the reviewed source; the Homebrew command installs the published release.
+TideMux 0.3.2 supports coordinated route reloads, independent provider session
+limits, and one Claude-compatible JSONL format for external ccusage and
+Elasticsearch. The Homebrew command installs the latest published release.
 
 [Build from source or install without Homebrew →](docs/install.md)
 
@@ -34,7 +33,7 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Quick start
 
-This walkthrough describes the **0.3.2 candidate CLI**.
+This walkthrough describes the **0.3.2 CLI**.
 
 Install your preferred client CLI. The example below uses **DeepSeek
 `deepseek-flash`**; have your DeepSeek API key ready.
@@ -175,7 +174,7 @@ The CLI is resource-oriented: a top-level noun identifies what is being
 managed, and a subcommand states the action. Provider setup and lifecycle belong
 under `tidemux provider`; the old top-level `tidemux configure` command is not
 retained as a compatibility alias. Gateway-wide settings belong under
-`tidemux gateway`. The commands below describe the 0.3.2 candidate CLI.
+`tidemux gateway`. The commands below describe the 0.3.2 CLI.
 
 | Command | Semantics |
 | --- | --- |

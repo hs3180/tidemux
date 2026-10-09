@@ -8,21 +8,16 @@
 - Add independent provider logical-session limits, live CLI updates and an
   authenticated capacity status endpoint. Retain the optional gateway limit and
   count anonymous requests only while they are in flight.
-- Add an opt-in committed-ledger usage exporter and an installable, pinned
-  ccusage TideMux source adapter. Reports preserve unknown values, currencies,
-  usage and price provenance, and replace reconciled records without adding
-  their earlier estimates again. Session groups use persistent private HMAC
-  identities; historical records without groups remain ungrouped.
+- Use one Claude-compatible JSONL format for usage and diagnostics. External
+  ccusage reads private session files directly; Elasticsearch can collect the
+  same records. Missing usage stays unknown, and anonymous session identifiers
+  remain stable across gateway restarts with the same credential. Provider
+  accounting continues through `tidemux billing`.
 - Document current Claude Code, Kilo and Hermes recovery behavior after a
   streamed invalid upstream tool-history error, with reproducible client and
   protocol gates and steps to start a clean conversation.
 - Emit one private-safe structured failure for early `serve` startup errors,
   including argument, configuration, credential, ledger and listener failures.
-- Include configuration rollback tooling, a v0.3.1 upgrade/rollback gate and
-  current client, consumer and collector acceptance instructions.
-
-This section describes the 0.3.2 candidate source. Publication requires review
-and release authorization; v0.3.1 remains the published stable release.
 
 ## 0.3.1 — 2026-10-03
 

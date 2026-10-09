@@ -53,16 +53,12 @@ An authenticated maintainer must:
 
 If download/install fails after publication, flag the release as unusable and
 pause announcements. Fix via a new candidate/version; do not silently replace
-assets or delete users' data. For upgrades, retain a tested rollback path and
-document database compatibility before changing persisted formats.
+assets or delete users' data.
 
-## 0.3.1 gates
+## Runtime checks
 
-Use `docs/release-0.3.1.md` for the required reliability and collector gates.
-Run each against the same clean, extracted archive that will be uploaded.
+Run the applicable packaged checks in `.github/workflows/ci.yml` against the
+same clean, extracted archive that will be uploaded. Verify external ccusage
+and log collection with that archive.
 The ES destination must be an explicitly supplied isolated fixture; CI's
 normal packaged checks do not contact a production Elasticsearch deployment.
-Back up config and ledger with SQLite's online backup API before local upgrade;
-verify table schema and historical audit rows after upgrade. Stop the old
-process before replacing its executable, retain the old binary as a rollback
-path, and verify the actual launchd service plus authenticated gateway access.
