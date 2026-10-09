@@ -60,11 +60,58 @@ A running `tidemux serve --config PATH` polls that file and its provider
 Keychain references every second. Add/update/remove, scope, credentials,
 pricing, budget and provider protocol/capabilities form one immutable view.
 The catalog and new requests use that view together. Routing/auto-chain changes
-also use a new view; unchanged auto-chain and shared-model session state survive.
+also use a new view; valid auto-chain and shared-model session state survive.
 Already-admitted requests, including queued work and SSE, finish with their
 original endpoint, keys, price/budget policy and accounting. The ledger,
 concurrency gate and active-session limiter remain shared; reload never creates
 another gateway or retries an admitted request.
+
+The request selects its configuration view once at entry to `ServeHTTP`, before
+body validation, route selection and session admission. A request that has
+selected an older view continues to use it while waiting for admission or an
+execution slot; the next request selects the current view. Invalid requests do
+not gain admission. Publication changes one complete view, never individual
+provider or routing fields visible to readers.
+
+Routing first applies the current configuration's eligibility and selection
+rules. Explicit provider selection, auto-chain order for unbound sessions and
+`price_priority` remain authoritative. For session-aware auto-chain and shared
+`random` routing, a valid active binding takes priority over connection reuse.
+Adding a reusable candidate does not move an otherwise valid bound session.
+When no valid binding exists, shared `random` routing prefers ready candidates
+whose connection configuration was reused from the immediately preceding view.
+Random selection is uniform within that tier; when it is empty, all ready
+candidates participate. The tier records configuration compatibility at this
+reload, not whether a live TCP connection happens to be idle. A later reload
+may place a previously added provider in the reused tier. Cooldowns and
+request-feature eligibility still apply; capacity limits remain admission
+checks and do not create a new provider failover rule.
+
+A successfully applied configuration removes bindings whose provider/model
+was removed or whose model is outside the provider's `supported_models` scope.
+An unavailable provider/client or a provider with all keys cooling down also
+invalidates its bindings. Later requests select and bind an eligible route
+under the current rules. A safely classified `model_not_found`,
+`insufficient_balance` or `temporarily_unavailable` failure invalidates the
+affected route for later requests, which avoid immediately selecting the failed
+provider/model pair again. This does not replay the already-dispatched request.
+If one of those classifications is confirmed after SSE output has started,
+the current stream retains its route and settlement snapshot, but the invalid
+binding affects the next request, including one with the same session ID.
+Cancellation, unclassified errors and transport errors after output do not
+themselves invalidate a binding or advance the preference.
+
+Endpoint, protocol, API-version or resolved-key changes create a new connection
+generation. Healthy bindings retain their provider/model identity when that
+same pair remains configured, eligible and available; later requests use the
+new view's connection and policy. Connection generations isolate prompt-cache
+history and route-failure state rather than defining session identity. Removing
+and re-adding a provider creates a fresh generation, but its removal has already
+cleared the old bindings. Scope restrictions discard bindings for models that
+are no longer permitted. Policy-only changes retain compatible transport, key
+cooldown and local prompt-prefix history while using a fresh price/budget
+snapshot. An older view cannot overwrite active bindings or transfer stale
+failure state into a newer connection generation.
 
 CLI provider mutations report **saved / automatic application pending** until
 an authenticated gateway response acknowledges the exact saved file. They report
@@ -345,34 +392,54 @@ tidemux auto-chain clear
 
 `set` replaces the entire chain, and `clear` removes the optional top-level
 `auto_chain` field. Entries can span providers and models; the limit is 64
-distinct pairs. A running gateway validates and applies chain changes
-automatically to new requests; already-admitted requests keep their previous
-configuration. Use only
+distinct pairs. A valid chain change is applied automatically by a running
+gateway together with its provider configuration; it reaches new requests
+while already-admitted requests keep their previous configuration. Use only
 `model:auto`; `REF/auto` returns `auto_model_must_be_unqualified`.
 
 The first auto request for a stable `X-TideMux-Session-ID` (or Anthropic
 `metadata.user_id` fallback) atomically binds that session to the current
-preferred provider/model. Later requests and agent retries keep that pair,
-including after a failed request or when its provider cools down. TideMux
-returns the original request's failure and does not replay it on another chain
-entry. The selected pair appears in response metadata, usage, prices and audit.
+preferred eligible provider/model. Later requests and agent retries keep that
+pair while the binding remains valid. Removal, scope restriction, provider/client
+unavailability, all-key cooldown or a safely classified route failure invalidates
+the binding, and a later request binds to an eligible chain entry. TideMux
+returns the original dispatched request's failure and does not replay it on
+another chain entry. The selected pair appears in response metadata, usage,
+prices and audit.
 An explicit model request never uses the auto chain.
 
-An exact model-not-found, temporarily-unavailable or insufficient-balance
-classification, or a transport failure proven to precede request headers,
-advances the preferred entry for **new sessions only** when safe and before
-response output. Validation, authentication, unsupported-request errors,
-unclassified billing errors and HTTP 429 do not advance it. Concurrent failures
-from an old entry cannot skip the next preference. When the last entry fails safely, new sessions receive `auto_chain_exhausted`;
-existing sessions remain bound and the chain does not wrap. Existing bounded 429 retries stay on
-the selected provider/model and honor `Retry-After`.
+An exact, safe model-not-found, temporarily-unavailable or insufficient-balance
+classification makes that route invalid for later requests. Existing sessions
+bound to it must select again, as do unbound sessions; valid bindings to other
+entries are retained. The failed entry remains skipped until its connection
+generation changes or the route is removed from an applied configuration.
+A transport failure proven to precede request headers
+may also advance the preference when safe and before response output.
+Validation, authentication, unsupported-request errors, unclassified billing
+errors and HTTP 429 do not themselves mark a provider/model pair invalid.
+All-key cooldown still makes a provider unavailable for later selection.
+Concurrent failures from an old entry cannot skip the next preference. When no
+eligible chain entry remains, requests needing a new binding receive
+`auto_chain_exhausted`; other valid bindings remain usable. The chain does not
+wrap. Existing bounded 429 retries stay on the selected provider/model and honor
+`Retry-After`.
 
 Without a stable ID, every auto request receives a fresh request-scoped ID and
 uses the current preference without creating a persistent binding. Stable auto
 bindings use hashed caller/protocol/session keys and a refreshed 24-hour idle
 TTL; restart clears bindings and resets the preference. Multi-instance
-state sharing is not provided. Auto requests never use billing provider failover,
-which would break the session's provider/model binding.
+state sharing is not provided. Auto requests never replay a dispatched request
+through billing provider failover. Invalidating its binding affects later
+requests only.
+
+On chain reorder, addition or partial removal, unexpired bindings retain their
+eligible provider/model identity and receive its new index. Removed entries
+lose their bindings; a changed connection generation alone does not remove a
+healthy binding. Changing chain content or order starts new sessions at the new
+first entry, including after exhaustion; an unchanged chain with unchanged
+connection generations retains its preference and exhausted state. Existing valid
+sessions stay bound even when their entry moves later in the chain. A failure
+from a request using an older changed chain affects only that older view.
 
 Shared bare model IDs remain ambiguous unless a strategy is enabled:
 
@@ -388,7 +455,9 @@ tidemux routing set --billing-exhaustion-failover=false
 The strategy applies to an unqualified bare model ID only. Eligible providers
 must include the model in `supported_models` when a scope is configured, be
 available and outside key cooldown, and accept the request's protocol-specific
-features. `random` selects uniformly from the eligible providers. `price_priority`
+features. `random` preserves a valid active binding before considering the
+connection-reuse tier described above. Without a valid binding it selects
+uniformly within that tier (all eligible providers at startup). `price_priority`
 chooses the lowest sum of input-cache-hit, input-cache-miss and output rates per
 million tokens. Every candidate must have all three rates in the same currency;
 missing or incomparable rates fail closed with `routing_price_unavailable`.
@@ -398,26 +467,40 @@ are both disabled by default.
 With `random`, set `X-TideMux-Session-ID` to a stable conversation ID. Anthropic
 requests can instead use `metadata.user_id` when the header is absent. The
 header takes precedence; surrounding whitespace is removed. The first request
-atomically chooses an eligible provider uniformly, and later requests with the
-same caller namespace, client protocol, bare model ID and session ID reuse it.
+atomically chooses an eligible provider within that tier, and later requests with the
+same caller namespace, client protocol, bare model ID and session ID reuse it
+while its binding remains valid, even when another provider enters the reused
+connection tier.
 Concurrent first requests share one binding. Model IDs remain case-sensitive,
 and upstream model IDs containing slashes are supported. Requests without a
 stable ID keep per-request random selection; generated admission IDs do not
 create routing affinity.
 
 Bindings expire after 24 hours of idle time, refreshed on use. They store only
-a SHA-256 composite key, provider reference and timestamp in process memory.
+a SHA-256 composite key, model/provider references, connection generation and
+timestamp in process memory.
 The current gateway has one authenticated local access token, which defines
 one caller namespace. Credentials, raw session IDs and request bodies are not
 stored in the binding or logged. Restart clears all bindings; separate gateway
 instances do not share them. This can improve cache locality but cannot guarantee
 an upstream cache hit.
 
-If the bound provider loses model/protocol eligibility or becomes unavailable
-or cooled down before dispatch, TideMux selects and binds another eligible
-provider. Once dispatched, a session-bound request never switches providers,
-even if billing-exhaustion failover is enabled. Its existing bounded 429 retries
-remain on the selected provider. A later request may rebind after cooldown.
+If the bound provider loses model/protocol eligibility or becomes unavailable,
+including all-key cooldown, TideMux removes that binding and selects another
+eligible provider for a later request. A safely classified model-not-found,
+insufficient-balance or temporarily-unavailable failure likewise invalidates
+the affected route for later requests and prevents immediately selecting that
+failed pair again. A model-not-found marker remains until that provider's
+connection generation changes or the route is removed from an applied
+configuration. Insufficient-balance and temporarily-unavailable failures have
+a five-minute protection period; the route may become eligible afterwards,
+but an already valid binding to another provider does not move back merely
+because the failed route recovers. Before any upstream dispatch, readiness is
+rechecked within the request's original configuration view. Once dispatched,
+a session-bound request never switches providers, even if billing-exhaustion failover is
+enabled. Its existing bounded 429 retries remain on the selected provider.
+Already-started SSE and requests queued on an older view keep their original
+configuration and settlement snapshot.
 `REF/MODEL` and `model:auto` do not use shared-model bindings;
 `price_priority` also has no session affinity.
 

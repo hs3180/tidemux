@@ -184,7 +184,7 @@ def main():
 
             events = [json.loads(line) for line in stderr.splitlines() if line.strip()]
             by_request = {
-                event.get("request_id"): event
+                event.get("requestId"): event
                 for event in events
                 if event.get("event") in ("request_terminal", "local_rejection")
             }
@@ -192,7 +192,7 @@ def main():
             rejected = by_request.get(rejection_id)
             if not terminal or terminal.get("event") != "request_terminal":
                 raise RuntimeError(f"terminal JSON event did not correlate to {terminal_id}: {stderr}")
-            if (terminal.get("provider_ref") != "mock" or terminal.get("model") != "custom-model"
+            if (terminal.get("provider_ref") != "mock" or terminal.get("message", {}).get("model") != "custom-model"
                     or terminal.get("outcome") != "error" or terminal.get("http_status") != 502
                     or terminal.get("record_persisted") is not True):
                 raise RuntimeError(f"terminal runtime event is incomplete: {terminal}")

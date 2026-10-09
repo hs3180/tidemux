@@ -34,7 +34,7 @@ func decodeRuntimeEvents(t *testing.T, data []byte) []map[string]any {
 
 func findRuntimeEvent(events []map[string]any, eventName, requestID string) map[string]any {
 	for _, event := range events {
-		if event["event"] == eventName && (requestID == "" || event["request_id"] == requestID) {
+		if event["event"] == eventName && (requestID == "" || event["requestId"] == requestID) {
 			return event
 		}
 	}
@@ -101,13 +101,16 @@ func TestRequestRuntimeEventsCorrelateAndExcludeSensitiveData(t *testing.T) {
 	for key, want := range map[string]any{
 		"schema_version": float64(observability.SchemaVersion), "protocol": "openai",
 		"provider_protocol": "openai", "endpoint": "chat_completions",
-		"provider_ref": "provider-main", "model": "custom-model",
-		"outcome": "error", "error_code": "upstream_error", "http_status": float64(http.StatusBadGateway),
+		"provider_ref": "provider-main",
+		"outcome":      "error", "error_code": "upstream_error", "http_status": float64(http.StatusBadGateway),
 		"upstream_attempted": true, "record_persisted": true,
 	} {
 		if terminal[key] != want {
 			t.Errorf("terminal.%s=%#v want %#v", key, terminal[key], want)
 		}
+	}
+	if terminal["message"].(map[string]any)["model"] != "custom-model" {
+		t.Fatalf("missing canonical model: %#v", terminal)
 	}
 	if terminal["latency_ms"].(float64) < 0 || terminal["queue_time_ms"].(float64) < 0 {
 		t.Fatalf("negative timing in terminal event: %#v", terminal)

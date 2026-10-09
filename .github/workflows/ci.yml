@@ -45,12 +45,14 @@ jobs:
                              "test_shared_model_affinity_package.py",
                              "test_auto_chain_package.py",
                              "test_hot_reload_package.py",
+                             "test_routing_reload_package.py",
                              "test_provider_sessions_package.py",
                              "test_budget_recovery_package.py",
                              "test_budget_reservation_package.py",
                              "test_report_budget_package.py",
                              "test_client_reliability_package.py",
                              "test_startup_logs_package.py",
+                             "test_usage_logs_package.py",
                              "test_runtime_logs_package.py"]:
                   subprocess.run(["python3", "scripts/" + script, "--binary", str(binary)], check=True)
           PY

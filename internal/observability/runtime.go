@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 var (
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
@@ -20,7 +22,75 @@ var (
 
 // JSONLogger creates the JSON Lines logger used for serve runtime events.
 func JSONLogger(output io.Writer) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	w := &jsonOutput{output: output}
+	h := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: canonicalAttribute})
+	return slog.New(&jsonHandler{Handler: h, output: w})
+}
+
+func canonicalAttribute(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) != 0 {
+		return a
+	}
+	if a.Key == slog.TimeKey {
+		return slog.String("timestamp", a.Value.Time().UTC().Format("2006-01-02T15:04:05.000Z"))
+	}
+	return a
+}
+
+type usageLogContextKey struct{}
+
+type usageLogDestination struct {
+	log     *UsageLog
+	session string
+}
+
+// jsonHandler serializes a record once. Its writer sends those exact bytes to
+// stderr and, for terminal requests, the session file used by local readers.
+type jsonHandler struct {
+	slog.Handler
+	output *jsonOutput
+}
+
+type jsonOutput struct {
+	mu          sync.Mutex
+	output      io.Writer
+	destination usageLogDestination
+	warn        bool
+}
+
+func (h *jsonHandler) Handle(ctx context.Context, r slog.Record) error {
+	destination, _ := ctx.Value(usageLogContextKey{}).(usageLogDestination)
+	h.output.mu.Lock()
+	h.output.destination = destination
+	h.output.warn = false
+	err := h.Handler.Handle(ctx, r)
+	warn := h.output.warn
+	h.output.destination = usageLogDestination{}
+	h.output.mu.Unlock()
+	if warn {
+		slog.New(h).Warn("usage log write failed", slog.Int("schema_version", SchemaVersion),
+			slog.String("event", "usage_log_write_failure"))
+	}
+	return err
+}
+
+func (h *jsonHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &jsonHandler{Handler: h.Handler.WithAttrs(attrs), output: h.output}
+}
+
+func (h *jsonHandler) WithGroup(name string) slog.Handler {
+	return &jsonHandler{Handler: h.Handler.WithGroup(name), output: h.output}
+}
+
+func (w *jsonOutput) Write(data []byte) (int, error) {
+	n, err := w.output.Write(data)
+	if n != len(data) && err == nil {
+		err = io.ErrShortWrite
+	}
+	if destination := w.destination; destination.log != nil {
+		w.warn = destination.log.append(destination.session, data)
+	}
+	return n, err
 }
 
 // LoggerOrDiscard prevents tests and non-serve callers from falling back to the
@@ -29,7 +99,7 @@ func LoggerOrDiscard(logger *slog.Logger) *slog.Logger {
 	if logger != nil {
 		return logger
 	}
-	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+	return JSONLogger(io.Discard)
 }
 
 // RequestSummary is the versioned event shape shared by terminal requests and
@@ -49,6 +119,13 @@ type RequestSummary struct {
 	QueueTimeMS       int64
 	UpstreamAttempted bool
 	RecordPersisted   bool
+	TimestampMS       int64
+	SessionID         string // Pseudonymous log identity, never a raw client ID.
+	InputTokens       *int64
+	OutputTokens      *int64
+	CacheReadTokens   *int64
+	CacheWriteTokens  *int64
+	UsageLog          *UsageLog
 }
 
 func (e RequestSummary) Log(logger *slog.Logger) {
@@ -81,15 +158,14 @@ func (e RequestSummary) Log(logger *slog.Logger) {
 	if e.QueueTimeMS < 0 {
 		e.QueueTimeMS = 0
 	}
-	logger.LogAttrs(context.Background(), level, "request summary",
+	attrs := []slog.Attr{
 		slog.Int("schema_version", SchemaVersion),
 		slog.String("event", event),
-		slog.String("request_id", requestID),
+		slog.String("requestId", requestID),
 		slog.String("protocol", protocol),
 		slog.String("provider_protocol", providerProtocol),
 		slog.String("endpoint", endpoint),
 		slog.String("provider_ref", providerRef),
-		slog.String("model", model),
 		slog.String("outcome", outcome),
 		slog.String("error_code", errorCode),
 		slog.Int("http_status", e.HTTPStatus),
@@ -97,7 +173,31 @@ func (e RequestSummary) Log(logger *slog.Logger) {
 		slog.Int64("queue_time_ms", e.QueueTimeMS),
 		slog.Bool("upstream_attempted", e.UpstreamAttempted),
 		slog.Bool("record_persisted", e.RecordPersisted),
-	)
+	}
+	group := ""
+	if event == "request_terminal" {
+		attrs = append(attrs, slog.String("type", "assistant"), slog.Any("message", e.usageMessage(requestID, model)))
+		group = normalizedSessionID(e.SessionID)
+		if group != "" {
+			attrs = append(attrs, slog.String("sessionId", group))
+		}
+	} else {
+		attrs = append(attrs, slog.Any("message", usageMessage{ID: requestID, Model: model}))
+	}
+	ctx := context.Background()
+	if !logger.Enabled(ctx, level) {
+		return
+	}
+	when := time.Now()
+	if e.TimestampMS > 0 {
+		when = time.UnixMilli(e.TimestampMS)
+	}
+	if event == "request_terminal" && e.UsageLog != nil {
+		ctx = context.WithValue(ctx, usageLogContextKey{}, usageLogDestination{log: e.UsageLog, session: group})
+	}
+	record := slog.NewRecord(when, level, "request summary", 0)
+	record.AddAttrs(attrs...)
+	_ = logger.Handler().Handle(ctx, record)
 }
 
 func normalizedEnum(value string, allowed ...string) string {

@@ -39,21 +39,27 @@ type handler struct {
 	logger               *slog.Logger
 	randomIndex          func(int) int
 	autoChain            *autoChainState
+	providerGenerations  map[string]uint64
+	reusedConnections    map[string]bool
+	routingEpoch         uint64
+	preparedRouting      *routingReload
 }
 
 // Mutable admission/accounting state is shared by all immutable config views.
 type handlerRuntime struct {
-	providerSessionMu sync.Mutex
-	providerSessions  map[string]*limiter.SessionLimiter
-	budgetMu          sync.RWMutex
-	budgetBlocked     map[string]struct{}
-	sharedAffinity    sharedModelAffinity
-	activeMu          sync.Mutex
-	draining          bool
-	activeCalls       map[uint64]context.CancelCauseFunc
-	nextCallID        uint64
-	gate              *limiter.ConcurrencyGate
-	cache             *adapter.PromptCache
+	usageLog               *observability.UsageLog
+	providerSessionMu      sync.Mutex
+	providerSessions       map[string]*limiter.SessionLimiter
+	budgetMu               sync.RWMutex
+	budgetBlocked          map[string]struct{}
+	sharedAffinity         sharedModelAffinity
+	activeMu               sync.Mutex
+	draining               bool
+	activeCalls            map[uint64]context.CancelCauseFunc
+	nextCallID             uint64
+	gate                   *limiter.ConcurrencyGate
+	cache                  *adapter.PromptCache
+	nextProviderGeneration uint64 // config preparation is serialized by the watcher
 }
 
 type requestLogContextKey struct{}
@@ -623,10 +629,14 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			var callErr error
 			var handled bool
 			for preDispatch := 0; ; preDispatch++ {
-				if route.sessionKey != nil {
+				if route.sessionKey != nil || route.autoChainIndex != nil {
 					// Recheck after admission and on a proven pre-dispatch cooldown
 					// race. Once the adapter may have sent a request, do not rebind.
-					rebound, code, status := h.resolveRoutes(route.model, protocol, body, route.sessionKey)
+					model, key := route.model, route.sessionKey
+					if route.autoChainIndex != nil {
+						model, key = "auto", sessionKey
+					}
+					rebound, code, status := h.resolveRoutes(model, protocol, body, key)
 					if code != "" {
 						parameter := "model"
 						if code == "unsupported_request_feature" {
@@ -640,7 +650,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 				r = withRequestLogDetails(r, route.provider, route.model)
 				response, id, callErr, handled = h.callRouteCandidate(w, r, protocol, route, body, options, sink)
 				var preDispatchErr *adapter.CallError
-				if route.sessionKey == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || preDispatchErr.Code != "provider_keys_cooling_down" {
+				if route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || preDispatchErr.Code != "provider_keys_cooling_down" {
 					break
 				}
 			}
@@ -658,6 +668,9 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			lastErr = adapterErr
 			if route.autoChainIndex != nil {
 				h.autoChain.recordFailure(*route.autoChainIndex, len(h.config.AutoChain), adapterErr, r.Context().Err(), delivered)
+			}
+			if route.sessionKey != nil {
+				h.sharedAffinity.recordFailure(h.routingEpoch, route.provider, route.model, h.providerGenerations[route.provider], adapterErr, r.Context().Err(), delivered)
 			}
 			if firstBalanceErr == nil && adapterErr.Category == adapter.ProviderErrorInsufficientBalance {
 				firstBalanceErr, firstBalanceID = adapterErr, id
@@ -776,7 +789,8 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 	case "/v1/models", "/models":
 		endpoint = "models"
 	}
-	diagnosticErr := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: time.Now().UnixMilli(), Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code})
+	timestamp := time.Now().UnixMilli()
+	diagnosticErr := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: timestamp, Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code})
 	if diagnosticErr != nil {
 		status = http.StatusInternalServerError
 		code = "local_diagnostic_failed"
@@ -791,6 +805,7 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		Outcome: "rejected", ErrorCode: code, HTTPStatus: status,
 		LatencyMS: latency, QueueTimeMS: 0, UpstreamAttempted: false,
 		RecordPersisted: diagnosticErr == nil,
+		TimestampMS:     timestamp,
 	}.Log(h.logger)
 	if diagnosticErr != nil {
 		h.fail(w, status, code, protocol)

@@ -17,7 +17,7 @@ import (
 	"github.com/hs3180/tidemux/internal/adapter"
 )
 
-func TestAutoChainFailuresOnlyAdvanceFutureSessionsAndAttributeActualRoute(t *testing.T) {
+func TestAutoChainFailureRebindsNextRequestAndAttributesActualRoute(t *testing.T) {
 	var requests []struct{ provider, model, session string }
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -56,18 +56,18 @@ func TestAutoChainFailuresOnlyAdvanceFutureSessionsAndAttributeActualRoute(t *te
 	}
 	defer closeDB()
 	body := `{"model":"auto","messages":[{"role":"user","content":"hello"}]}`
-	for _, session := range []string{"existing", "existing", "new-session", "", ""} {
+	for index, session := range []string{"existing", "existing", "new-session", "", ""} {
 		w := affinityGatewayRequest(h, "openai", session, body)
-		if session == "existing" {
+		if index == 0 {
 			if w.Code != http.StatusNotFound {
-				t.Fatalf("failed session replayed or changed: %d %s", w.Code, w.Body.String())
+				t.Fatalf("failed request replayed or changed: %d %s", w.Code, w.Body.String())
 			}
 		} else if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"model":"model-two"`) {
 			t.Fatalf("new session did not select the advanced preference: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if len(requests) != 5 || requests[0].provider != "a" || requests[1].provider != "a" || requests[2].provider != "b" {
-		t.Fatalf("auto replayed within a request or moved an existing session: %+v", requests)
+	if len(requests) != 5 || requests[0].provider != "a" || requests[1].provider != "b" || requests[2].provider != "b" {
+		t.Fatalf("auto replayed a failed request or retained its invalid binding: %+v", requests)
 	}
 	if requests[3].session == "" || requests[4].session == "" || requests[3].session == requests[4].session {
 		t.Fatal("requests without IDs did not receive fresh request-scoped IDs")
@@ -168,7 +168,7 @@ func TestAutoChainSamplesTouchTimeAfterAcquiringLock(t *testing.T) {
 	}
 }
 
-func TestAutoChainUnavailableProviderAdvancesOnlyNewSessions(t *testing.T) {
+func TestAutoChainSkipsUnavailableProviderBeforeDispatch(t *testing.T) {
 	var attempts []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts = append(attempts, r.URL.Path)
@@ -189,11 +189,11 @@ func TestAutoChainUnavailableProviderAdvancesOnlyNewSessions(t *testing.T) {
 	body := `{"model":"auto","messages":[{"role":"user","content":"hello"}]}`
 	for _, session := range []string{"existing", "existing", "new-session"} {
 		w := affinityGatewayRequest(h, "openai", session, body)
-		if session == "existing" && w.Code != http.StatusServiceUnavailable || session == "new-session" && w.Code != http.StatusOK {
+		if w.Code != http.StatusOK {
 			t.Fatalf("session=%s status=%d body=%s", session, w.Code, w.Body.String())
 		}
 	}
-	if len(attempts) != 1 || !strings.HasPrefix(attempts[0], "/b/") {
+	if len(attempts) != 3 || !strings.HasPrefix(attempts[0], "/b/") || !strings.HasPrefix(attempts[1], "/b/") || !strings.HasPrefix(attempts[2], "/b/") {
 		t.Fatalf("unavailable provider caused replay or changed an existing session: %v", attempts)
 	}
 }
@@ -203,6 +203,8 @@ func TestAutoChainConcurrentBindingsAndFailuresDoNotSkipPreference(t *testing.T)
 	state := newAutoChainState(chain, defaultAutoChainSessionTTL)
 	key := newSharedModelSessionKey("caller", "anthropic", "auto", "private-auto-session")
 	var group sync.WaitGroup
+	var selected sync.WaitGroup
+	selected.Add(64)
 	for i := 0; i < 64; i++ {
 		group.Add(1)
 		go func() {
@@ -211,15 +213,17 @@ func TestAutoChainConcurrentBindingsAndFailuresDoNotSkipPreference(t *testing.T)
 			if route.provider != "a" || route.model != "one" {
 				t.Errorf("concurrent first binding moved: %+v", route)
 			}
+			selected.Done()
+			selected.Wait()
 			state.recordFailure(*route.autoChainIndex, len(chain), &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorModelNotFound}, nil, false)
 		}()
 	}
 	group.Wait()
-	if state.next != 1 || len(state.sessions) != 1 {
+	if state.next != 1 || len(state.sessions) != 0 {
 		t.Fatalf("preference=%d bindings=%d", state.next, len(state.sessions))
 	}
-	if route, _ := state.selectRoute(&key); route.provider != "a" {
-		t.Fatal("failure unpinned an existing session")
+	if route, _ := state.selectRoute(&key); route.provider != "b" {
+		t.Fatal("failed binding did not reassign to the healthy successor")
 	}
 	if route, _ := state.selectRoute(nil); route.provider != "b" {
 		t.Fatal("new session missed the preferred entry")
@@ -229,15 +233,15 @@ func TestAutoChainConcurrentBindingsAndFailuresDoNotSkipPreference(t *testing.T)
 	if _, ok := state.selectRoute(nil); ok {
 		t.Fatal("exhausted chain accepted a new session")
 	}
-	if route, _ := state.selectRoute(&key); route.provider != "a" {
-		t.Fatal("chain exhaustion moved an existing session")
+	if _, ok := state.selectRoute(&key); ok {
+		t.Fatal("chain exhaustion retained a failed binding")
 	}
 	if strings.Contains(fmt.Sprint(state.sessions), "private-auto-session") {
 		t.Fatal("raw session was stored in auto state")
 	}
 }
 
-func TestAutoChainAdvanceRequiresSafeClassificationBeforeOutput(t *testing.T) {
+func TestAutoChainFutureBindingRequiresSafeClassification(t *testing.T) {
 	tests := []struct {
 		name            string
 		callErr         *adapter.CallError
@@ -254,7 +258,7 @@ func TestAutoChainAdvanceRequiresSafeClassificationBeforeOutput(t *testing.T) {
 		{name: "unmapped billing", callErr: &adapter.CallError{Status: 403, Code: "upstream_error"}},
 		{name: "validation", callErr: &adapter.CallError{Status: 400, Code: "invalid_request", UpstreamNotAttempted: true}},
 		{name: "unsafe model error", callErr: &adapter.CallError{Category: adapter.ProviderErrorModelNotFound}},
-		{name: "after output", callErr: &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorModelNotFound}, delivered: true},
+		{name: "classified after output", callErr: &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorModelNotFound}, delivered: true, want: true},
 		{name: "cancelled", callErr: &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorModelNotFound}, ctxErr: context.Canceled},
 		{name: "deadline", callErr: &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorModelNotFound}, ctxErr: context.DeadlineExceeded},
 	}
@@ -264,5 +268,59 @@ func TestAutoChainAdvanceRequiresSafeClassificationBeforeOutput(t *testing.T) {
 				t.Fatalf("advance=%t want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestAutoChainReloadPreservesHealthyBindingsAndResetsChangedFailureGeneration(t *testing.T) {
+	a := AutoChainEntry{Provider: "a", Model: "one"}
+	b := AutoChainEntry{Provider: "b", Model: "two"}
+	state := newAutoChainState([]AutoChainEntry{a, b}, defaultAutoChainSessionTTL)
+	state.selectForSession("failed", true)
+	state.advanceForNewSessions(0)
+	state.selectForSession("healthy", true)
+	state.recordFailure(0, 2, &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorModelNotFound}, nil, false)
+	preserve := map[AutoChainEntry]bool{a: true, b: true}
+	reordered := state.reconfiguredWithFailures([]AutoChainEntry{b, a}, defaultAutoChainSessionTTL, preserve, preserve, true)
+	if selected, ok := reordered.selectForSession("failed", true); !ok || selected.provider != "b" {
+		t.Fatal("reorder revived a known failed route")
+	}
+	rotated := state.reconfiguredWithFailures([]AutoChainEntry{a, b}, defaultAutoChainSessionTTL, preserve, map[AutoChainEntry]bool{b: true}, false)
+	if selected, ok := rotated.selectForSession("healthy", true); !ok || selected.provider != "b" {
+		t.Fatal("credential rotation replaced an unrelated healthy binding")
+	}
+	if selected, ok := rotated.selectForSession("failed", true); !ok || selected.provider != "a" {
+		t.Fatal("a new connection generation retained the old failure state")
+	}
+	cold := state.reconfiguredWithFailures([]AutoChainEntry{a, b}, defaultAutoChainSessionTTL, map[AutoChainEntry]bool{b: true}, map[AutoChainEntry]bool{b: true}, false)
+	if selected, ok := cold.selectForSessionAvailable("while-cold", true, func(entry AutoChainEntry) bool { return entry != a }); !ok || selected.provider != "b" {
+		t.Fatal("changed generation ignored current cooldown")
+	}
+	if selected, ok := cold.selectForSessionAvailable("after-recovery", true, func(AutoChainEntry) bool { return true }); !ok || selected.provider != "a" {
+		t.Fatal("a temporary cooldown permanently hid the new generation")
+	}
+	if selected, ok := state.selectForSession("failed", true); !ok || selected.provider != "b" {
+		t.Fatal("reconfiguration changed the original view's failure state")
+	}
+}
+
+func TestAutoChainRechecksAvailabilityAfterSessionAdmission(t *testing.T) {
+	var paths []string
+	h := affinityGateway(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		_, _ = io.WriteString(w, openAIResponseForModel("shared-model"))
+	})
+	h.config.AutoChain = []AutoChainEntry{{Provider: "a", Model: "shared-model"}, {Provider: "b", Model: "shared-model"}}
+	h.autoChain = newAutoChainState(h.config.AutoChain, defaultAutoChainSessionTTL)
+	selections := 0
+	h.autoChain.now = func() time.Time {
+		selections++
+		if selections == 2 {
+			h.keyPools["a"].CooldownAll(time.Minute)
+		}
+		return time.Now()
+	}
+	response := affinityGatewayRequest(h, "openai", "session", `{"model":"auto","messages":[{"role":"user","content":"hello"}]}`)
+	if response.Code != http.StatusOK || strings.Join(paths, ",") != "/b/v1/chat/completions" {
+		t.Fatalf("status=%d paths=%v body=%s", response.Code, paths, response.Body.String())
 	}
 }

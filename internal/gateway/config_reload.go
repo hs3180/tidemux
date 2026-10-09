@@ -114,6 +114,7 @@ func WatchConfig(h http.Handler, path string, original Config, lookup SecretLook
 			} else {
 				if view != nil {
 					view.reload = state
+					view.activateRouting()
 					state.active.Store(view)
 				}
 				activeRaw = candidate
@@ -153,21 +154,25 @@ func runtimeSettings(c Config) Config {
 
 func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Config, previous *handler, client *http.Client) (*handler, error) {
 	view := &handler{config: c, ledger: root.ledger, handlerRuntime: root.handlerRuntime, sessions: root.sessions, logger: root.logger,
-		autoChain: previous.autoChain, providers: map[string]Provider{}, clients: map[string]*adapter.Client{}, keyPools: map[string]*providerKeyPool{}, models: map[string][]string{}, modelsKnown: map[string]bool{}, unavailableProviders: map[string]error{}}
-	if !reflect.DeepEqual(c.AutoChain, previousRaw.AutoChain) {
-		view.autoChain = newAutoChainState(c.AutoChain, time.Duration(c.ActiveSessionIdleTimeoutSeconds)*time.Second)
-	}
+		autoChain: previous.autoChain, providers: map[string]Provider{}, clients: map[string]*adapter.Client{}, keyPools: map[string]*providerKeyPool{}, models: map[string][]string{}, modelsKnown: map[string]bool{}, unavailableProviders: map[string]error{},
+		providerGenerations: map[string]uint64{}, reusedConnections: map[string]bool{}, routingEpoch: previous.routingEpoch + 1}
 	rawProviders := c.Providers
 	if len(rawProviders) == 0 && c.BaseURL != "" {
 		rawProviders = map[string]Provider{"legacy": {Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, UpstreamKeychain: c.UpstreamKeychain, APIVersion: c.APIVersion, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices}}
 	}
+	previousProviders := previousRaw.Providers
+	if len(previousProviders) == 0 && previousRaw.BaseURL != "" {
+		previousProviders = map[string]Provider{"legacy": {Protocol: previousRaw.Protocol, BaseURL: previousRaw.BaseURL, APIKey: previousRaw.APIKey, UpstreamKeychain: previousRaw.UpstreamKeychain, APIVersion: previousRaw.APIVersion, UpstreamID: previousRaw.UpstreamID, ModelCapabilities: previousRaw.ModelCapabilities, Prices: previousRaw.Prices}}
+	}
 	for name, raw := range rawProviders {
-		if before, ok := previousRaw.Providers[name]; ok && reflect.DeepEqual(raw, before) && previous.clients[name] != nil {
+		if before, ok := previousProviders[name]; ok && reflect.DeepEqual(raw, before) && previous.clients[name] != nil {
 			view.providers[name] = previous.providers[name]
 			view.clients[name] = previous.clients[name]
 			view.keyPools[name] = previous.keyPools[name]
 			view.models[name] = previous.models[name]
 			view.modelsKnown[name] = previous.modelsKnown[name]
+			view.providerGenerations[name] = previous.providerGenerations[name]
+			view.reusedConnections[name] = true
 			continue
 		}
 		p := raw
@@ -175,13 +180,15 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 		var models []string
 		var known bool
 		var err error
-		before, existed := previousRaw.Providers[name]
+		before, existed := previousProviders[name]
 		prior := previous.providers[name]
 		sameConnection := existed && previous.clients[name] != nil && before.BaseURL == raw.BaseURL && normalizeProviderProtocol(before.Protocol) == normalizeProviderProtocol(raw.Protocol) && before.APIVersion == raw.APIVersion && reflect.DeepEqual(before.ResolvedAPIKeys(), raw.ResolvedAPIKeys())
 		if sameConnection {
 			protocol = prior.Protocol
 			p.APIVersion = prior.APIVersion
 			models, known = previous.models[name], previous.modelsKnown[name]
+			view.providerGenerations[name] = previous.providerGenerations[name]
+			view.reusedConnections[name] = true
 		} else if protocol == "" || protocol == "auto" {
 			protocol, models, known, err = detectProviderEndpoint(ctx, p.BaseURL, p.APIKey, p.APIVersion, client)
 		} else {
@@ -210,13 +217,17 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 			p.UpstreamID = name
 		}
 		view.providers[name] = p
+		if !sameConnection {
+			root.nextProviderGeneration++
+			view.providerGenerations[name] = root.nextProviderGeneration
+		}
 		view.models[name], view.modelsKnown[name] = models, known
 		pool := newProviderKeyPool(p.ResolvedAPIKeys())
 		if old, ok := previous.providers[name]; ok && old.BaseURL == p.BaseURL && old.Protocol == p.Protocol && reflect.DeepEqual(old.ResolvedAPIKeys(), p.ResolvedAPIKeys()) {
 			pool = previous.keyPools[name]
 		}
 		view.keyPools[name] = pool
-		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, PromptCache: root.cache, Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, HTTP: client, Ledger: root.ledger, Gate: root.gate}
+		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, UsageLog: root.usageLog, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, PromptCache: root.cache, CacheNamespace: providerCacheNamespace(view.providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, HTTP: client, Ledger: root.ledger, Gate: root.gate}
 	}
 	if len(c.Providers) > 0 {
 		view.config.Providers = view.providers
@@ -227,5 +238,6 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 	if err := view.config.Validate(); err != nil {
 		return nil, err
 	}
+	view.prepareRouting(previous, !reflect.DeepEqual(c.AutoChain, previousRaw.AutoChain))
 	return view, nil
 }

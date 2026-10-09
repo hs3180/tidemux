@@ -25,28 +25,61 @@ With `random`, stable `X-TideMux-Session-ID` or Anthropic `metadata.user_id`
 (header first) binds a shared bare model to one provider. The hashed binding
 includes the authenticated caller namespace, client protocol and model ID,
 has a refreshed 24-hour idle TTL, and exists only in the gateway process.
-No stable ID means per-request random selection. Unavailable or ineligible
-providers are rebound before dispatch. Session-bound requests do not switch
-providers after dispatch, including on mapped billing exhaustion; 429 retries
+No stable ID means per-request random selection. A valid active binding takes
+priority over connection reuse. Removed, out-of-scope or unavailable
+provider/model pairs, including unavailable clients or all-key cooldown, lose
+their bindings; later requests select again under the routing rules.
+Session-bound requests do not switch providers after dispatch, including on
+mapped billing exhaustion; 429 retries
 stay on the selected provider. Explicit provider routes and auto model chains
 have separate behavior, and gateway restarts clear the bindings.
 
 `model:auto` uses the single instance `auto_chain` of ordered provider/model
-pairs. `REF/auto` is rejected. Stable auto sessions stay on their original pair
-across failures; safe exact model-not-found, temporarily-unavailable,
-insufficient-balance or pre-header transport failures advance the preference
-only for new sessions before output. The failed request is never replayed on
-the next entry. Requests without stable IDs receive fresh request-scoped IDs.
+pairs. `REF/auto` is rejected. Stable auto sessions retain their original pair
+while it remains valid. Safe exact model-not-found, temporarily-unavailable or
+insufficient-balance failures invalidate the affected route for later requests;
+those requests reselect without immediately choosing the failed pair again.
+The failed auto-chain entry remains skipped until its connection generation
+changes or the route is removed from an applied configuration.
+A safe pre-header transport failure can also advance the preference before
+output. The failed request is never replayed on the next entry. Requests without
+stable IDs receive fresh request-scoped IDs.
 Bindings and the preference are process-local and reset on restart. Explicit
-model requests do not use the chain, and streaming output never advances it.
+model requests do not use the chain, and streaming output never triggers replay
+on another entry.
+Confirmed model-not-found, insufficient-balance or temporarily-unavailable
+errors after SSE output has started still invalidate the route for the next
+request, including one with the same session ID. The current stream retains
+its route and settlement snapshot. Cancellation, unclassified errors and
+transport errors after output do not themselves invalidate bindings or advance
+the preference.
 Authentication failures and HTTP 429 retries stay within the selected
 provider's key group; 429 cooldowns honor `Retry-After` and never switch
 providers. Cross-provider failover is opt-in and only follows an exact
 `insufficient_balance` error mapping to a provider using the same client protocol
 and requested model. Session-bound shared-model requests and auto-chain requests
-do not switch providers. Arbitrary 403 responses do not trigger failover.
+do not switch providers within a dispatched request. Arbitrary 403 responses do
+not trigger failover.
 Gateway authentication and the local ledger remain shared. An optional
 gateway-wide logical-session ceiling coexists with independent provider limits.
+
+Endpoint, resolved-key, protocol or API-version changes preserve a healthy
+binding when the same provider/model remains configured, eligible and available;
+later requests use the new view. Connection generations isolate prompt-cache
+history and failed-route state, and an older view cannot contaminate active
+bindings or a newer generation's failure state. Removing a provider clears its
+bindings; re-adding it creates a new generation. Already-started SSE and
+requests queued on an older view keep
+their original configuration and settlement snapshot. A successfully applied
+configuration removes bindings invalidated by provider/model removal or scope
+changes; an invalid reload retains the entire last valid configuration. See
+[automatic provider application](provider-cli.md#automatic-provider-application-031).
+
+For shared-model bindings, a model-not-found failure remains ineligible until
+the connection generation changes or the route is removed from an applied
+configuration. Insufficient-balance and temporarily-unavailable failures have
+a five-minute protection period. Recovery makes the route eligible again but
+does not move a healthy binding back from another provider.
 
 The 0.1.x single-provider configuration remains a migration/compatibility path.
 New 0.3.0 routing fields are omitted until enabled, so an unchanged 0.2.2
@@ -82,7 +115,7 @@ ambiguous or non-standard; detection does not rewrite stored configuration.
 | OpenAI client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is OpenAI | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies |
 | Anthropic client | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; conversion applies | Bare model ID when one provider scope matches, otherwise `REF/MODEL_ID`; native when provider is Anthropic |
 | Shared bare model | Ambiguous by default; `routing.shared_model_strategy` can select among eligible providers | Same policy; native Anthropic tools restrict candidates to Anthropic upstreams |
-| `model:auto` | Uses the single instance provider/model chain; stable sessions remain pinned and failures advance new sessions only; `REF/auto` is rejected | Same policy; unsupported features do not advance the chain |
+| `model:auto` | Uses the single instance provider/model chain; valid active bindings survive, invalid routes are reselected on later requests, and failed requests are not replayed; `REF/auto` is rejected | Same policy; unsupported features do not themselves invalidate a route |
 | Streaming | Native OpenAI stream | Native Anthropic stream |
 | Usage | Prompt/completion; cache details or DeepSeek hit/miss | Input/output plus cache read/creation translated to prompt/completion |
 

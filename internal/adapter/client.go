@@ -26,14 +26,18 @@ type Client struct {
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
 	ProviderRef                                     string
 	Logger                                          *slog.Logger
+	UsageLog                                        *observability.UsageLog
 	MaxOutputTokens                                 int64
 	Prices                                          map[string]Price
 	ErrorCodeMappings                               []ProviderErrorMapping
 	PromptCache                                     *PromptCache
-	HTTP                                            *http.Client
-	Ledger                                          *ledger.Ledger
-	Gate                                            *limiter.ConcurrencyGate
-	waitRateLimit                                   func(context.Context, time.Duration) error
+	// CacheNamespace separates local prefix history across provider connections.
+	// It is internal only; SessionID remains unchanged at the upstream boundary.
+	CacheNamespace string
+	HTTP           *http.Client
+	Ledger         *ledger.Ledger
+	Gate           *limiter.ConcurrencyGate
+	waitRateLimit  func(context.Context, time.Duration) error
 }
 type CallError struct {
 	Status int
@@ -148,7 +152,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		if !priced || a.EstimatedCost != nil {
 			return
 		}
-		cacheSession := options.SessionID
+		cacheSession := c.cacheSession(clientProtocol, options.SessionID)
 		if options.RequestScopedSession {
 			cacheSession = ""
 		}
@@ -168,7 +172,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			observability.LoggerOrDiscard(c.Logger).Error("request handler panic recovered",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "request_panic"),
-				slog.String("request_id", id),
+				slog.String("requestId", id),
 			)
 		}
 		if a.EstimatedCost == nil && attempted {
@@ -195,7 +199,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			observability.LoggerOrDiscard(c.Logger).Error("request audit append failed",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "request_audit_write_failure"),
-				slog.String("request_id", id),
+				slog.String("requestId", id),
 				slog.String("failure_code", "audit_write_failed"),
 			)
 			response = nil
@@ -239,6 +243,11 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			Model: a.Model, Outcome: outcome, ErrorCode: errorCode,
 			HTTPStatus: status, LatencyMS: a.LatencyMS, QueueTimeMS: a.QueueMS,
 			UpstreamAttempted: attempted, RecordPersisted: auditPersisted,
+			TimestampMS: a.TimestampMS,
+			SessionID:   c.UsageLog.SessionID(clientProtocol, options.SessionID, options.RequestScopedSession),
+			InputTokens: a.InputTokens, OutputTokens: a.OutputTokens,
+			CacheReadTokens: a.CacheReadTokens, CacheWriteTokens: a.CacheWriteTokens,
+			UsageLog: c.UsageLog,
 		}.Log(c.Logger)
 	}()
 	admission, e := c.Gate.Acquire(ctx)
@@ -347,10 +356,17 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		}
 	}
 	if c.PromptCache != nil && !options.RequestScopedSession {
-		c.PromptCache.Remember(clientProtocol, model, options.SessionID, body)
+		c.PromptCache.Remember(c.Protocol, model, c.cacheSession(clientProtocol, options.SessionID), body)
 	}
 	a.Status = "ok"
 	return data, id, nil
+}
+
+func (c *Client) cacheSession(clientProtocol, session string) string {
+	if session == "" || c.CacheNamespace == "" {
+		return session
+	}
+	return c.CacheNamespace + "\x00" + clientProtocol + "\x00" + session
 }
 
 func (c *Client) doAttemptWithRateLimitRetries(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, onRateLimit func(*CallError), onRetry func()) ([]byte, TokenUsage, error) {

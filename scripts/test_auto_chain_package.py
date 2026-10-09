@@ -123,10 +123,22 @@ def main():
                     if started.returncode != 0:
                         raise RuntimeError("gateway shutdown failed")
                 process = start()
-                for header in (None, None, SESSION):
-                    status, _ = post(url, header, protocol="anthropic", model="auto", metadata=SESSION)
-                    if status != 404:
-                        raise RuntimeError("existing auto session was replayed or moved after failure")
+                for index, header in enumerate((None, None, SESSION)):
+                    with upstream.lock:
+                        before = len(upstream.posts)
+                    status, result = post(url, header, protocol="anthropic", model="auto", metadata=SESSION)
+                    if index == 0:
+                        if status != 404:
+                            raise RuntimeError("the first auto request did not retain its failed route")
+                        expected_route = ("a", "model-one")
+                    else:
+                        if status != 200 or json.loads(result)["model"] != "model-two":
+                            raise RuntimeError("the invalid auto binding was not reassigned on the next request")
+                        expected_route = ("b", "model-two")
+                    with upstream.lock:
+                        attempts = list(upstream.posts[before:])
+                    if len(attempts) != 1 or attempts[0][:2] != expected_route:
+                        raise RuntimeError("an auto request was replayed or used the wrong provider/model")
                 status, result = post(url, protocol="anthropic", model="auto", metadata=SESSION + "-reset")
                 if status != 200 or json.loads(result)["model"] != "model-two":
                     raise RuntimeError("new auto session did not use the next provider/model")
@@ -142,8 +154,11 @@ def main():
                     raise RuntimeError("explicit model request used the auto chain")
                 with upstream.lock:
                     first_run = list(upstream.posts)
-                if len(first_run) != 7 or any(p != "a" or m != "model-one" for p, m, _ in first_run[:3]):
+                expected_first_routes = [("a", "model-one")] + [("b", "model-two")] * 5 + [("a", "model-one")]
+                if [attempt[:2] for attempt in first_run] != expected_first_routes:
                     raise RuntimeError("auto failure produced duplicate or incorrectly attributed upstream requests")
+                if not first_run[0][2] or len({attempt[2] for attempt in first_run[:3]}) != 1:
+                    raise RuntimeError("invalid-binding recovery did not retain the same session identity")
                 if first_run[4][2] == "" or first_run[5][2] == "" or first_run[4][2] == first_run[5][2]:
                     raise RuntimeError("no-ID auto requests did not receive fresh session IDs")
                 stop(process)
@@ -151,23 +166,48 @@ def main():
                 status, result = post(url, SESSION + "-stream", model="auto", stream=True)
                 if status != 200 or "partial" not in result or "event: error" not in result or '"model":"model-one"' not in result or "provider-alias" in result:
                     raise RuntimeError("auto stream terminal failure was hidden")
-                status, _ = post(url, SESSION + "-after-stream", model="auto")
-                if status != 404:
-                    raise RuntimeError("stream output advanced the preference for a new session")
+                with upstream.lock:
+                    stream_attempts = list(upstream.posts[len(first_run):])
+                if len(stream_attempts) != 1 or stream_attempts[0][:2] != ("a", "model-one"):
+                    raise RuntimeError("the auto stream was replayed after output")
+                for session in (SESSION + "-stream", SESSION + "-after-stream"):
+                    with upstream.lock:
+                        before = len(upstream.posts)
+                    status, result = post(url, session, model="auto")
+                    if status != 200 or json.loads(result)["model"] != "model-two":
+                        raise RuntimeError("confirmed stream route failure did not reassign the next request")
+                    with upstream.lock:
+                        attempts = list(upstream.posts[before:])
+                    if len(attempts) != 1 or attempts[0][:2] != ("b", "model-two"):
+                        raise RuntimeError("post-stream recovery was replayed or used the wrong provider/model")
                 stop(process)
             with upstream.lock:
                 posts = list(upstream.posts)
-            if len(posts) != 9 or any(p != "a" or m != "model-one" for p, m, _ in posts[-2:]):
+            expected_routes = expected_first_routes + [("a", "model-one"), ("b", "model-two"), ("b", "model-two")]
+            if [attempt[:2] for attempt in posts] != expected_routes:
                 raise RuntimeError("restart/stream behavior changed the auto chain unexpectedly")
+            if not posts[-3][2] or posts[-3][2] != posts[-2][2] or not posts[-1][2] or posts[-1][2] == posts[-2][2]:
+                raise RuntimeError("post-stream recovery did not retain and distinguish the requested session identities")
             with sqlite3.connect(ledger) as connection:
-                rows = [json.loads(row[0]) for row in connection.execute("SELECT record_json FROM request_audit")]
+                rows = [json.loads(row[0]) for row in connection.execute("SELECT record_json FROM request_audit ORDER BY rowid")]
             if len(rows) != len(posts):
                 raise RuntimeError("auto attempt audit count differs from upstream work")
-            for row in rows:
+            for row, attempt in zip(rows, posts):
                 if row["upstream"] != "same-vendor" or row.get("provider_ref") not in ("a", "b"):
                     raise RuntimeError("audit could not distinguish profiles of the same upstream vendor")
+                if (row["provider_ref"], row["model"]) != attempt[:2]:
+                    raise RuntimeError("auto audit did not retain the actual dispatched provider/model")
                 if row["provider_ref"] == "b" and (row["model"] != "model-two" or row["input_tokens"] != 2 or row["output_tokens"] != 2 or row["currency"] != "USD" or abs(row["estimated_cost"] - 0.000010) > 1e-12):
                     raise RuntimeError("usage or fees did not belong to the actual provider/model: " + json.dumps({key: row.get(key) for key in ("upstream", "model", "input_tokens", "output_tokens", "cache_read_tokens", "currency", "estimated_cost", "cost_source")}))
+            terminal_events = [json.loads(line) for line in stderr_path.read_text().splitlines() if line.strip()]
+            terminal_events = [event for event in terminal_events if event.get("event") == "request_terminal"]
+            by_request = {event.get("requestId"): event for event in terminal_events}
+            if len(terminal_events) != len(rows) or len(by_request) != len(rows):
+                raise RuntimeError("auto runtime terminal events did not match the unique audits")
+            for row in rows:
+                event = by_request.get(row["id"])
+                if not event or (event.get("provider_ref"), event.get("message", {}).get("model")) != (row["provider_ref"], row["model"]) or event.get("record_persisted") is not True or event.get("upstream_attempted") is not True:
+                    raise RuntimeError("auto runtime logs did not belong to the actual audited route")
             logs = stdout_path.read_text() + stderr_path.read_text() + json.dumps(rows)
             if any(value in logs for value in (GATEWAY_KEY, PROVIDER_KEY, SESSION, BODY, "private_auto_provider_error")):
                 raise RuntimeError("auto session identifiers, credentials or bodies were persisted")
@@ -188,7 +228,7 @@ def main():
                     raise RuntimeError("v0.2.2 could not read all candidate audits without changing the ledger")
                 if sorted(row["id"] for row in report["requests"]) != sorted(row["id"] for row in rows):
                     raise RuntimeError("ledger rollback omitted candidate audit records")
-            print(json.dumps({"binary": str(binary), "version": version, "instance_chain_cli": True, "existing_sessions_pinned_across_failure": True, "new_sessions_advance_provider_and_model": True, "no_id_fresh_ids": True, "qualified_auto_rejected": True, "stream_does_not_advance": True, "actual_usage_and_cost_attribution": True, "private_logs_and_ledger": True, "baseline_ledger_read_only": bool(args.baseline_binary), "upstream_attempts": len(posts)}))
+            print(json.dumps({"binary": str(binary), "version": version, "instance_chain_cli": True, "failed_request_not_replayed": True, "invalid_binding_reassigned_next_request": True, "valid_fallback_binding_retained": True, "new_sessions_advance_provider_and_model": True, "no_id_fresh_ids": True, "qualified_auto_rejected": True, "stream_not_replayed_and_next_request_reassigned": True, "actual_usage_and_cost_attribution": True, "actual_runtime_route_attribution": True, "private_logs_and_ledger": True, "baseline_ledger_read_only": bool(args.baseline_binary), "upstream_attempts": len(posts)}))
     finally:
         if process is not None and process.poll() is None:
             process.terminate()
