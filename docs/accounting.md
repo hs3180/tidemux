@@ -330,6 +330,14 @@ or restart, local estimation uses cache-miss input until a new prefix is known.
 Provider-reported usage and prices still take precedence; these limits do not
 change upstream prompt caching or supplier billing.
 
+Local prefix history is partitioned by provider connection generation, protocol,
+model and stable session identity. Compatible policy-only reloads keep this
+history; endpoint/protocol/API-version/key changes and provider removal/re-addition
+use a fresh partition. Old admitted requests keep their original partition and
+cannot seed prefix estimates for a new connection generation. Expired partitions
+remain subject to the same entry, byte and idle-retention bounds. This local
+estimate does not certify a provider-side cache hit.
+
 Pre-release budget tables and the older daily/monthly policy fields are not
 converted to rolling windows. Running `tidemux provider budget REF` replaces
 those incompatible fields with a newly configured provider policy.

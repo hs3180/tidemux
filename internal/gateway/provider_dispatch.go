@@ -69,7 +69,7 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		candidates, retryDelay = pool.Candidates()
 		if len(candidates) == 0 {
 			callErr := &adapter.CallError{Status: http.StatusServiceUnavailable, Code: "provider_keys_cooling_down", Cooldown: retryDelay, UpstreamNotAttempted: true}
-			if route.sessionKey != nil {
+			if route.sessionKey != nil || route.autoChainIndex != nil {
 				return nil, "", callErr, false
 			}
 			setRetryAfterHeader(w, callErr)

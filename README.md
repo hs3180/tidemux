@@ -62,15 +62,32 @@ configure just one protocol, add only its endpoint.
 TideMux 0.3.0 also accepts Anthropic provider-hosted tools such as
 `web_search_20250305` on Anthropic upstream routes. Configure an ordered model
 chain with `tidemux auto-chain set --entries REF_A/MODEL_A,REF_B/MODEL_B`; then use
-`model:auto`. Existing auto sessions stay pinned; classified safe failures
-advance the preference only for new sessions. `REF/auto` is rejected. Shared bare model IDs remain
-ambiguous by default. `tidemux routing set --shared-model-strategy random` or
+`model:auto`. Valid active session bindings take priority over connection reuse.
+Removed, out-of-scope or unavailable provider/model pairs lose their bindings,
+including when the client is unavailable or all keys are cooling down. Later
+requests select again under the routing rules. Safely classified
+model-not-found, insufficient-balance and temporarily-unavailable failures also
+invalidate the affected route for later requests without immediately selecting
+it again. The failed request is not replayed. `REF/auto` is rejected. Shared
+bare model IDs remain ambiguous by default.
+Those confirmed classifications also invalidate the binding when received
+after SSE output has started: the current stream stays on its route, and the
+next request, including one with the same session ID, selects again. Cancellation,
+unclassified errors and transport errors after output do not themselves
+invalidate the binding or advance the preference.
+`tidemux routing set --shared-model-strategy random` or
 `price_priority` opts into selection, and billing-exhaustion failover is a
 separate opt-in that requires an exact `insufficient_balance` provider mapping.
 With `random`, a stable `X-TideMux-Session-ID` (or Anthropic `metadata.user_id`
 when the header is absent) pins each conversation to its first eligible
-provider for 24 hours of idle time. Bindings are kept in memory and reset on
-restart. Without a stable ID, selection stays random for each request. See the
+provider while that binding remains valid, for 24 hours of idle time. Endpoint,
+key, protocol or API-version changes preserve healthy bindings when the same
+provider/model remains eligible; later requests use the new configuration.
+A new connection generation isolates prompt-cache history and clears old route
+failure state. Bindings are kept in memory and reset on restart. Without a
+stable ID, selection stays random for each request. Already-started SSE and
+requests queued on an older configuration retain their original configuration
+and settlement snapshot; an invalid reload keeps the last valid configuration. See the
 [routing guide](docs/provider-cli.md#model-fallback-and-shared-model-routing).
 
 ### 2. Start the gateway
@@ -175,7 +192,7 @@ retained as a compatibility alias. Gateway-wide settings belong under
 | `tidemux provider pricing remove REF MODEL` | Remove that model's explicit rate. This does not change the provider or model scope. |
 | `tidemux provider budget [REF] [options]` | Configure rolling spending limits for one provider. If exactly one provider exists, `REF` may be omitted. |
 | `tidemux provider budget reset REF --window 5h (or 7d)` | Reset only that provider's selected rolling budget window. Stop the gateway before reset, then restart it; request audit and billing history remain intact. |
-| `tidemux auto-chain show`, `set` or `clear` | Inspect, replace or clear the single instance chain used by `model:auto`; failures change the preference for new sessions only. |
+| `tidemux auto-chain show`, `set` or `clear` | Inspect, replace or clear the single instance chain used by `model:auto`; preserve valid session bindings and reselect invalid routes on later requests without replaying the failed request. |
 | `tidemux routing show` / `tidemux routing set` | Inspect and opt into shared bare-model selection or exact billing-exhaustion cross-provider failover. Both routing settings default off. |
 | `tidemux gateway configure [options]` | Set process-wide listener (`loopback` by default or `0.0.0.0`), gateway credential, request-concurrency and active-session settings. `0.0.0.0` requires a gateway API key. It does not add or modify upstream providers. |
 
