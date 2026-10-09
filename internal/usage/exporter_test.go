@@ -27,7 +27,7 @@ func fixture(t *testing.T) (*ledger.Ledger, *Exporter, string, *Signer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := New(Config{Enabled: true}, path, signer)
+	e, err := New(Config{}, path, signer)
 	if err != nil {
 		t.Fatal(err)
 	}

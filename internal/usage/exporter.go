@@ -42,7 +42,6 @@ type checkpoint struct {
 }
 
 type Status struct {
-	Enabled     bool   `json:"enabled"`
 	LastSuccess string `json:"last_success,omitempty"`
 	ErrorCode   string `json:"error_code,omitempty"`
 	AuditRowID  int64  `json:"audit_rowid"`
@@ -57,9 +56,6 @@ type Exporter struct {
 }
 
 func New(c Config, ledgerPath string, signer *Signer) (*Exporter, error) {
-	if !c.Enabled {
-		return nil, errors.New("usage_export_disabled")
-	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -79,7 +75,6 @@ func (e *Exporter) Close() error { return e.reader.Close() }
 // A crash between the two can duplicate a snapshot. Stable message/request IDs
 // let external consumers deduplicate token usage. The audit writer is uninvolved.
 func (e *Exporter) Sync(ctx context.Context, backfill bool) (result Status, err error) {
-	result.Enabled = true
 	if err = prepareDirectory(e.config.Directory); err != nil {
 		return result, err
 	}

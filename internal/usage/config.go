@@ -1,5 +1,5 @@
-// Package usage exports committed ledger data as optional Claude-compatible JSONL.
-// Export files are optional views, never audit or budget authority.
+// Package usage exports committed ledger data as Claude-compatible JSONL.
+// Export files are reporting views, never audit or budget authority.
 package usage
 
 import (
@@ -9,7 +9,6 @@ import (
 )
 
 type Config struct {
-	Enabled     bool   `json:"enabled"`
 	Directory   string `json:"directory,omitempty"`
 	PollSeconds int    `json:"poll_seconds,omitempty"`
 	MaxBytes    int64  `json:"max_bytes,omitempty"`

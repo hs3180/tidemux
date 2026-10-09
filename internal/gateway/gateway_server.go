@@ -93,10 +93,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		return nil, nil, startupFailure("ledger", errors.New("cannot open ledger"))
 	}
 	stopReconciliation := startStatementSync(c, l, logger)
-	var usageSigner *usage.Signer
-	if c.UsageLog != nil && c.UsageLog.Enabled {
-		usageSigner, _ = usage.OpenSigner(c.LedgerPath)
-	}
+	usageSigner, _ := usage.OpenSigner(c.LedgerPath)
 	stopUsage := startUsageExport(c, usageSigner, logger)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
 	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second

@@ -11,10 +11,11 @@ import (
 )
 
 func startUsageExport(c Config, signer *usage.Signer, logger *slog.Logger) func() {
-	if c.UsageLog == nil || !c.UsageLog.Enabled {
-		return func() {}
+	var config usage.Config
+	if c.UsageLog != nil {
+		config = *c.UsageLog
 	}
-	config := c.UsageLog.Effective(c.LedgerPath)
+	config = config.Effective(c.LedgerPath)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -35,7 +36,6 @@ func startUsageExport(c Config, signer *usage.Signer, logger *slog.Logger) func(
 					status = result
 				}
 			}
-			status.Enabled = true
 			status.ErrorCode = ""
 			if err != nil {
 				// Classifications only: errors may contain paths or private data.
@@ -44,7 +44,7 @@ func startUsageExport(c Config, signer *usage.Signer, logger *slog.Logger) func(
 					status.ErrorCode = "usage_identity_unavailable"
 				}
 				if ctx.Err() == nil && (lastWarning.IsZero() || time.Since(lastWarning) >= time.Minute) {
-					observability.LoggerOrDiscard(logger).Warn("optional usage export failed", slog.Int("schema_version", observability.SchemaVersion), slog.String("event", "usage_export_failure"), slog.String("failure_code", status.ErrorCode))
+					observability.LoggerOrDiscard(logger).Warn("usage export failed", slog.Int("schema_version", observability.SchemaVersion), slog.String("event", "usage_export_failure"), slog.String("failure_code", status.ErrorCode))
 					lastWarning = time.Now()
 				}
 			}

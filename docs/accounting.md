@@ -427,7 +427,7 @@ generated report and does not fabricate a missed balance snapshot.
 ## Legacy data
 
 For external session and token reports, see [ccusage-compatible logs](ccusage.md).
-The optional dedicated JSONL export is disabled by default, follows committed
+The dedicated JSONL export runs by default, follows committed
 audits and matched-statement revisions, and preserves unknown values and each
 currency. Provider-reported tokens produce estimates when multiplied by prices;
 supplier charges remain separate metadata. External reports skip unknown required

@@ -1,18 +1,19 @@
 # ccusage-compatible usage logs
 
-TideMux can write private Claude-compatible JSONL for an independently installed
-[official ccusage](https://github.com/ccusage/ccusage). Usage logging is **off by
-default**. Enable it in the existing gateway configuration, then restart:
+TideMux writes private Claude-compatible JSONL by default for an independently
+installed [official ccusage](https://github.com/ccusage/ccusage). This is the only
+usage-log format; there is no enable/disable or format switch. Existing gateway
+configurations need no changes. The default directory is `usage/` beside the
+ledger. To change the output directory, add this optional setting and restart:
 
 ```json
 "usage_log": {
-  "enabled": true,
   "directory": "/absolute/path/to/tidemux-usage"
 }
 ```
 
-`directory` is optional and defaults to `usage/` beside the ledger. Other optional
-settings are `poll_seconds` (default 1), `max_bytes` (default 16777216), and
+Other optional settings are `poll_seconds` (default 1),
+`max_bytes` (default 16777216), and
 `max_files` (default 8, across all sessions). The output directory must be
 dedicated to this ledger. Directories are 0700 and files are 0600; public files,
 symlinks, unrelated files and client-owned project directories are refused.
@@ -78,22 +79,21 @@ file. A record can exceed a small configured rotation size but is capped at
 64 KiB. Each scan reads at most 128 audit/statement identities and about 1 MiB
 of audit JSON (one oversized audit can cross that bound).
 
-First enablement or a fresh dedicated output directory automatically exports
+First startup or a fresh dedicated output directory automatically exports
 committed history. Retention limits still apply; increase retention before
 requesting a longer reporting window. To rebuild, stop the gateway and configure
-a fresh empty directory, keeping old reports separately. Pre-release logs from
-the former custom source format also require a fresh directory. Never reuse
+a fresh empty directory. Existing files in another schema are refused. Never reuse
 client log directories or mix restored ledgers and identity keys with old output.
 
 ## Status and failures
 
-Read `<ledger>.usage-status.json` for `enabled`, `last_success`, `error_code`,
+Read `<ledger>.usage-status.json` for `last_success`, `error_code`,
 `audit_rowid` and `statement_id`. Within a gateway run, failures preserve the last success and
 emit a safe `usage_export_failure` warning on stderr. Key, output and checkpoint
 failures remain isolated from request/SSE handling and budget/audit transactions.
-An unavailable identity key disables export/grouping; fix it and restart. A disk
+An unavailable identity key prevents export/grouping; fix it and restart. A disk
 failure that also breaks SQLite follows the existing audit/budget error contract.
 
-Set `usage_log.enabled` to false and restart to disable export. Existing ledger
-metadata, private key and output are preserved. For downgrade to a pre-feature
+`usage_log` only controls storage, polling and retention. The removed `enabled`
+property is rejected by configuration validation. For downgrade to a pre-feature
 binary, remove `usage_log` if its validator does not recognize that setting.

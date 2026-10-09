@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify optional usage JSONL with a packaged binary, fake keys and loopback mocks."""
+"""Verify default usage JSONL with a packaged binary, fake keys and loopback mocks."""
 import argparse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
@@ -229,6 +229,7 @@ def main():
             if not status.exists():
                 return False
             state = json.loads(status.read_text())
+            assert "enabled" not in state, "removed enablement state remains"
             with sqlite3.connect(ledger) as db:
                 audit_id = db.execute("SELECT COALESCE(MAX(rowid),0) FROM request_audit").fetchone()[0]
                 statement_id = db.execute("SELECT COALESCE(MAX(statement_id),0) FROM reconciliation_statements").fetchone()[0]
@@ -250,10 +251,15 @@ def main():
             assert removed.returncode != 0, "usage command remains installed"
             start()
             assert request("usd", SESSION)[0] == 200
+            wait_for(exported, "default export without usage_log configuration")
             stop()
-            assert not output.exists() and not Path(str(ledger) + ".usage-key").exists()
-            assert all(not row.get("session_group") for row in audits(ledger))
-            value["usage_log"] = {"enabled": True, "directory": str(output), "max_bytes": 4096, "max_files": 64}
+            assert output.is_dir() and Path(str(ledger) + ".usage-key").is_file()
+            assert all(row.get("session_group") for row in audits(ledger))
+            snapshot("default")
+            # Rebuild test-owned output from committed history, using the default
+            # directory and only retention/rotation overrides, without a switch.
+            shutil.rmtree(output)
+            value["usage_log"] = {"max_bytes": 4096, "max_files": 64}
             config.write_text(json.dumps(value))
             start()
             for provider, session in (("usd", SESSION), ("usd", SESSION), ("eur", SESSION), ("unknown", SESSION), ("partial", None), ("error", SESSION), ("native", SESSION)):
@@ -337,19 +343,22 @@ def main():
                 assert sentinel.encode() not in blob, "private data leaked"
             for path in [output, *output.rglob("*")]:
                 assert path.stat().st_mode & 0o077 == 0
-            value["usage_log"]["enabled"] = False
-            config.write_text(json.dumps(value))
             before = {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
-            start()
-            assert request("usd", SESSION)[0] == 200
-            stop()
+            for enabled in (False, True):
+                value["usage_log"]["enabled"] = enabled
+                config.write_text(json.dumps(value))
+                rejected = subprocess.run([str(binary), "serve", "--config", str(config)], env=env,
+                                          capture_output=True, text=True, timeout=10)
+                assert rejected.returncode != 0, "removed usage_log.enabled switch was accepted"
+            del value["usage_log"]["enabled"]
+            config.write_text(json.dumps(value))
             assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
-            assert not audits(ledger)[-1].get("session_group")
-            result = {"result": "passed", "fixture_requests": len(rows), "default_off": True,
+            assert len(audits(ledger)) == len(rows)
+            result = {"result": "passed", "fixture_requests": len(rows), "default_on": True,
                       "automatic_history": True, "session_restart": True, "unknown_and_multicurrency": True,
                       "supplier_revision_and_replay": True, "half_tail_recovery": True,
                       "output_and_identity_fault_isolation": True, "fault_recovery_catchup": True,
-                      "budget_and_audit_events": True, "disable_preserves_history": True, "privacy": True}
+                      "budget_and_audit_events": True, "removed_switch_rejected": True, "privacy": True}
             if evidence:
                 (evidence / "result.json").write_text(json.dumps(result, indent=2) + "\n")
             print(json.dumps(result))
