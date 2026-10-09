@@ -30,6 +30,8 @@ READ_MARKER = "REAL_CLIENT_READ_OK"
 DONE = "REAL_CLIENT_WORKFLOW_OK"
 CONTINUED = "REAL_CLIENT_CONTINUATION_OK"
 CAPACITY_READY = "REAL_CLIENT_CAPACITY_RECOVERED"
+GLM_DONE = "GLM_DUAL_OUTPUT_OK"
+GLM_FIXTURE = Path(__file__).resolve().parents[1] / "internal/adapter/testdata/glm_dual_output.json"
 
 
 def frames(content, stop="end_turn"):
@@ -83,7 +85,17 @@ class Upstream(BaseHTTPRequestHandler):
                 self.server.capacity_release.wait(30)
             self.respond(body, [{"type": "text", "text": CAPACITY_READY}])
             return
-        if scene == "malformed":
+        if scene == "glm_dual":
+            content = json.loads(GLM_FIXTURE.read_text())["content"]
+        elif scene == "glm_continue":
+            if GLM_DONE not in json.dumps(body["messages"]):
+                self.server.failures.append("GLM continuation omitted preserved text")
+            for message in body["messages"]:
+                if message.get("role") == "assistant" and isinstance(message.get("content"), list):
+                    if any(block is None or block.get("type") == "tool_result" for block in message["content"]):
+                        self.server.failures.append("GLM continuation has a hole or malformed result")
+            content = [{"type": "text", "text": "GLM_CONTINUATION_OK"}]
+        elif scene == "malformed":
             content = [{"type": "text", "text": PREFIX}, {"type": "tool_result", "tool_use_id": PRIVATE_ID,
                         "content": [{"type": "text", "text": PRIVATE}]}]
         elif scene == "continue":
@@ -189,6 +201,7 @@ class Observer(BaseHTTPRequestHandler):
             response = conn.getresponse()
             record["status"] = response.status
             record["retry_after"] = response.getheader("Retry-After")
+            record["request_id"] = response.getheader("X-TideMux-Request-ID")
             if response.status == 429 and hasattr(self.server, "capacity_release"):
                 self.server.capacity_release.set()
             self.send_response(response.status)
@@ -263,7 +276,10 @@ def configure(config):
 
 
 def check_client(binary, client, executable, evidence):
-    with running_gateway(binary, upstream_handler=Upstream, configure=configure) as gateway:
+    def compatible(config):
+        configure(config)
+        config["providers"]["anthropic"]["assistant_tool_result_policy"] = "strip_redundant"
+    with running_gateway(binary, upstream_handler=Upstream, configure=compatible) as gateway:
         root, upstream = gateway["root"], gateway["upstream"]
         upstream.requests, upstream.failures = [], []
         upstream.scene, upstream.workflow_step = "malformed", 0
@@ -291,9 +307,33 @@ def check_client(binary, client, executable, evidence):
                   "client_api": "anthropic" if client == "claude" else "openai",
                   "provider_api": "anthropic", "cli_mode": "noninteractive"}
         try:
+            upstream.scene = "glm_dual"
+            result["glm_dual"] = execute(binary, client, executable, path, gateway, "Reply to the local GLM dual-output fixture.")
+            result["glm_upstream_calls"] = upstream.posts
+            result["glm_wire"] = [{key: value for key, value in item.items() if key != "body"} for item in observer.requests]
+            if result["glm_dual"]["exit_code"] != 0 or result["glm_dual"]["timed_out"] or GLM_DONE not in result["glm_dual"]["stdout"]:
+                save(evidence, client, result, root)
+                raise RuntimeError(client + ": duplicate GLM tool result did not complete")
+            if client == "claude" and (upstream.posts != 1 or len(observer.requests) != 1):
+                raise RuntimeError("Claude retried the normalized GLM turn")
+            if any(item.get("status") != 200 or '"type":"tool_result"' in item.get("response", "") or "event: error" in item.get("response", "") for item in observer.requests):
+                raise RuntimeError(client + ": malformed GLM result escaped or stream failed")
+            before = upstream.posts
+            upstream.scene = "glm_continue"
+            result["glm_continuation"] = execute(binary, client, executable, path, gateway, "Continue the prior GLM fixture conversation.", continuing=True)
+            if result["glm_continuation"]["exit_code"] != 0 or result["glm_continuation"]["timed_out"] or "GLM_CONTINUATION_OK" not in result["glm_continuation"]["stdout"] or upstream.failures:
+                save(evidence, client, result, root)
+                raise RuntimeError(client + ": GLM continuation was poisoned")
+            if client == "claude" and upstream.posts != before+1:
+                raise RuntimeError("Claude retried the GLM continuation")
+            result["glm_single_claude_request"] = client == "claude" and before == 1 and upstream.posts == 2
+            result["glm_compatible_completion_and_continuation"] = True
+            observer.requests.clear()
+            before_malformed = upstream.posts
+            upstream.scene = "malformed"
             result["malformed"] = execute(binary, client, executable, path, gateway, "Reply to this local recovery check.")
             bad_requests = list(observer.requests)
-            result["malformed_upstream_calls"] = upstream.posts
+            result["malformed_upstream_calls"] = upstream.posts - before_malformed
             result["malformed_wire"] = [{key: value for key, value in request.items() if key != "body"} for request in bad_requests]
             result["tool_schemas"] = []
             for request in upstream.requests:
@@ -311,6 +351,9 @@ def check_client(binary, client, executable, evidence):
                               if line.startswith("data: ") and '"error"' in line]
                     if request["status"] != 200 or PREFIX not in wire or len(errors) != 1:
                         raise RuntimeError(client + ": legal prefix/terminal error missing from wire")
+                    payloads = [json.loads(line[6:]) for line in wire.splitlines() if line.startswith("data: ") and '"error"' in line]
+                    if not request.get("request_id") or payloads[0].get("request_id") != request["request_id"]:
+                        raise RuntimeError(client + ": terminal SSE error has no correlated request ID")
                 else:
                     errors = [json.loads(wire).get("error", {})]
                     if request["status"] != 502:
@@ -328,7 +371,7 @@ def check_client(binary, client, executable, evidence):
             result["client_visible_safe_prefix"] = PREFIX in visible
             result["client_visible_error_code"] = "invalid_upstream_tool_history" in visible
             result["client_visible_recovery_text"] = "Start a clean conversation" in visible
-            if upstream.posts != len(bad_requests):
+            if upstream.posts - before_malformed != len(bad_requests):
                 raise RuntimeError(client + ": a dispatched client request was replayed by the gateway")
             if PRIVATE in json.dumps(result) or PRIVATE_ID in json.dumps(result):
                 raise RuntimeError(client + ": malformed payload reached client output")
@@ -494,7 +537,8 @@ def main():
         results.append({key: result[key] for key in ("client", "version", "client_api", "provider_api", "cli_mode",
             "malformed_client_streaming_requests", "malformed_client_auxiliary_requests", "client_visible_safe_prefix",
             "client_visible_error_code", "client_visible_recovery_text", "real_client_read_edit_test", "clean_conversation_recovery",
-            "persistent_continuation", "gateway_no_replay_after_output", "privacy")})
+            "persistent_continuation", "gateway_no_replay_after_output", "privacy",
+            "glm_compatible_completion_and_continuation", "glm_single_claude_request")})
         print(json.dumps(results[-1]), flush=True)
         scopes = ("gateway", "provider") if args.capacity_scope == "both" else (args.capacity_scope,)
         for scope in scopes:

@@ -1,0 +1,41 @@
+{
+  "id": "msg_glm_fixture",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-haiku-4-5",
+  "content": [
+    {
+      "type": "server_tool_use",
+      "id": "fixture-web-reader",
+      "name": "webReader",
+      "input": {
+        "url": "https://example.invalid/"
+      }
+    },
+    {
+      "type": "text",
+      "text": "[Tool Result (webReader)]\nGLM_WEB_READER_OUTPUT"
+    },
+    {
+      "type": "tool_result",
+      "tool_use_id": "fixture-web-reader",
+      "content": [
+        {
+          "type": "text",
+          "text": "GLM_WEB_READER_OUTPUT"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "text": "GLM_DUAL_OUTPUT_OK"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 10,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  }
+}

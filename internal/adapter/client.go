@@ -30,6 +30,7 @@ type Client struct {
 	MaxOutputTokens                                 int64
 	Prices                                          map[string]Price
 	ErrorCodeMappings                               []ProviderErrorMapping
+	AssistantToolResultPolicy                       string
 	PromptCache                                     *PromptCache
 	// CacheNamespace separates local prefix history across provider connections.
 	// It is internal only; SessionID remains unchanged at the upstream boundary.
@@ -528,6 +529,17 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		return nil, TokenUsage{}, upstreamError(resp, c.ErrorCodeMappings...)
 	}
 	recordedBody := observedReader{Reader: resp.Body, observed: observed}
+	var toolResults *assistantToolResultFilter
+	if c.Protocol == "anthropic" && c.AssistantToolResultPolicy == StripRedundantToolResults {
+		toolResults = &assistantToolResultFilter{}
+		defer func() {
+			if toolResults.suppressed > 0 {
+				observability.LoggerOrDiscard(c.Logger).Warn("duplicate assistant tool results suppressed",
+					slog.Int("schema_version", observability.SchemaVersion), slog.String("event", "upstream_tool_result_suppressed"),
+					slog.String("requestId", id), slog.String("provider_ref", c.ProviderRef), slog.Int("suppressed_blocks", toolResults.suppressed))
+			}
+		}()
+	}
 	if sink != nil {
 		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_content_type"}
@@ -558,7 +570,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 				return &CallError{Status: 502, Code: "downstream_write_error"}
 			}
 			return nil
-		}, streamErrorContext{response: resp, mappings: c.ErrorCodeMappings})
+		}, streamErrorContext{response: resp, mappings: c.ErrorCodeMappings, toolResults: toolResults})
 		if err == nil && translator != nil {
 			data, err = translator.terminal(data)
 		}
@@ -580,6 +592,12 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 	}
 	if int64(len(data)) > limits.ResponseBytes {
 		return nil, TokenUsage{}, &CallError{Status: 502, Code: "upstream_response_too_large"}
+	}
+	if toolResults != nil {
+		data, err = toolResults.response(data)
+		if err != nil {
+			return nil, TokenUsage{}, err
+		}
 	}
 	usage, err := ValidateResponse(c.Protocol, data)
 	if err != nil {

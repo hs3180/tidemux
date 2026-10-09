@@ -123,10 +123,24 @@ also displays the code and recovery instructions in its error. Claude Code
 that no answer was produced because of an output-token limit; confirm the
 gateway code before changing model limits.
 
+For GLM providers that repeat built-in-tool output as both text and an illegal
+assistant `tool_result`, set `"assistant_tool_result_policy": "strip_redundant"`
+inside that provider's JSON configuration profile (`protocol: "anthropic"`).
+TideMux suppresses only pure-text results already present in the assistant's
+text output, preserves the output and token usage, and reindexes streamed
+blocks so normal continuation works. Native server-tool blocks remain intact;
+converted routes retain their usual protocol limits. Suppression produces an
+`upstream_tool_result_suppressed` warning with `requestId` and a block count,
+without tool payloads or IDs. The omitted setting, or `"reject"`, keeps strict
+validation. Unique content, media, errors and unknown shapes still fail closed.
+This setting does not repair previously saved malformed history.
+
 `invalid_upstream_tool_history` means the provider returned a generic
 `tool_result` in an assistant response. TideMux withheld that malformed block;
 the safe structure path, such as `content[1].type`, refers to its position and
-does not reveal its content. Start a new conversation. These examples create a
+does not reveal its content. A terminal SSE error includes `request_id`, matching
+`X-TideMux-Request-ID` and the runtime log's `requestId`. Start a new conversation.
+These examples create a
 new session; choose your configured model and provide the task again:
 
 ```sh

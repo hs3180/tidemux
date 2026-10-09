@@ -720,6 +720,9 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 				payload["type"] = "error"
 			}
 		}
+		if id != "" {
+			payload["request_id"] = id
+		}
 		encoded, _ := json.Marshal(payload)
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
 		w.streamComplete = true

@@ -116,7 +116,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		}
 		runtime.nextProviderGeneration++
 		providerGenerations[name] = runtime.nextProviderGeneration
-		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, UsageLog: usageLog, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, CacheNamespace: providerCacheNamespace(providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, UsageLog: usageLog, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, AssistantToolResultPolicy: provider.AssistantToolResultPolicy, PromptCache: cache, CacheNamespace: providerCacheNamespace(providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
 		if !legacySingleProvider {
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)

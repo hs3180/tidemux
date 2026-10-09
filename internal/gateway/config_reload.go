@@ -227,7 +227,7 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 			pool = previous.keyPools[name]
 		}
 		view.keyPools[name] = pool
-		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, UsageLog: root.usageLog, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, PromptCache: root.cache, CacheNamespace: providerCacheNamespace(view.providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, HTTP: client, Ledger: root.ledger, Gate: root.gate}
+		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, UsageLog: root.usageLog, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, AssistantToolResultPolicy: p.AssistantToolResultPolicy, PromptCache: root.cache, CacheNamespace: providerCacheNamespace(view.providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, HTTP: client, Ledger: root.ledger, Gate: root.gate}
 	}
 	if len(c.Providers) > 0 {
 		view.config.Providers = view.providers

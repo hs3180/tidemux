@@ -16,8 +16,9 @@ import (
 type StreamSink func(id string, frame []byte) error
 
 type streamErrorContext struct {
-	response *http.Response
-	mappings []ProviderErrorMapping
+	response    *http.Response
+	mappings    []ProviderErrorMapping
+	toolResults *assistantToolResultFilter
 }
 
 func readStream(protocol string, r io.Reader, emit func([]byte) error) (TokenUsage, []byte, error) {
@@ -108,6 +109,20 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 			}
 			if obj["error"] != nil || kind == "error" {
 				return streamError([]byte(data))
+			}
+			if protocol == "anthropic" && len(errorContexts) > 0 && errorContexts[0].toolResults != nil {
+				var skip bool
+				var err error
+				raw, skip, err = errorContexts[0].toolResults.frame(kind, obj, raw)
+				if err != nil {
+					return TokenUsage{}, nil, err
+				}
+				if skip {
+					continue
+				}
+				// The filter may have removed content from message_start.
+				encoded, _ := json.Marshal(obj)
+				data = string(encoded)
 			}
 			merge := func(raw json.RawMessage) error {
 				if len(raw) == 0 || string(raw) == "null" {
