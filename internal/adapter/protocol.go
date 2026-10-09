@@ -507,7 +507,7 @@ func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
 		Content json.RawMessage `json:"content"`
 		Usage   json.RawMessage `json:"usage"`
 	}
-	if json.Unmarshal(data, &r) != nil {
+	if LenientJSON(data, &r) != nil {
 		return TokenUsage{}, errors.New("invalid_upstream_response")
 	}
 	if protocol == "openai" {

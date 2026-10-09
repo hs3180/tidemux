@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,34 +11,6 @@ import (
 
 	"github.com/hs3180/tidemux/internal/observability"
 )
-
-func TestAssistantToolResultPolicyValidationAndRoundTrip(t *testing.T) {
-	c := routingTestConfig(filepath.Join(t.TempDir(), "audit.db"))
-	addRoutingProvider(&c, "glm", "https://example.invalid", "anthropic", "glm-5.3")
-	for _, policy := range []string{"", "reject", "strip_redundant", "strip", "arbitrary"} {
-		provider := c.Providers["glm"]
-		provider.AssistantToolResultPolicy = policy
-		c.Providers["glm"] = provider
-		err := c.Validate()
-		if (policy == "strip" || policy == "arbitrary") != (err != nil) {
-			t.Fatalf("policy=%s err=%v", policy, err)
-		}
-		if err == nil {
-			encoded, _ := json.Marshal(c)
-			var decoded Config
-			_ = json.Unmarshal(encoded, &decoded)
-			if decoded.Providers["glm"].AssistantToolResultPolicy != policy {
-				t.Fatal("policy lost during config write")
-			}
-		}
-	}
-	provider := c.Providers["glm"]
-	provider.AssistantToolResultPolicy, provider.Protocol = "strip_redundant", "openai"
-	c.Providers["glm"] = provider
-	if c.Validate() == nil {
-		t.Fatal("Anthropic compatibility policy applied to OpenAI upstream")
-	}
-}
 
 func TestMalformedToolStreamErrorCarriesAuditedRequestID(t *testing.T) {
 	for _, protocol := range []string{"anthropic", "openai"} {

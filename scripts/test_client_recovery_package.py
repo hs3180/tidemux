@@ -47,10 +47,10 @@ def frames(content, stop="end_turn"):
                 ("content_block_delta", {"type": "content_block_delta", "index": index,
                                          "delta": {"type": "text_delta", "text": block["text"]}}),
             ])
-        elif block["type"] == "tool_use":
+        elif block["type"] in ("tool_use", "server_tool_use"):
             events.extend([
                 ("content_block_start", {"type": "content_block_start", "index": index,
-                    "content_block": {"type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}}),
+                    "content_block": {"type": block["type"], "id": block["id"], "name": block["name"], "input": {}}}),
                 ("content_block_delta", {"type": "content_block_delta", "index": index,
                     "delta": {"type": "input_json_delta", "partial_json": json.dumps(block["input"])}}),
             ])
@@ -92,8 +92,15 @@ class Upstream(BaseHTTPRequestHandler):
                 self.server.failures.append("GLM continuation omitted preserved text")
             for message in body["messages"]:
                 if message.get("role") == "assistant" and isinstance(message.get("content"), list):
-                    if any(block is None or block.get("type") == "tool_result" for block in message["content"]):
-                        self.server.failures.append("GLM continuation has a hole or malformed result")
+                    server_tools = set()
+                    for block in message["content"]:
+                        if block is None:
+                            self.server.failures.append("GLM continuation has a missing content block")
+                            continue
+                        if block.get("type") == "server_tool_use":
+                            server_tools.add(block["id"])
+                        if block.get("type") == "tool_result" and block.get("tool_use_id") not in server_tools:
+                            self.server.failures.append("GLM continuation has an unpaired result")
             content = [{"type": "text", "text": "GLM_CONTINUATION_OK"}]
         elif scene == "malformed":
             content = [{"type": "text", "text": PREFIX}, {"type": "tool_result", "tool_use_id": PRIVATE_ID,
@@ -276,10 +283,7 @@ def configure(config):
 
 
 def check_client(binary, client, executable, evidence):
-    def compatible(config):
-        configure(config)
-        config["providers"]["anthropic"]["assistant_tool_result_policy"] = "strip_redundant"
-    with running_gateway(binary, upstream_handler=Upstream, configure=compatible) as gateway:
+    with running_gateway(binary, upstream_handler=Upstream, configure=configure) as gateway:
         root, upstream = gateway["root"], gateway["upstream"]
         upstream.requests, upstream.failures = [], []
         upstream.scene, upstream.workflow_step = "malformed", 0
@@ -315,9 +319,12 @@ def check_client(binary, client, executable, evidence):
                 save(evidence, client, result, root)
                 raise RuntimeError(client + ": duplicate GLM tool result did not complete")
             if client == "claude" and (upstream.posts != 1 or len(observer.requests) != 1):
-                raise RuntimeError("Claude retried the normalized GLM turn")
-            if any(item.get("status") != 200 or '"type":"tool_result"' in item.get("response", "") or "event: error" in item.get("response", "") for item in observer.requests):
-                raise RuntimeError(client + ": malformed GLM result escaped or stream failed")
+                raise RuntimeError("Claude retried the native GLM turn")
+            if any(item.get("status") != 200 or "event: error" in item.get("response", "") or
+                   (client != "claude" and '"tool_result"' in item.get("response", "")) for item in observer.requests):
+                raise RuntimeError(client + ": GLM stream failed or a server tool was exposed as a client tool")
+            if client == "claude" and not any('"tool_result"' in item.get("response", "") and '"server_tool_use"' in item.get("response", "") for item in observer.requests):
+                raise RuntimeError("native Claude route removed server-tool blocks")
             before = upstream.posts
             upstream.scene = "glm_continue"
             result["glm_continuation"] = execute(binary, client, executable, path, gateway, "Continue the prior GLM fixture conversation.", continuing=True)

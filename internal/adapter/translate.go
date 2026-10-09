@@ -1041,6 +1041,7 @@ type anthropicStreamTranslator struct {
 	created      int64
 	inputTokens  *int64
 	toolIndices  map[int]int
+	serverTools  map[int]struct{}
 	nextTool     int
 	omitted      []string
 	sawVisible   bool
@@ -1105,6 +1106,12 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 			return nil, errors.New("invalid_upstream_stream")
 		}
 		if block.ContentBlock.Type != "tool_use" {
+			if block.ContentBlock.Type == "server_tool_use" {
+				if t.serverTools == nil {
+					t.serverTools = make(map[int]struct{})
+				}
+				t.serverTools[block.Index] = struct{}{}
+			}
 			if block.ContentBlock.Type != "text" && block.ContentBlock.Type != "thinking" {
 				t.omitted = append(t.omitted, fmt.Sprintf("content[%d].type", block.Index))
 				t.sawDropped = true
@@ -1149,6 +1156,11 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 			}
 			return t.chunk(map[string]any{"reasoning_content": delta.Delta.Thinking}, nil, nil), nil
 		case "input_json_delta":
+			// A provider-hosted tool was already omitted at block_start. Its
+			// arguments are not a client tool call and have no OpenAI equivalent.
+			if _, serverTool := t.serverTools[delta.Index]; serverTool {
+				return nil, nil
+			}
 			index, ok := t.toolIndices[delta.Index]
 			if !ok {
 				return nil, errors.New("invalid_upstream_stream")

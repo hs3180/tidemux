@@ -202,7 +202,11 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 	if LenientJSON(raw, &blocks) != nil || len(blocks) == 0 {
 		return false
 	}
+	var history assistantToolHistory
 	for _, b := range blocks {
+		if protocol == "anthropic" && role == "assistant" && !history.accept(b) {
+			return false
+		}
 		// Native Anthropic content is an extensible tagged union. Keep
 		// validating known variants locally, but let the configured Anthropic
 		// endpoint validate future block types. The raw content remains opaque
@@ -238,10 +242,7 @@ func messageContent(protocol, role string, raw json.RawMessage) bool {
 				return false
 			}
 		case "tool_result":
-			if protocol != "anthropic" || role != "user" || b.ToolUseID == "" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-			if b.Content != nil && !messageContent(protocol, "tool_result", b.Content) {
+			if protocol != "anthropic" || role != "user" && role != "assistant" || !validToolResult(b) {
 				return false
 			}
 		case "thinking", "redacted_thinking":
@@ -290,6 +291,13 @@ func validCompactionContent(raw json.RawMessage) bool {
 	}
 	var content string
 	return json.Unmarshal(raw, &content) == nil
+}
+
+func validToolResult(b contentBlock) bool {
+	if !b.CacheControl.valid() || b.ToolUseID == "" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
+		return false
+	}
+	return b.Content == nil || messageContent("anthropic", "tool_result", b.Content)
 }
 
 func unsupportedContentBlockPath(protocol, role string, raw json.RawMessage, path string) string {

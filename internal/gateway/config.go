@@ -21,21 +21,20 @@ type KeychainReference struct {
 // Provider is a named, single-protocol upstream API profile. APIKey is
 // populated only after resolving its Keychain reference and is never serialized.
 type Provider struct {
-	Protocol                  string                         `json:"protocol"`
-	BaseURL                   string                         `json:"base_url"`
-	UpstreamKeychain          KeychainReference              `json:"upstream_keychain,omitempty,omitzero"` // legacy one-key form
-	UpstreamKeychains         []KeychainReference            `json:"upstream_keychains,omitempty"`
-	APIVersion                string                         `json:"anthropic_version,omitempty"`
-	SupportedModels           []string                       `json:"supported_models,omitempty"`
-	UpstreamID                string                         `json:"upstream_id,omitempty"`
-	ModelCapabilities         ModelCapabilities              `json:"model_capabilities,omitempty"`
-	ErrorCodeMappings         []adapter.ProviderErrorMapping `json:"error_code_mappings,omitempty"`
-	AssistantToolResultPolicy string                         `json:"assistant_tool_result_policy,omitempty"`
-	Prices                    map[string]adapter.Price       `json:"prices,omitempty"`
-	Budget                    *ledger.BudgetPolicy           `json:"budget,omitempty"`
-	MaxActiveSessions         int                            `json:"max_active_sessions,omitempty"`
-	APIKey                    string                         `json:"-"`
-	APIKeys                   []string                       `json:"-"`
+	Protocol          string                         `json:"protocol"`
+	BaseURL           string                         `json:"base_url"`
+	UpstreamKeychain  KeychainReference              `json:"upstream_keychain,omitempty,omitzero"` // legacy one-key form
+	UpstreamKeychains []KeychainReference            `json:"upstream_keychains,omitempty"`
+	APIVersion        string                         `json:"anthropic_version,omitempty"`
+	SupportedModels   []string                       `json:"supported_models,omitempty"`
+	UpstreamID        string                         `json:"upstream_id,omitempty"`
+	ModelCapabilities ModelCapabilities              `json:"model_capabilities,omitempty"`
+	ErrorCodeMappings []adapter.ProviderErrorMapping `json:"error_code_mappings,omitempty"`
+	Prices            map[string]adapter.Price       `json:"prices,omitempty"`
+	Budget            *ledger.BudgetPolicy           `json:"budget,omitempty"`
+	MaxActiveSessions int                            `json:"max_active_sessions,omitempty"`
+	APIKey            string                         `json:"-"`
+	APIKeys           []string                       `json:"-"`
 }
 
 type RoutingConfig struct {
@@ -271,12 +270,6 @@ func (c Config) Validate() error {
 			}
 			if err := adapter.ValidateProviderErrorMappings(provider.ErrorCodeMappings); err != nil {
 				return errors.New("providers." + name + ".error_code_mappings: " + err.Error())
-			}
-			if err := adapter.ValidateAssistantToolResultPolicy(provider.AssistantToolResultPolicy); err != nil {
-				return errors.New("providers." + name + ".assistant_tool_result_policy: " + err.Error())
-			}
-			if provider.AssistantToolResultPolicy == adapter.StripRedundantToolResults && protocol != "anthropic" {
-				return errors.New("providers." + name + ".assistant_tool_result_policy requires an anthropic upstream")
 			}
 			if err := validatePrices(provider.Prices); err != nil {
 				return err

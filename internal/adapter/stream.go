@@ -16,9 +16,8 @@ import (
 type StreamSink func(id string, frame []byte) error
 
 type streamErrorContext struct {
-	response    *http.Response
-	mappings    []ProviderErrorMapping
-	toolResults *assistantToolResultFilter
+	response *http.Response
+	mappings []ProviderErrorMapping
 }
 
 func readStream(protocol string, r io.Reader, emit func([]byte) error) (TokenUsage, []byte, error) {
@@ -42,6 +41,7 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 	total := int64(0)
 	started := false
 	finished := false
+	var history assistantToolHistory
 	fail := func(code string) (TokenUsage, []byte, error) {
 		return TokenUsage{}, nil, &CallError{Status: 502, Code: code}
 	}
@@ -110,20 +110,6 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 			if obj["error"] != nil || kind == "error" {
 				return streamError([]byte(data))
 			}
-			if protocol == "anthropic" && len(errorContexts) > 0 && errorContexts[0].toolResults != nil {
-				var skip bool
-				var err error
-				raw, skip, err = errorContexts[0].toolResults.frame(kind, obj, raw)
-				if err != nil {
-					return TokenUsage{}, nil, err
-				}
-				if skip {
-					continue
-				}
-				// The filter may have removed content from message_start.
-				encoded, _ := json.Marshal(obj)
-				data = string(encoded)
-			}
 			merge := func(raw json.RawMessage) error {
 				if len(raw) == 0 || string(raw) == "null" {
 					return nil
@@ -175,7 +161,7 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 					if json.Unmarshal(obj["message"], &msg) != nil || msg.Role != "assistant" || merge(msg.Usage) != nil {
 						return fail("invalid_upstream_stream")
 					}
-					if path := assistantToolResultPath(msg.Content, "message.content"); path != "" {
+					if path := history.contentPath(msg.Content, "message.content"); path != "" {
 						return TokenUsage{}, nil, &CallError{Status: 502, Code: "invalid_upstream_tool_history", Param: path}
 					}
 				case "content_block_start":
@@ -183,15 +169,13 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 						return fail("invalid_upstream_stream")
 					}
 					var block struct {
-						Index   *int `json:"index"`
-						Content struct {
-							Type string `json:"type"`
-						} `json:"content_block"`
+						Index   *int         `json:"index"`
+						Content contentBlock `json:"content_block"`
 					}
 					if json.Unmarshal([]byte(data), &block) != nil {
 						return fail("invalid_upstream_stream")
 					}
-					if block.Content.Type == "tool_result" {
+					if !history.accept(block.Content) {
 						path := "content_block.type"
 						if block.Index != nil && *block.Index >= 0 {
 							path = fmt.Sprintf("content[%d].type", *block.Index)

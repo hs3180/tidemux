@@ -123,20 +123,18 @@ also displays the code and recovery instructions in its error. Claude Code
 that no answer was produced because of an output-token limit; confirm the
 gateway code before changing model limits.
 
-For GLM providers that repeat built-in-tool output as both text and an illegal
-assistant `tool_result`, set `"assistant_tool_result_policy": "strip_redundant"`
-inside that provider's JSON configuration profile (`protocol: "anthropic"`).
-TideMux suppresses only pure-text results already present in the assistant's
-text output, preserves the output and token usage, and reindexes streamed
-blocks so normal continuation works. Native server-tool blocks remain intact;
-converted routes retain their usual protocol limits. Suppression produces an
-`upstream_tool_result_suppressed` warning with `requestId` and a block count,
-without tool payloads or IDs. The omitted setting, or `"reject"`, keeps strict
-validation. Unique content, media, errors and unknown shapes still fail closed.
-This setting does not repair previously saved malformed history.
+Some Anthropic-compatible providers, including GLM, return their built-in-tool
+output as a generic `tool_result` alongside text in an assistant message.
+TideMux preserves these blocks on native Anthropic routes when they reference
+a `server_tool_use` earlier in the same message. No provider setting is needed;
+TideMux does not remove duplicate results or reindex the stream. The same
+structure can be sent back in native conversation history. OpenAI conversion
+preserves the assistant's text; server-tool-specific blocks have no equivalent
+and follow the limits in [protocol support](protocols.md).
 
-`invalid_upstream_tool_history` means the provider returned a generic
-`tool_result` in an assistant response. TideMux withheld that malformed block;
+`invalid_upstream_tool_history` means the provider returned an assistant
+`tool_result` without a matching earlier `server_tool_use` in that message, or
+with invalid result content. TideMux withheld that malformed block;
 the safe structure path, such as `content[1].type`, refers to its position and
 does not reveal its content. A terminal SSE error includes `request_id`, matching
 `X-TideMux-Request-ID` and the runtime log's `requestId`. Start a new conversation.
@@ -156,7 +154,7 @@ replay a dispatched request after output has begun. Once the new conversation
 works, normal client continuation is available again.
 
 `invalid_tool_history` means the submitted saved conversation already contains
-an invalid assistant `tool_result`. Repeating that unchanged history is not a
+an unpaired or invalid assistant `tool_result`. Repeating that unchanged history is not a
 network retry and will fail again. To retain that history, first back it up and
 use the client's supported history export/editor/import tools to explicitly
 repair the identified block. TideMux does not modify saved conversations. A
