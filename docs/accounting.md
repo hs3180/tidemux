@@ -426,6 +426,14 @@ generated report and does not fabricate a missed balance snapshot.
 
 ## Legacy data
 
+For external session and token reports, see [ccusage-compatible logs](ccusage.md).
+The optional dedicated JSONL export is disabled by default, follows committed
+audits and matched-statement revisions, and preserves unknown values and each
+currency. Provider-reported tokens produce estimates when multiplied by prices;
+supplier charges remain separate metadata. External reports skip unknown required
+token counts and use their own model pricing. Export errors do not participate in
+request or budget transactions.
+
 The `ledger` command has been removed. Update scripts to use
 `tidemux billing --details --json` for request records and
 `tidemux doctor --diagnostics --json` for local rejections. Billing request

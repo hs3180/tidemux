@@ -39,7 +39,11 @@ Other events cover `gateway_start` (with `outcome: "error"`, a stable
 `error_code` and `startup_stage` if startup fails), `gateway_shutdown`,
 `unexpected_server_error`, `http_server_error`, `provider_unavailable`,
 `statement_sync_failure`, `request_audit_write_failure`, and
-`budget_settlement_failure`. Background statement-sync events contain counts
+`budget_settlement_failure`, and optional `usage_export_failure`. The latter
+contains only a bounded `failure_code` and is rate-limited to one warning per
+minute while export fails; it contains no accounting values, session groups,
+paths or raw errors. The existing request-summary fields remain unchanged.
+Background statement-sync events contain counts
 only; they never contain file paths, names, contents, or raw errors. The HTTP
 server adapter likewise discards its raw message because it may contain
 untrusted request data.
