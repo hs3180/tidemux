@@ -26,6 +26,7 @@ type Client struct {
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
 	ProviderRef                                     string
 	Logger                                          *slog.Logger
+	UsageLog                                        *observability.UsageLog
 	MaxOutputTokens                                 int64
 	Prices                                          map[string]Price
 	ErrorCodeMappings                               []ProviderErrorMapping
@@ -171,7 +172,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			observability.LoggerOrDiscard(c.Logger).Error("request handler panic recovered",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "request_panic"),
-				slog.String("request_id", id),
+				slog.String("requestId", id),
 			)
 		}
 		if a.EstimatedCost == nil && attempted {
@@ -198,7 +199,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			observability.LoggerOrDiscard(c.Logger).Error("request audit append failed",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "request_audit_write_failure"),
-				slog.String("request_id", id),
+				slog.String("requestId", id),
 				slog.String("failure_code", "audit_write_failed"),
 			)
 			response = nil
@@ -242,6 +243,11 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			Model: a.Model, Outcome: outcome, ErrorCode: errorCode,
 			HTTPStatus: status, LatencyMS: a.LatencyMS, QueueTimeMS: a.QueueMS,
 			UpstreamAttempted: attempted, RecordPersisted: auditPersisted,
+			TimestampMS: a.TimestampMS,
+			SessionID:   c.UsageLog.SessionID(clientProtocol, options.SessionID, options.RequestScopedSession),
+			InputTokens: a.InputTokens, OutputTokens: a.OutputTokens,
+			CacheReadTokens: a.CacheReadTokens, CacheWriteTokens: a.CacheWriteTokens,
+			UsageLog: c.UsageLog,
 		}.Log(c.Logger)
 	}()
 	admission, e := c.Gate.Acquire(ctx)

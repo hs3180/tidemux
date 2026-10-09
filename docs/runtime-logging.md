@@ -1,25 +1,38 @@
 # Runtime JSON logs
 
-`tidemux serve` writes machine-readable runtime events to stderr as JSON Lines:
-one JSON object per line. Human-facing command output, including the listening
+`tidemux serve` has one runtime log format: Claude-compatible JSON Lines, with
+TideMux diagnostic fields in the same record. Every event is one JSON object
+per line. Human-facing command output, including the listening
 address, remains on stdout. The runtime logger uses Go's standard-library
 `log/slog`; it does not send data over the network.
 
 ## Event schema
 
-Every event has `time`, `level`, `msg`, `schema_version` (currently `1`), and
+Every event has `timestamp`, `level`, `msg`, `schema_version` (currently `2`), and
 `event`. The event name and fields are stable within a schema version. Unknown
 or unsafe identifiers are omitted as empty strings rather than copied into the
 log.
 
+`timestamp` is UTC with exactly three millisecond digits. A terminal request
+uses its audit timestamp; local rejections use their diagnostic timestamp, and
+other events use their emission time. There are no legacy `time`, `request_id`
+or top-level `model` aliases. There is no format selector or compatibility mode.
+
 | Field | Meaning |
 | --- | --- |
-| `request_id` | TideMux request ID, also returned in `X-TideMux-Request-ID`; use it to join `request_terminal` with `request_audit.id` or `local_rejection` with `local_diagnostics.id`. |
+| `requestId` | TideMux request ID, also returned in `X-TideMux-Request-ID`; use it to join `request_terminal` with `request_audit.id` or `local_rejection` with `local_diagnostics.id`. |
+| `sessionId` | Optional pseudonymous client session group; never the raw session ID. |
+| `type` | `assistant` for terminal provider requests. Lifecycle and diagnostic events do not fabricate assistant usage. |
+| `message.id` | The terminal request ID, also present on local rejections. |
 | `protocol` | Client-facing protocol (`openai` or `anthropic`). |
 | `provider_protocol` | Configured upstream wire protocol. It is `unknown` when a local rejection occurs before a provider is selected. |
 | `endpoint` | Normalized route category: `chat_completions`, `messages`, `models`, or `unsupported`; never a URL. |
 | `provider_ref` | Selected TideMux provider reference, when known. |
-| `model` | Normalized model ID, when known. |
+| `message.model` | Normalized model ID, when known. |
+| `message.usage.input_tokens` | Known input tokens excluding cache reads and cache creation. |
+| `message.usage.output_tokens` | Known output tokens. |
+| `message.usage.cache_read_input_tokens` | Known cache-read tokens, when supplied. |
+| `message.usage.cache_creation_input_tokens` | Known cache-creation tokens, when supplied. |
 | `outcome` | `success`, `error`, `canceled`, or `rejected`. It describes the terminal request outcome independently of HTTP status. |
 | `error_code` | Bounded TideMux error code. Raw upstream error messages and response bodies are not recorded. |
 | `startup_stage` | Bounded initialization stage on a failed `gateway_start`; see the stage/code pairs below. |
@@ -32,14 +45,17 @@ log.
 Example terminal event:
 
 ```json
-{"time":"2026-09-29T12:00:00Z","level":"INFO","msg":"request summary","schema_version":1,"event":"request_terminal","request_id":"0123456789abcdef0123456789abcdef","protocol":"anthropic","provider_protocol":"openai","endpoint":"messages","provider_ref":"glm","model":"glm-5.3","outcome":"success","error_code":"","http_status":200,"latency_ms":815,"queue_time_ms":4,"upstream_attempted":true,"record_persisted":true}
+{"timestamp":"2026-09-29T12:00:00.000Z","level":"INFO","msg":"request summary","schema_version":2,"event":"request_terminal","requestId":"0123456789abcdef0123456789abcdef","protocol":"anthropic","provider_protocol":"openai","endpoint":"messages","provider_ref":"glm","outcome":"success","error_code":"","http_status":200,"latency_ms":815,"queue_time_ms":4,"upstream_attempted":true,"record_persisted":true,"type":"assistant","message":{"id":"0123456789abcdef0123456789abcdef","model":"glm-5.3","usage":{"input_tokens":120,"output_tokens":24,"cache_read_input_tokens":32,"cache_creation_input_tokens":8}}}
 ```
 
 Other events cover `gateway_start` (with `outcome: "error"`, a stable
 `error_code` and `startup_stage` if startup fails), `gateway_shutdown`,
 `unexpected_server_error`, `http_server_error`, `provider_unavailable`,
-`statement_sync_failure`, `request_audit_write_failure`, and
-`budget_settlement_failure`. Background statement-sync events contain counts
+`statement_sync_failure`, `request_audit_write_failure`,
+`budget_settlement_failure`, and `usage_log_write_failure`. The latter is
+rate-limited to one warning per minute while writing usage logs fails; it
+contains no paths or raw filesystem errors.
+Background statement-sync events contain counts
 only; they never contain file paths, names, contents, or raw errors. The HTTP
 server adapter likewise discards its raw message because it may contain
 untrusted request data.
@@ -89,23 +105,45 @@ production services or requires the user's real secrets.
 An operator-managed collector can read TideMux's stderr stream, parse each line
 as JSON, and forward the resulting documents to an Elasticsearch data stream
 or index. Configure parsing and mappings for the fields above, and use
-`request_id` to correlate events. It is not a unique event ID and must not be
+`requestId` to correlate events. It is not a unique event ID and must not be
 used alone for deduplication or as an Elasticsearch document ID. The short
 Filebeat example in the [README](../README.md#forward-runtime-logs-to-elasticsearch)
-shows the basic setup. Map
-`tidemux.startup_stage` as a keyword in collector templates if filtering
-by startup phase; the additional field preserves schema version 1 and existing
-request/lifecycle mappings. Existing indices can retain the field in `_source`
-without indexing it until their mappings are updated by the operator. Keep
+shows the basic setup. The [Filebeat reference](../examples/elasticsearch/filebeat.yml)
+and [Logstash reference](../examples/elasticsearch/tidemux.conf) decode the same
+records under `tidemux`, avoiding a conflict between Claude's `message` object
+and ECS's top-level text field. Both use `tidemux.timestamp` for `@timestamp`.
+Install the [index template](../examples/elasticsearch/index-template.json)
+before writing to a new index prefix; it maps request/session/model IDs as
+keywords, usage and latency as longs, outcomes as keywords, and persistence as
+a boolean. The four usage fields can be summed independently; input plus cache
+read plus cache creation reconstructs total input. Missing usage remains
+absent in Elasticsearch instead of becoming zero. Update collector field paths,
+dashboards and the index template when upgrading from schema 1. Keep
 collector credentials, TLS, buffering, retries, index lifecycle, access
 control, and retention in the collector and Elasticsearch deployment. TideMux
 does not include an Elasticsearch client, endpoint setting, or shipping
 credential.
 
-Request summaries intentionally omit credentials, authorization headers,
-session IDs, request and response bodies, raw upstream error bodies, full URLs
-and query strings, token counts, and pricing snapshots. Provider references
-and model IDs can still reveal configuration and usage patterns. Restrict
+Terminal request summaries include the [ccusage-compatible usage fields](ccusage.md):
+`timestamp`, `requestId`, optional pseudonymous `sessionId`, `type: "assistant"`
+and `message` with model and known token/cache counts. Unknown required token
+counts omit `message.usage`. Local rejections carry request/model metadata but
+no `type: "assistant"` or usage. Other diagnostics likewise have no usage.
+
+Each terminal request is encoded once. Stderr and
+`logs/projects/tidemux/<session-group>.jsonl` receive the exact same complete
+record, including provider, outcome, HTTP status and timing fields. Elasticsearch
+may collect either the runtime stderr stream (including lifecycle/rejection
+events) or these session files (terminal requests). Do not collect both copies
+into the same index. ccusage reads only `projects/`, so a stderr capture stored
+outside that directory cannot duplicate its usage. Configure local native file
+identity in Filebeat when collecting session files so short, one-request files
+do not wait for a fingerprint-size threshold.
+
+Request summaries omit credentials, authorization headers, raw session IDs,
+request and response bodies, raw upstream errors, full URLs, query strings and
+pricing snapshots. Provider/model IDs, session groups and token counts can
+reveal configuration and usage patterns. Restrict
 access to collected logs and set retention to match the operator's privacy
 requirements. The local SQLite ledger remains the source of truth for
 accounting; the JSON event stream is an operational summary.

@@ -43,7 +43,7 @@ class Upstream(BaseHTTPRequestHandler):
             self.wfile.write(start_frame('openai'));self.wfile.flush()
             # Close without terminal marker: real HTTP 200 stream failure.
         else:
-            self.reply({'id':'test','object':'chat.completion','model':'custom-model','choices':[{'index':0,'message':{'role':'assistant','content':'hi'},'finish_reason':'stop'}],'usage':{'prompt_tokens':3,'completion_tokens':2}})
+            self.reply({'id':'test','object':'chat.completion','model':'custom-model','choices':[{'index':0,'message':{'role':'assistant','content':'hi'},'finish_reason':'stop'}],'usage':{'prompt_tokens':7,'completion_tokens':2,'prompt_tokens_details':{'cached_tokens':3,'cache_write_tokens':1}}})
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--binary',required=True,type=Path);p.add_argument('--es-url',required=True);p.add_argument('--index-prefix',required=True);p.add_argument('--evidence',required=True,type=Path);p.add_argument('--docker',default='docker');a=p.parse_args()
@@ -86,10 +86,10 @@ def main():
         runtime+=failed.stderr;events+=failure_events;startup_failures.append((stage,code))
     if any(marker in runtime for marker in (GATEWAY_KEY,PROVIDER_KEY,REQUEST_SENTINEL,SESSION_SENTINEL)):raise RuntimeError('private data in runtime events')
     (root/'runtime.jsonl').write_text(runtime)
-    now=datetime.now(timezone.utc).isoformat().replace('+00:00','Z')
-    synthetic={'time':now,'level':'INFO','msg':'synthetic schema check','schema_version':1,'event':'schema_smoke','request_id':'shared-smoke-id','outcome':'success','latency_ms':7,'queue_time_ms':2,'http_status':200,'upstream_attempted':True,'record_persisted':False}
+    now=datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace('+00:00','Z')
+    synthetic={'timestamp':now,'level':'INFO','msg':'synthetic schema check','schema_version':2,'event':'schema_smoke','requestId':'shared-smoke-id','outcome':'success','latency_ms':7,'queue_time_ms':2,'http_status':200,'upstream_attempted':True,'record_persisted':False}
     second=dict(synthetic,event='second_smoke',outcome='error')
-    bad=dict(synthetic,event='mapping_smoke',request_id='mapping-smoke-id',latency_ms='not-a-number')
+    bad=dict(synthetic,event='mapping_smoke',requestId='mapping-smoke-id',latency_ms='not-a-number')
     collector=root/'collector';collector.mkdir();collector.chmod(0o777)
     for name in ('data','dlq','dlq-reader'):(collector/name).mkdir();(collector/name).chmod(0o777)
     (collector/'input.jsonl').write_text(runtime+'\n'.join(json.dumps(v) for v in (synthetic,second,bad))+'\nlegacy mixed non-JSON line\n')
@@ -131,10 +131,10 @@ def main():
         subprocess.run([a.docker,'rm',name],capture_output=True)
     sources=[hit['_source'] for hit in documents]
     def find(request_id,event,outcome,status):
-        matches=[s for s in sources if s.get('tidemux',{}).get('request_id')==request_id and s['tidemux'].get('event')==event and s['tidemux'].get('outcome')==outcome and s['tidemux'].get('http_status')==status]
+        matches=[s for s in sources if s.get('tidemux',{}).get('requestId')==request_id and s['tidemux'].get('event')==event and s['tidemux'].get('outcome')==outcome and s['tidemux'].get('http_status')==status]
         if len(matches)!=1:raise RuntimeError('missing/duplicate request outcome '+str((event,outcome,status)))
         # Query exact typed fields, rather than trusting only _source.
-        result=es('POST','/'+a.index_prefix+'*/_search',{'query':{'bool':{'filter':[{'term':{'tidemux.request_id':request_id}},{'term':{'event.action':event}},{'term':{'tidemux.outcome':outcome}},{'term':{'tidemux.http_status':status}}]}}})
+        result=es('POST','/'+a.index_prefix+'*/_search',{'query':{'bool':{'filter':[{'term':{'tidemux.requestId':request_id}},{'term':{'event.action':event}},{'term':{'tidemux.outcome':outcome}},{'term':{'tidemux.http_status':status}}]}}})
         if result['hits']['total']['value']!=1:raise RuntimeError('typed search failed')
     find(success,'request_terminal','success',200);find(stream,'request_terminal','error',200);find(rejected,'local_rejection','rejected',401)
     for event in ('gateway_start','gateway_shutdown'):
@@ -142,10 +142,10 @@ def main():
     for stage,code in startup_failures:
         result=es('POST','/'+a.index_prefix+'*/_search',{'query':{'bool':{'filter':[{'term':{'event.action':'gateway_start'}},{'term':{'tidemux.outcome':'error'}},{'term':{'tidemux.startup_stage':stage}},{'term':{'tidemux.error_code':code}}]}}})
         if result['hits']['total']['value']!=1:raise RuntimeError('early startup typed query failed')
-        source=result['hits']['hits'][0]['_source'];timestamp=event_time(source['@timestamp']);native=event_time(source['tidemux']['time'])
+        source=result['hits']['hits'][0]['_source'];timestamp=event_time(source['@timestamp']);native=event_time(source['tidemux']['timestamp'])
         if abs(timestamp.timestamp()-native.timestamp())>.002:raise RuntimeError('early startup timestamp mismatch')
-    shared=[s for s in sources if s.get('tidemux',{}).get('request_id')=='shared-smoke-id']
-    if len(shared)!=2:raise RuntimeError('request_id overwrote distinct events')
+    shared=[s for s in sources if s.get('tidemux',{}).get('requestId')=='shared-smoke-id']
+    if len(shared)!=2:raise RuntimeError('requestId overwrote distinct events')
     sample=next(s for s in shared if s['tidemux']['event']=='schema_smoke')
     if not isinstance(sample['tidemux']['latency_ms'],int) or sample['tidemux']['record_persisted'] is not False or sample['event']['action']!=sample['tidemux']['event']:raise RuntimeError('schema types or namespace wrong')
     timestamp=datetime.fromisoformat(sample['@timestamp'].replace('Z','+00:00'))
@@ -153,8 +153,14 @@ def main():
     mapping=es('GET','/'+a.index_prefix+'*/_mapping');(root/'mapping.json').write_text(json.dumps(mapping,indent=2))
     for entry in mapping.values():
         properties=entry['mappings']['properties']['tidemux']['properties']
-        for field,kind in [('request_id','keyword'),('event','keyword'),('startup_stage','keyword'),('latency_ms','long'),('http_status','long'),('record_persisted','boolean'),('time','date_nanos')]:
+        for field,kind in [('requestId','keyword'),('event','keyword'),('startup_stage','keyword'),('latency_ms','long'),('http_status','long'),('record_persisted','boolean'),('timestamp','date')]:
             if properties[field]['type']!=kind:raise RuntimeError('ES mapping type mismatch')
+    usage_query=es('POST','/'+a.index_prefix+'*/_search',{'size':0,'query':{'term':{'tidemux.requestId':success}},'aggs':{key:{'sum':{'field':'tidemux.message.usage.'+key}} for key in ('input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens')}})
+    for key,expected in [('input_tokens',3),('output_tokens',2),('cache_read_input_tokens',3),('cache_creation_input_tokens',1)]:
+        if usage_query['aggregations'][key]['value']!=expected:raise RuntimeError('indexed usage aggregation mismatch: '+key)
+    usage_model=es('POST','/'+a.index_prefix+'*/_search',{'query':{'bool':{'filter':[{'term':{'tidemux.requestId':success}},{'term':{'tidemux.message.model':'custom-model'}}]}}})
+    if usage_model['hits']['total']['value']!=1:raise RuntimeError('canonical model keyword query failed')
+    (root/'usage-aggregation.json').write_text(json.dumps(usage_query,indent=2))
     # A reader uses separate data and no DLQ writer, so it can run alongside main.
     reader=docker_run(dict(env,TIDEMUX_LOGSTASH_DATA='/work/dlq-reader'),name+'-dlq')
     settings=collector/'reader-settings';settings.mkdir();shutil.copy(ROOT/'examples/elasticsearch/read-dlq.yml',settings/'logstash.yml')
@@ -172,9 +178,9 @@ def main():
         logs=subprocess.run([a.docker,'logs',name+'-dlq'],capture_output=True,text=True);(root/'dlq-reader.log').write_text(logs.stdout+logs.stderr)
         subprocess.run([a.docker,'stop','-t','10',name+'-dlq'],capture_output=True,timeout=20);subprocess.run([a.docker,'rm',name+'-dlq'],capture_output=True)
     failures=[json.loads(line) for line in (collector/'mapping-failures.jsonl').read_text().splitlines()]
-    if not any(f.get('tidemux',{}).get('request_id')=='mapping-smoke-id' and 'latency_ms' in f['collector'].get('reason','') for f in failures):raise RuntimeError('mapping failure has no retained event/reason')
+    if not any(f.get('tidemux',{}).get('requestId')=='mapping-smoke-id' and 'latency_ms' in f['collector'].get('reason','') for f in failures):raise RuntimeError('mapping failure has no retained event/reason')
     (root/'documents.json').write_text(json.dumps(documents,indent=2))
-    result={'binary':str(a.binary),'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'startup_failure_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
+    result={'binary':str(a.binary),'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'canonical_usage_aggregations':True,'canonical_model_query':True,'startup_failure_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
     (root/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 
 if __name__=='__main__':main()
