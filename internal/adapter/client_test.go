@@ -542,7 +542,7 @@ func TestSuccessfulQueueAndAuditFailure(t *testing.T) {
 	if err == nil || err.Error() != "audit_failed_do_not_retry_blindly" {
 		t.Fatalf("audit failure %v", err)
 	}
-	if !strings.Contains(logs.String(), `"event":"request_audit_write_failure"`) || !strings.Contains(logs.String(), `"request_id":"`+requestID+`"`) || !strings.Contains(logs.String(), `"failure_code":"audit_write_failed"`) {
+	if !strings.Contains(logs.String(), `"event":"request_audit_write_failure"`) || !strings.Contains(logs.String(), `"requestId":"`+requestID+`"`) || !strings.Contains(logs.String(), `"failure_code":"audit_write_failed"`) {
 		t.Fatalf("missing safe audit-write diagnostic: %s", logs.String())
 	}
 	if strings.Contains(logs.String(), "private-key-marker") || strings.Contains(logs.String(), "private-request-marker") || strings.Contains(logs.String(), "database is closed") {

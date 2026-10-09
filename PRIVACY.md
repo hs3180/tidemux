@@ -13,10 +13,18 @@ API keys or full prompt/response content. Unknown usage and estimated cost
 remain null. See [accounting](docs/accounting.md) for ledger fields and
 [protocol support](docs/protocols.md) for request-routing boundaries.
 
+[Usage logging](docs/ccusage.md) runs by default and writes ccusage-compatible
+JSONL directly when a request ends. It records model and token/cache counts;
+unknown required counts are omitted. Session groups are keyed pseudonyms based
+on the gateway credential, stable across restarts with that credential. Runtime
+terminal events also include this usage envelope. Raw client session IDs,
+credentials and message content are absent. Groups and token counts can reveal
+activity patterns. Files are private; manage retention under your local log policy.
+
 Configuration and the ledger remain at the paths you choose. Diagnostic export
 and upload features are not implemented. If you manually share logs or ledger
 extracts, review them first; metadata may reveal usage patterns.
 
 Material changes will be recorded in [CHANGELOG](CHANGELOG.md).
 
-Updated: 2026-09-24.
+Updated: 2026-10-09.

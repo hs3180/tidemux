@@ -426,6 +426,13 @@ generated report and does not fabricate a missed balance snapshot.
 
 ## Legacy data
 
+For external session and token reports, see [ccusage-compatible logs](ccusage.md).
+Usage JSONL is written directly when provider requests end. External reports
+skip unknown required token counts and use their own model pricing. Logs do not
+reconstruct historical ledger records or include supplier statement revisions.
+The ledger preserves nullable accounting values, currencies and supplier charges;
+log-write failures do not change request or budget transactions.
+
 The `ledger` command has been removed. Update scripts to use
 `tidemux billing --details --json` for request records and
 `tidemux doctor --diagnostics --json` for local rejections. Billing request

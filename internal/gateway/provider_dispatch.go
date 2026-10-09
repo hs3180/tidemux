@@ -184,7 +184,7 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 			observability.LoggerOrDiscard(h.logger).Error("budget settlement unresolved",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "budget_settlement_failure"),
-				slog.String("request_id", id),
+				slog.String("requestId", id),
 				slog.String("provider_ref", route.provider),
 				slog.String("failure_code", "budget_settlement_unresolved"),
 			)

@@ -330,7 +330,7 @@ def queued_cancel_action(protocol):
                     raise RuntimeError("queued cancellation was not exactly one undispatched canceled attempt")
                 def canceled_terminal():
                     events = [json.loads(line) for line in (config.parent / "stderr").read_text().splitlines() if line]
-                    return [event for event in events if event.get("event") == "request_terminal" and event.get("request_id") == canceled_id]
+                    return [event for event in events if event.get("event") == "request_terminal" and event.get("requestId") == canceled_id]
                 wait_for(lambda: len(canceled_terminal()) == 1, "queued cancellation terminal event")
                 terminal = canceled_terminal()
                 if len(terminal) != 1 or terminal[0].get("upstream_attempted") is not False or terminal[0].get("record_persisted") is not True:
