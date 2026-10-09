@@ -15,7 +15,6 @@ type CallOptions struct {
 	SessionID            string
 	RequestScopedSession bool   // Gateway-generated admission ID; never reuse a prompt prefix.
 	ResponseModel        string // Optional downstream model name override for model:auto.
-	UsageSessionGroup    string // Opt-in gateway-generated pseudonym for the committed audit.
 }
 
 func (o CallOptions) Validate(protocol string) error {

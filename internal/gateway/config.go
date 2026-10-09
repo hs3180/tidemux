@@ -12,7 +12,6 @@ import (
 
 	"github.com/hs3180/tidemux/internal/adapter"
 	"github.com/hs3180/tidemux/internal/ledger"
-	"github.com/hs3180/tidemux/internal/usage"
 )
 
 type KeychainReference struct {
@@ -109,7 +108,6 @@ type SecretLookup interface {
 }
 
 type Config struct {
-	UsageLog                        *usage.Config            `json:"usage_log,omitempty"`
 	LegacyBudget                    *ledger.BudgetPolicy     `json:"budget,omitempty"` // accepted only by the provider-budget migration command
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
@@ -247,11 +245,6 @@ func decodeConfig(data []byte) (Config, error) {
 	return c, nil
 }
 func (c Config) Validate() error {
-	if c.UsageLog != nil {
-		if err := c.UsageLog.Validate(); err != nil {
-			return err
-		}
-	}
 	if c.LegacyBudget != nil {
 		return errors.New("global budget settings are no longer supported; assign them with `tidemux provider budget REF`")
 	}

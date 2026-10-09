@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -13,7 +14,6 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
-	"github.com/hs3180/tidemux/internal/usage"
 )
 
 // NewHandler resolves providers and initializes the gateway's shared resources.
@@ -93,14 +93,12 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		return nil, nil, startupFailure("ledger", errors.New("cannot open ledger"))
 	}
 	stopReconciliation := startStatementSync(c, l, logger)
-	usageSigner, _ := usage.OpenSigner(c.LedgerPath)
-	stopUsage := startUsageExport(c, usageSigner, logger)
+	usageLog := observability.NewUsageLog(filepath.Join(filepath.Dir(c.LedgerPath), "logs"), c.AccessToken)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
 	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second
 	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions, idleTTL)
 	if err != nil {
 		stopReconciliation()
-		stopUsage()
 		_ = l.Close()
 		return nil, nil, startupFailure("config", err)
 	}
@@ -110,7 +108,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	keyPools := make(map[string]*providerKeyPool, len(providers))
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
-	runtime := &handlerRuntime{usageSigner: usageSigner, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
+	runtime := &handlerRuntime{usageLog: usageLog, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
 	providerGenerations := make(map[string]uint64, len(providers))
 	for name, provider := range providers {
 		if _, unavailable := unavailableProviders[name]; unavailable {
@@ -118,7 +116,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		}
 		runtime.nextProviderGeneration++
 		providerGenerations[name] = runtime.nextProviderGeneration
-		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, CacheNamespace: providerCacheNamespace(providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
+		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, UsageLog: usageLog, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, CacheNamespace: providerCacheNamespace(providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
 		if !legacySingleProvider {
 			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
@@ -126,7 +124,6 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	}
 	h := &handler{config: c, ledger: l, handlerRuntime: runtime, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
 	return h, func() error {
-		stopUsage()
 		stopReconciliation()
 		h.closeProviderSessions()
 		sessions.Close()

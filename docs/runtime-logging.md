@@ -39,10 +39,9 @@ Other events cover `gateway_start` (with `outcome: "error"`, a stable
 `error_code` and `startup_stage` if startup fails), `gateway_shutdown`,
 `unexpected_server_error`, `http_server_error`, `provider_unavailable`,
 `statement_sync_failure`, `request_audit_write_failure`, and
-`budget_settlement_failure`, and `usage_export_failure`. The latter
-contains only a bounded `failure_code` and is rate-limited to one warning per
-minute while export fails; it contains no accounting values, session groups,
-paths or raw errors. The existing request-summary fields remain unchanged.
+`budget_settlement_failure`, and `usage_log_write_failure`. The latter is
+rate-limited to one warning per minute while writing usage logs fails; it
+contains no paths or raw filesystem errors.
 Background statement-sync events contain counts
 only; they never contain file paths, names, contents, or raw errors. The HTTP
 server adapter likewise discards its raw message because it may contain
@@ -106,10 +105,15 @@ control, and retention in the collector and Elasticsearch deployment. TideMux
 does not include an Elasticsearch client, endpoint setting, or shipping
 credential.
 
-Request summaries intentionally omit credentials, authorization headers,
-session IDs, request and response bodies, raw upstream error bodies, full URLs
-and query strings, token counts, and pricing snapshots. Provider references
-and model IDs can still reveal configuration and usage patterns. Restrict
+Terminal request summaries include the [ccusage-compatible usage envelope](ccusage.md):
+`timestamp`, `requestId`, optional pseudonymous `sessionId`, `type: "assistant"`
+and `message` with model and known token/cache counts. Unknown required token
+counts omit `message.usage`. Local rejections have no usage envelope.
+
+Request summaries omit credentials, authorization headers, raw session IDs,
+request and response bodies, raw upstream errors, full URLs, query strings and
+pricing snapshots. Provider/model IDs, session groups and token counts can
+reveal configuration and usage patterns. Restrict
 access to collected logs and set retention to match the operator's privacy
 requirements. The local SQLite ledger remains the source of truth for
 accounting; the JSON event stream is an operational summary.

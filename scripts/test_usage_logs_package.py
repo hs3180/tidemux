@@ -4,6 +4,8 @@ import argparse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 import json
+import hashlib
+import hmac
 import math
 import os
 from pathlib import Path
@@ -89,57 +91,35 @@ def audits(path):
         return [json.loads(row[0]) for row in db.execute("SELECT record_json FROM request_audit ORDER BY rowid")]
 
 
-def verify_records(output, rows, ledger):
-    latest = {}
-    identities = {}
-    for path in sorted(output.glob("projects/tidemux/*/usage-*.jsonl")):
+def verify_records(output, rows, groups, omitted=()):
+    expected = {row["id"]: row for row in rows if row["id"] not in omitted}
+    records = {}
+    for path in output.glob("projects/tidemux/*.jsonl"):
         for line in path.read_text().splitlines():
             record = json.loads(line)
-            metadata = record["tidemux"]
-            identity = metadata["request_id"]
-            assert metadata["schema_version"] == 2 and metadata["source"] == "tidemux"
-            assert record["type"] == "assistant" and "costUSD" not in record
-            group = metadata["session_group"]
-            assert path.parent.name == (group or "ungrouped")
-            assert record.get("sessionId") == group
-            assert record["requestId"] == record["message"]["id"] == "tidemux-" + metadata["source_id"] + "-" + identity
-            if identity in identities:
-                assert identities[identity] == record["requestId"], "replayed snapshot changed identity"
-            identities[identity] = record["requestId"]
-            previous = latest.get(identity)
-            if previous is None or metadata["revision"] > previous["tidemux"]["revision"]:
-                latest[identity] = record
-            elif metadata["revision"] == previous["tidemux"]["revision"]:
-                assert record == previous, "conflicting replay snapshot"
-    assert latest.keys() == {row["id"] for row in rows}, "export differs from committed ledger"
-    with sqlite3.connect(ledger) as db:
-        supplier = {row[0]: row[1:] for row in db.execute(
-            "SELECT request_id,MAX(statement_id),COUNT(*),SUM(amount) FROM reconciliation_statements WHERE status='matched' GROUP BY request_id")}
-    for row in rows:
-        record = latest[row["id"]]
-        metadata = record["tidemux"]
-        for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "estimated_cost"):
-            assert metadata[key] == row.get(key), (row["id"], key)
-        assert metadata["currency"] == (row.get("currency") or None)
-        assert metadata["provider"] == row.get("provider_ref", "")
-        assert metadata["protocol"] == row["protocol"] and metadata["outcome"] == row["status"]
-        assert metadata["usage_source"] == (row.get("usage_source") or "unknown")
-        revision, lines, amount = supplier.get(row["id"], (0, 0, None))
-        assert (metadata["revision"], metadata["supplier_statement_lines"], metadata["supplier_amount"]) == (revision, lines, amount)
-        timestamp = record["timestamp"]
-        assert len(timestamp) == 24 and timestamp.endswith("Z"), "incompatible millisecond precision"
-        parsed = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-        assert round(parsed.timestamp() * 1000) == row["timestamp_ms"]
-        assert record["message"]["model"] == row["model"]
-        usage = record["message"].get("usage")
-        if row.get("input_tokens") is None or row.get("output_tokens") is None:
-            assert usage is None, "unknown usage fabricated as zero"
-        else:
-            assert usage["output_tokens"] == row["output_tokens"]
-            assert usage["input_tokens"] + usage.get("cache_read_input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) == row["input_tokens"]
-            for exported, original in (("cache_read_input_tokens", "cache_read_tokens"), ("cache_creation_input_tokens", "cache_write_tokens")):
-                assert usage.get(exported) == row.get(original)
-    return list(latest.values())
+            identity = record["requestId"]
+            assert identity not in records, "terminal request logged twice"
+            assert record["message"]["id"] == identity and record["type"] == "assistant"
+            assert "costUSD" not in record and "tidemux" not in record
+            group = groups[identity]
+            assert path.stem == (group or "ungrouped") and record.get("sessionId", "") == group, (expected[identity].get("provider_ref"), path.stem, record.get("sessionId"), group)
+            row = expected[identity]
+            timestamp = record["timestamp"]
+            assert len(timestamp) == 24 and timestamp.endswith("Z")
+            parsed = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+            assert round(parsed.timestamp() * 1000) == row["timestamp_ms"]
+            assert record["message"]["model"] == row["model"]
+            usage = record["message"].get("usage")
+            if row.get("input_tokens") is None or row.get("output_tokens") is None:
+                assert usage is None, "unknown usage fabricated as zero"
+            else:
+                assert usage["output_tokens"] == row["output_tokens"]
+                assert usage["input_tokens"] + usage.get("cache_read_input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) == row["input_tokens"]
+                assert usage.get("cache_read_input_tokens") == row.get("cache_read_tokens")
+                assert usage.get("cache_creation_input_tokens") == row.get("cache_write_tokens")
+            records[identity] = record
+    assert records.keys() == expected.keys(), "logs differ from terminal requests"
+    return records
 
 
 def main():
@@ -167,23 +147,22 @@ def main():
         threading.Thread(target=upstream.serve_forever, daemon=True).start()
         port = free_port()
         url = f"http://127.0.0.1:{port}"
-        ledger, config, output = root / "ledger.db", root / "config.json", root / "usage"
-        price = lambda currency: {"currency": currency, "source": "fixture", "version": "fixture-v1",
-                                  "input_cache_miss_per_million": 1, "input_cache_hit_per_million": .1, "output_per_million": 2}
+        ledger, config, output = root / "ledger.db", root / "config.json", root / "logs"
         providers = {}
         for name in ("usd", "eur", "unknown", "partial", "error", "native"):
             providers[name] = {"protocol": "anthropic" if name == "native" else "openai",
                                "base_url": f"http://127.0.0.1:{upstream.server_port}/{name}/v1",
                                "upstream_keychain": {"service": "test.provider", "account": "local"}, "supported_models": [MODEL]}
             if name in ("usd", "eur"):
-                providers[name]["prices"] = {MODEL: price(name.upper())}
+                providers[name]["prices"] = {MODEL: {"currency": name.upper(), "source": "fixture", "version": "fixture-v1",
+                                                    "input_cache_miss_per_million": 1, "input_cache_hit_per_million": .1, "output_per_million": 2}}
             if name == "usd":
                 providers[name]["budget"] = {"currency": "USD", "five_hour_limit": 10, "weekly_limit": 10, "alert_threshold": .8, "mode": "hard"}
         value = {"listen_addr": f"127.0.0.1:{port}", "max_in_flight": 8, "ledger_path": str(ledger),
-                 "access_token_keychain": {"service": "test.gateway", "account": "local"},
-                 "providers": providers, "reconciliation": {"poll_interval_seconds": 1}}
+                 "access_token_keychain": {"service": "test.gateway", "account": "local"}, "providers": providers}
         config.write_text(json.dumps(value))
         process = None
+        groups = {}
 
         def start():
             nonlocal process
@@ -219,51 +198,39 @@ def main():
                 response = urlopen(req, timeout=20)
             except HTTPError as error:
                 response = error
+            identity = response.headers["X-TideMux-Request-ID"]
+            effective_session = body["metadata"]["user_id"] if session and protocol == "anthropic" else session
+            group = hmac.new(GATEWAY_KEY.encode(), ("tidemux-log-session\x00" + protocol + "\x00" + effective_session).encode(), hashlib.sha256).hexdigest() if effective_session else ""
+            groups[identity] = group
             if stream:
                 return response
             with response:
-                return response.status, response.read()
+                return response.status, response.read(), identity
 
-        def exported():
-            status = Path(str(ledger) + ".usage-status.json")
-            if not status.exists():
-                return False
-            state = json.loads(status.read_text())
-            assert "enabled" not in state, "removed enablement state remains"
-            with sqlite3.connect(ledger) as db:
-                audit_id = db.execute("SELECT COALESCE(MAX(rowid),0) FROM request_audit").fetchone()[0]
-                statement_id = db.execute("SELECT COALESCE(MAX(statement_id),0) FROM reconciliation_statements").fetchone()[0]
-            return not state.get("error_code") and state["audit_rowid"] == audit_id and state["statement_id"] == statement_id
-
-        def snapshot(name):
+        def snapshot(name, omitted=()):
             rows = audits(ledger)
-            records = verify_records(output, rows, ledger)
+            records = verify_records(output, rows, groups, omitted)
+            # Ledger schema stays unchanged; session identities exist only in logs.
+            assert all("session_group" not in row and "usage_source" not in row for row in rows)
+            assert not Path(str(ledger) + ".usage-key").exists()
+            assert not Path(str(ledger) + ".usage-status.json").exists()
+            assert not (output / "checkpoint.json").exists()
             if evidence:
                 shutil.copytree(output / "projects", evidence / name / "projects")
-                (evidence / (name + "-ledger-oracle.json")).write_text(json.dumps(rows, indent=2) + "\n")
-                (evidence / (name + "-records.json")).write_text(json.dumps(records, indent=2) + "\n")
-            return rows
+                oracle = [dict(row, session_group=groups[row["id"]]) for row in rows if row["id"] not in omitted]
+                (evidence / (name + "-ledger-oracle.json")).write_text(json.dumps(oracle, indent=2) + "\n")
+                (evidence / (name + "-records.json")).write_text(json.dumps(list(records.values()), indent=2) + "\n")
+            return rows, records
 
         try:
-            help_result = subprocess.run([str(binary)], env=env, capture_output=True, text=True, timeout=10)
-            assert help_result.returncode != 0 and "usage       " not in help_result.stderr
-            removed = subprocess.run([str(binary), "usage", "status", "--config", str(config)], env=env, capture_output=True, text=True, timeout=10)
-            assert removed.returncode != 0, "usage command remains installed"
             start()
+            assert not output.exists(), "logs were populated from a ledger scan"
             assert request("usd", SESSION)[0] == 200
-            wait_for(exported, "default export without usage_log configuration")
             stop()
-            assert output.is_dir() and Path(str(ledger) + ".usage-key").is_file()
-            assert all(row.get("session_group") for row in audits(ledger))
             snapshot("default")
-            # Rebuild test-owned output from committed history, using the default
-            # directory and only retention/rotation overrides, without a switch.
-            shutil.rmtree(output)
-            value["usage_log"] = {"max_bytes": 4096, "max_files": 64}
-            config.write_text(json.dumps(value))
             start()
             for provider, session in (("usd", SESSION), ("usd", SESSION), ("eur", SESSION), ("unknown", SESSION), ("partial", None), ("error", SESSION), ("native", SESSION)):
-                code, _ = request(provider, session)
+                code, _, _ = request(provider, session)
                 assert code == (502 if provider == "error" else 200), (provider, code)
             assert request("usd", SESSION, "anthropic")[0] == 200
             stream = request("unknown", SESSION, stream=True)
@@ -272,93 +239,61 @@ def main():
             stream.close()
             upstream.release.set()
             wait_for(lambda: any(row["status"] == "canceled" for row in audits(ledger)), "canceled audit")
-            wait_for(exported, "committed export")
             stop()
-            rows = snapshot("initial")
-            groups = {row.get("session_group") for row in rows if row.get("session_group")}
-            assert len(groups) == 2
+            snapshot("initial")
             start()
             assert request("usd", SESSION)[0] == 200
-            wait_for(exported, "restart export")
-            stop()
-            rows = audits(ledger)
-            assert {row.get("session_group") for row in rows if row.get("session_group")} == groups
-            target = next(row for row in rows if row.get("currency") == "EUR")
-            statements = root / "statements"
-            statements.mkdir(exist_ok=True)
-            (statements / "fixture.csv").write_text(f"period_start,period_end,currency,amount,request_id,model\n{target['timestamp_ms']-1},{target['timestamp_ms']+1},EUR,2.25,{target['id']},{MODEL}\n")
-            start()
-            def matched():
-                with sqlite3.connect(ledger) as db:
-                    return db.execute("SELECT COUNT(*) FROM reconciliation_statements WHERE status='matched'").fetchone()[0] == 1
-            wait_for(matched, "supplier snapshot")
-            wait_for(exported, "supplier export")
-            stop()
-            snapshot("supplier")
-            checkpoint = output / "checkpoint.json"
-            state = json.loads(checkpoint.read_text())
-            latest = max(output.glob("projects/tidemux/*/usage-*.jsonl"), key=lambda path: path.name)
-            with latest.open("ab") as file:
-                file.write(b'{"crash_half":')
-            checkpoint.unlink()
-            start()
-            wait_for(lambda: checkpoint.exists() and exported(), "checkpoint replay and tail recovery")
-            stop()
-            snapshot("replay")
-            checkpoint.write_text(json.dumps(state))
-            checkpoint.chmod(0o600)
-            blocked = root / "blocked"
-            blocked.write_text("output fault")
-            value["usage_log"]["directory"] = str(blocked)
+            value["providers"]["reloaded"] = dict(providers["usd"])
             config.write_text(json.dumps(value))
+            def reloaded():
+                with urlopen(Request(url + "/v1/models", headers={"Authorization": "Bearer " + GATEWAY_KEY}), timeout=2) as response:
+                    return any(model["id"] == "reloaded/" + MODEL for model in json.loads(response.read())["data"])
+            wait_for(reloaded, "reloaded provider")
+            assert request("reloaded", SESSION)[0] == 200
+            stop()
+            snapshot("restart")
+            saved = root / "saved-logs"
+            output.rename(saved)
+            output.write_text("blocked output")
             start()
             assert request("usd", SESSION)[0] == 200
-            status = Path(str(ledger) + ".usage-status.json")
-            wait_for(lambda: json.loads(status.read_text()).get("error_code") == "usage_output_unavailable", "output failure isolation")
+            omitted = {audits(ledger)[-1]["id"]}
             stop()
-            value["usage_log"]["directory"] = str(output)
-            config.write_text(json.dumps(value))
-            key = Path(str(ledger) + ".usage-key")
-            saved = key.read_bytes()
-            key.write_bytes(b"invalid-key")
+            assert '"event":"usage_log_write_failure"' in (root / "stderr").read_text()
+            output.unlink()
+            saved.rename(output)
+            before = {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
             start()
+            time.sleep(.2)
+            assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}, "restart replayed ledger rows"
             assert request("usd", SESSION)[0] == 200
-            wait_for(lambda: json.loads(status.read_text()).get("error_code") == "usage_identity_unavailable", "identity failure isolation")
             stop()
-            assert not audits(ledger)[-1].get("session_group")
-            key.write_bytes(saved)
-            start()
-            wait_for(exported, "fault recovery catchup")
-            stop()
-            rows = snapshot("recovered")
-            assert len(rows) == 13
+            rows, records = snapshot("final", omitted)
+            assert len(rows) == 14 and len(records) == 13
             with sqlite3.connect(ledger) as db:
                 settled = db.execute("SELECT audit_id,charged_amount FROM budget_charges WHERE provider_scope='usd' AND state='settled'").fetchall()
-                assert len(settled) == sum(row.get("provider_ref") == "usd" for row in rows)
                 by_id = {row["id"]: row for row in rows}
+                assert len(settled) == sum(row.get("provider_ref") == "usd" for row in rows)
                 assert all(math.isclose(amount, by_id[identity]["estimated_cost"], rel_tol=1e-12) for identity, amount in settled)
                 assert db.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == sum(len(row["events"]) for row in rows)
+            terminals = {event["request_id"]: event for event in (json.loads(line) for line in (root / "stderr").read_text().splitlines()) if event.get("event") == "request_terminal"}
+            assert terminals.keys() == by_id.keys()
+            for identity, record in records.items():
+                for key, val in record.items():
+                    assert terminals[identity][key] == val, "stderr and file log formats differ"
             blob = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file()) + (root / "stdout").read_bytes() + (root / "stderr").read_bytes()
             for sentinel in (PROMPT, SESSION, RESPONSE, GATEWAY_KEY, PROVIDER_KEY, "private-error-sentinel"):
                 assert sentinel.encode() not in blob, "private data leaked"
             for path in [output, *output.rglob("*")]:
                 assert path.stat().st_mode & 0o077 == 0
-            before = {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
-            for enabled in (False, True):
-                value["usage_log"]["enabled"] = enabled
-                config.write_text(json.dumps(value))
-                rejected = subprocess.run([str(binary), "serve", "--config", str(config)], env=env,
-                                          capture_output=True, text=True, timeout=10)
-                assert rejected.returncode != 0, "removed usage_log.enabled switch was accepted"
-            del value["usage_log"]["enabled"]
+            value["usage_log"] = {"directory": str(output)}
             config.write_text(json.dumps(value))
-            assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
-            assert len(audits(ledger)) == len(rows)
-            result = {"result": "passed", "fixture_requests": len(rows), "default_on": True,
-                      "automatic_history": True, "session_restart": True, "unknown_and_multicurrency": True,
-                      "supplier_revision_and_replay": True, "half_tail_recovery": True,
-                      "output_and_identity_fault_isolation": True, "fault_recovery_catchup": True,
-                      "budget_and_audit_events": True, "removed_switch_rejected": True, "privacy": True}
+            rejected = subprocess.run([str(binary), "serve", "--config", str(config)], env=env, capture_output=True, text=True, timeout=10)
+            assert rejected.returncode != 0, "removed export configuration accepted"
+            result = {"result": "passed", "fixture_requests": len(rows), "logged_requests": len(records),
+                      "default_direct_logging": True, "stderr_same_envelope": True, "no_export_state_or_config": True,
+                      "session_restart_and_reload": True, "unknown_and_cache_counts": True,
+                      "log_fault_request_and_budget_isolation": True, "no_history_replay": True, "privacy": True}
             if evidence:
                 (evidence / "result.json").write_text(json.dumps(result, indent=2) + "\n")
             print(json.dumps(result))

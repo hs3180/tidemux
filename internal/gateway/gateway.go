@@ -22,7 +22,6 @@ import (
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
-	"github.com/hs3180/tidemux/internal/usage"
 )
 
 type handler struct {
@@ -48,7 +47,7 @@ type handler struct {
 
 // Mutable admission/accounting state is shared by all immutable config views.
 type handlerRuntime struct {
-	usageSigner            *usage.Signer
+	usageLog               *observability.UsageLog
 	providerSessionMu      sync.Mutex
 	providerSessions       map[string]*limiter.SessionLimiter
 	budgetMu               sync.RWMutex
@@ -503,9 +502,6 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		return
 	}
 	persistentSession := strings.TrimSpace(options.SessionID) != ""
-	if persistentSession {
-		options.UsageSessionGroup = h.usageSigner.SessionGroup(protocol, h.config.AccessToken, options.SessionID)
-	}
 	sessionKey := h.sharedSessionKey(qualifiedModel, protocol, options.SessionID)
 	if qualifiedModel == "auto" {
 		sessionKey = h.callerSessionKey("auto", protocol, options.SessionID)

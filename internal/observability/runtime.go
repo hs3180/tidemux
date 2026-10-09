@@ -49,6 +49,13 @@ type RequestSummary struct {
 	QueueTimeMS       int64
 	UpstreamAttempted bool
 	RecordPersisted   bool
+	TimestampMS       int64
+	SessionID         string // Pseudonymous log identity, never a raw client ID.
+	InputTokens       *int64
+	OutputTokens      *int64
+	CacheReadTokens   *int64
+	CacheWriteTokens  *int64
+	UsageLog          *UsageLog
 }
 
 func (e RequestSummary) Log(logger *slog.Logger) {
@@ -81,7 +88,7 @@ func (e RequestSummary) Log(logger *slog.Logger) {
 	if e.QueueTimeMS < 0 {
 		e.QueueTimeMS = 0
 	}
-	logger.LogAttrs(context.Background(), level, "request summary",
+	attrs := []slog.Attr{
 		slog.Int("schema_version", SchemaVersion),
 		slog.String("event", event),
 		slog.String("request_id", requestID),
@@ -97,7 +104,20 @@ func (e RequestSummary) Log(logger *slog.Logger) {
 		slog.Int64("queue_time_ms", e.QueueTimeMS),
 		slog.Bool("upstream_attempted", e.UpstreamAttempted),
 		slog.Bool("record_persisted", e.RecordPersisted),
-	)
+	}
+	if event == "request_terminal" {
+		record := e.usageRecord(requestID, model)
+		attrs = append(attrs, slog.String("timestamp", record.Timestamp),
+			slog.String("requestId", record.RequestID), slog.String("type", record.Type),
+			slog.Any("message", record.Message))
+		if record.SessionID != "" {
+			attrs = append(attrs, slog.String("sessionId", record.SessionID))
+		}
+		if e.UsageLog != nil {
+			e.UsageLog.append(record, logger)
+		}
+	}
+	logger.LogAttrs(context.Background(), level, "request summary", attrs...)
 }
 
 func normalizedEnum(value string, allowed ...string) string {

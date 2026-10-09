@@ -13,14 +13,13 @@ API keys or full prompt/response content. Unknown usage and estimated cost
 remain null. See [accounting](docs/accounting.md) for ledger fields and
 [protocol support](docs/protocols.md) for request-routing boundaries.
 
-[Usage logging](docs/ccusage.md) runs by default. It persists keyed pseudonymous
-session groups in request audits and writes a
-separate private usage stream with provider/model, outcomes, nullable token and
-cost values, currency and provenance. A private profile key makes groups stable
-across restarts; raw client session IDs and caller credentials are not stored
-there. Groups and accounting metadata can reveal activity patterns. Usage logs
-use one ccusage-compatible format with bounded file retention. Operational
-runtime logs exclude session and usage fields.
+[Usage logging](docs/ccusage.md) runs by default and writes ccusage-compatible
+JSONL directly when a request ends. It records model and token/cache counts;
+unknown required counts are omitted. Session groups are keyed pseudonyms based
+on the gateway credential, stable across restarts with that credential. Runtime
+terminal events also include this usage envelope. Raw client session IDs,
+credentials and message content are absent. Groups and token counts can reveal
+activity patterns. Files are private; manage retention under your local log policy.
 
 Configuration and the ledger remain at the paths you choose. Diagnostic export
 and upload features are not implemented. If you manually share logs or ledger
