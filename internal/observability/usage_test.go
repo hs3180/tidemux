@@ -15,7 +15,8 @@ func TestUsageEnvelopeCacheCountsUnknownsAndTimestamp(t *testing.T) {
 	input, output, read, write := int64(7), int64(2), int64(3), int64(1)
 	for _, name := range []string{"known", "missing-input", "missing-output", "invalid-cache"} {
 		t.Run(name, func(t *testing.T) {
-			summary := RequestSummary{TimestampMS: 1791549600047, InputTokens: &input, OutputTokens: &output, CacheReadTokens: &read, CacheWriteTokens: &write}
+			summary := RequestSummary{Event: "request_terminal", RequestID: strings.Repeat("a", 32), Model: "model",
+				TimestampMS: 1791549600047, InputTokens: &input, OutputTokens: &output, CacheReadTokens: &read, CacheWriteTokens: &write}
 			switch name {
 			case "missing-input":
 				summary.InputTokens = nil
@@ -25,9 +26,15 @@ func TestUsageEnvelopeCacheCountsUnknownsAndTimestamp(t *testing.T) {
 				tooMany := int64(8)
 				summary.CacheReadTokens = &tooMany
 			}
-			record := summary.usageRecord(strings.Repeat("a", 32), "model")
-			data, err := json.Marshal(record)
-			if err != nil {
+			var output bytes.Buffer
+			summary.Log(JSONLogger(&output))
+			data := output.Bytes()
+			var record struct {
+				Timestamp string       `json:"timestamp"`
+				RequestID string       `json:"requestId"`
+				Message   usageMessage `json:"message"`
+			}
+			if err := json.Unmarshal(data, &record); err != nil {
 				t.Fatal(err)
 			}
 			if record.Timestamp != "2026-10-09T12:40:00.047Z" || record.Message.ID != record.RequestID {
@@ -56,13 +63,16 @@ func TestUsageLogsConcurrentRequestsAndRestartSessionIdentity(t *testing.T) {
 		t.Fatal("session grouping leaked or lost its scope")
 	}
 	var wg sync.WaitGroup
+	var output bytes.Buffer
+	logger := JSONLogger(&output).With("component", "gateway")
 	for i := 0; i < 32; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			in, out := int64(3), int64(2)
 			RequestSummary{Event: "request_terminal", RequestID: fmt.Sprintf("%032x", i+1), Model: "model",
-				TimestampMS: 1791549600047, SessionID: group, InputTokens: &in, OutputTokens: &out, UsageLog: l}.Log(nil)
+				Outcome: "success", ProviderRef: "provider", HTTPStatus: 200, LatencyMS: 4,
+				TimestampMS: 1791549600047, SessionID: group, InputTokens: &in, OutputTokens: &out, UsageLog: l}.Log(logger)
 		}(i)
 	}
 	wg.Wait()
@@ -71,14 +81,25 @@ func TestUsageLogsConcurrentRequestsAndRestartSessionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !bytes.Equal(data, output.Bytes()) {
+		t.Fatal("stderr and session files did not receive the exact same complete records")
+	}
 	lines := bytes.Split(bytes.TrimSpace(data), []byte{'\n'})
 	seen := map[string]bool{}
 	for _, line := range lines {
-		var r usageRecord
+		var r struct {
+			SessionID   string       `json:"sessionId"`
+			RequestID   string       `json:"requestId"`
+			Message     usageMessage `json:"message"`
+			ProviderRef string       `json:"provider_ref"`
+			HTTPStatus  int          `json:"http_status"`
+			Component   string       `json:"component"`
+		}
 		if err := json.Unmarshal(line, &r); err != nil {
 			t.Fatalf("concurrent writes interleaved: %v", err)
 		}
-		if r.SessionID != group || seen[r.RequestID] || r.Message.Usage == nil {
+		if r.SessionID != group || seen[r.RequestID] || r.Message.Usage == nil ||
+			r.ProviderRef != "provider" || r.HTTPStatus != 200 || r.Component != "gateway" {
 			t.Fatalf("invalid or duplicate request: %s", line)
 		}
 		seen[r.RequestID] = true

@@ -201,12 +201,12 @@ def main():
                     raise RuntimeError("usage or fees did not belong to the actual provider/model: " + json.dumps({key: row.get(key) for key in ("upstream", "model", "input_tokens", "output_tokens", "cache_read_tokens", "currency", "estimated_cost", "cost_source")}))
             terminal_events = [json.loads(line) for line in stderr_path.read_text().splitlines() if line.strip()]
             terminal_events = [event for event in terminal_events if event.get("event") == "request_terminal"]
-            by_request = {event.get("request_id"): event for event in terminal_events}
+            by_request = {event.get("requestId"): event for event in terminal_events}
             if len(terminal_events) != len(rows) or len(by_request) != len(rows):
                 raise RuntimeError("auto runtime terminal events did not match the unique audits")
             for row in rows:
                 event = by_request.get(row["id"])
-                if not event or (event.get("provider_ref"), event.get("model")) != (row["provider_ref"], row["model"]) or event.get("record_persisted") is not True or event.get("upstream_attempted") is not True:
+                if not event or (event.get("provider_ref"), event.get("message", {}).get("model")) != (row["provider_ref"], row["model"]) or event.get("record_persisted") is not True or event.get("upstream_attempted") is not True:
                     raise RuntimeError("auto runtime logs did not belong to the actual audited route")
             logs = stdout_path.read_text() + stderr_path.read_text() + json.dumps(rows)
             if any(value in logs for value in (GATEWAY_KEY, PROVIDER_KEY, SESSION, BODY, "private_auto_provider_error")):

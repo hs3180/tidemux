@@ -4,10 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,7 +13,7 @@ import (
 	"time"
 )
 
-// UsageLog appends terminal request logs in Claude's project/session layout.
+// UsageLog appends complete runtime records in Claude's project/session layout.
 // It has no ledger reader, background worker or persisted export state.
 type UsageLog struct {
 	directory   string
@@ -39,14 +37,6 @@ func (l *UsageLog) SessionID(protocol, session string, requestScoped bool) strin
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-type usageRecord struct {
-	Timestamp string       `json:"timestamp"`
-	RequestID string       `json:"requestId"`
-	SessionID string       `json:"sessionId,omitempty"`
-	Type      string       `json:"type"`
-	Message   usageMessage `json:"message"`
-}
-
 type usageMessage struct {
 	ID    string      `json:"id"`
 	Model string      `json:"model"`
@@ -60,12 +50,15 @@ type usageCount struct {
 	CacheWrite *int64 `json:"cache_creation_input_tokens,omitempty"`
 }
 
-func (e RequestSummary) usageRecord(requestID, model string) usageRecord {
-	r := usageRecord{Timestamp: time.UnixMilli(e.TimestampMS).UTC().Format("2006-01-02T15:04:05.000Z"),
-		RequestID: requestID, Type: "assistant", Message: usageMessage{ID: requestID, Model: model}}
-	if group, err := hex.DecodeString(e.SessionID); err == nil && len(group) == sha256.Size {
-		r.SessionID = e.SessionID
+func normalizedSessionID(value string) string {
+	if group, err := hex.DecodeString(value); err == nil && len(group) == sha256.Size {
+		return value
 	}
+	return ""
+}
+
+func (e RequestSummary) usageMessage(requestID, model string) usageMessage {
+	r := usageMessage{ID: requestID, Model: model}
 	// Unknown input/output are omitted, so ccusage cannot count them as zero.
 	if e.InputTokens == nil || e.OutputTokens == nil || *e.InputTokens < 0 || *e.OutputTokens < 0 {
 		return r
@@ -80,25 +73,22 @@ func (e RequestSummary) usageRecord(requestID, model string) usageRecord {
 			input -= *count
 		}
 	}
-	r.Message.Usage = &usageCount{Input: input, Output: *e.OutputTokens, CacheRead: e.CacheReadTokens, CacheWrite: e.CacheWriteTokens}
+	r.Usage = &usageCount{Input: input, Output: *e.OutputTokens, CacheRead: e.CacheReadTokens, CacheWrite: e.CacheWriteTokens}
 	return r
 }
 
-func (l *UsageLog) append(record usageRecord, logger *slog.Logger) {
+func (l *UsageLog) append(session string, data []byte) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := l.write(record); err != nil && (l.lastWarning.IsZero() || time.Since(l.lastWarning) >= time.Minute) {
+	if err := l.write(session, data); err != nil && (l.lastWarning.IsZero() || time.Since(l.lastWarning) >= time.Minute) {
 		// Do not forward filesystem errors, which may contain private paths.
-		LoggerOrDiscard(logger).Warn("usage log write failed", slog.Int("schema_version", SchemaVersion),
-			slog.String("event", "usage_log_write_failure"))
 		l.lastWarning = time.Now()
+		return true
 	}
+	return false
 }
 
-func (l *UsageLog) write(record usageRecord) error {
-	if record.RequestID == "" || record.Message.Model == "" {
-		return nil
-	}
+func (l *UsageLog) write(session string, data []byte) error {
 	for _, dir := range []string{l.directory, filepath.Join(l.directory, "projects"), filepath.Join(l.directory, "projects", "tidemux")} {
 		if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
@@ -108,7 +98,6 @@ func (l *UsageLog) write(record usageRecord) error {
 			return errors.New("usage log directory is not private")
 		}
 	}
-	session := record.SessionID
 	if session == "" {
 		session = "ungrouped"
 	}
@@ -133,11 +122,6 @@ func (l *UsageLog) write(record usageRecord) error {
 			}
 		}
 	}
-	data, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
 	n, err := f.Write(data)
 	if err == nil && n != len(data) {
 		return io.ErrShortWrite

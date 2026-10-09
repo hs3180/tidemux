@@ -1,7 +1,7 @@
 # Read usage logs with ccusage
 
-TideMux records usage directly when a provider request ends. Logging runs by
-default and uses one Claude-compatible JSONL format. No TideMux configuration
+TideMux records each completed provider request in its only runtime log format:
+Claude-compatible JSONL with complete TideMux diagnostics. No TideMux configuration
 changes are needed. Logs are written to `logs/` beside the configured ledger:
 
 ```text
@@ -21,7 +21,11 @@ logs using ccusage 20.0.26. Avoid combining these records with client logs of th
 same requests, which would count their usage twice.
 
 Each record has `timestamp`, `requestId`, optional `sessionId`, and
-`message.id`, `message.model`, `message.usage`. Timestamps are UTC with three
+`message.id`, `message.model`, plus `message.usage` when known. The same record
+also includes level, event, protocol, provider, outcome, error classification,
+HTTP status, latency, queue time and persistence fields. Stderr and the session
+file receive the exact same encoded JSON line; there is no usage-only format.
+Timestamps are UTC with three
 millisecond digits. Input tokens exclude cache reads/writes, which use Claude's
 `cache_read_input_tokens` and `cache_creation_input_tokens` fields. Missing input
 or output counts omit `message.usage`, so ccusage skips unknown usage. Unknown
@@ -42,5 +46,5 @@ your normal local log policy.
 
 ccusage uses its own model prices. Its cost report does not represent TideMux's
 configured prices, original currencies or supplier charges. Use `tidemux billing`
-for accounting. Runtime `request_terminal` events also contain the same usage
-envelope alongside their existing diagnostic fields.
+for accounting. Elasticsearch collectors can use the same records and indexed
+token fields; see the [runtime log schema and collection configuration](runtime-logging.md).

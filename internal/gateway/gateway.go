@@ -789,7 +789,8 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 	case "/v1/models", "/models":
 		endpoint = "models"
 	}
-	diagnosticErr := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: time.Now().UnixMilli(), Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code})
+	timestamp := time.Now().UnixMilli()
+	diagnosticErr := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: timestamp, Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code})
 	if diagnosticErr != nil {
 		status = http.StatusInternalServerError
 		code = "local_diagnostic_failed"
@@ -804,6 +805,7 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		Outcome: "rejected", ErrorCode: code, HTTPStatus: status,
 		LatencyMS: latency, QueueTimeMS: 0, UpstreamAttempted: false,
 		RecordPersisted: diagnosticErr == nil,
+		TimestampMS:     timestamp,
 	}.Log(h.logger)
 	if diagnosticErr != nil {
 		h.fail(w, status, code, protocol)

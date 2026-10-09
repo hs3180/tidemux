@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRequestSummaryHasStableSchemaAndDropsUnsafeIdentifiers(t *testing.T) {
@@ -24,10 +25,10 @@ func TestRequestSummaryHasStableSchemaAndDropsUnsafeIdentifiers(t *testing.T) {
 	}
 	want := map[string]any{
 		"schema_version": float64(SchemaVersion), "event": "request_terminal",
-		"request_id": strings.Repeat("a", 32), "protocol": "openai",
+		"requestId": strings.Repeat("a", 32), "protocol": "openai",
 		"provider_protocol": "anthropic", "endpoint": "chat_completions",
-		"provider_ref": "provider-main", "model": "model/with:scope",
-		"outcome": "error", "error_code": "upstream_error", "http_status": float64(502),
+		"provider_ref": "provider-main",
+		"outcome":      "error", "error_code": "upstream_error", "http_status": float64(502),
 		"latency_ms": float64(13), "queue_time_ms": float64(2),
 		"upstream_attempted": true, "record_persisted": true, "level": slog.LevelWarn.String(),
 	}
@@ -35,6 +36,20 @@ func TestRequestSummaryHasStableSchemaAndDropsUnsafeIdentifiers(t *testing.T) {
 		if event[key] != expected {
 			t.Errorf("%s=%#v want %#v", key, event[key], expected)
 		}
+	}
+	message := event["message"].(map[string]any)
+	if message["model"] != "model/with:scope" || message["id"] != event["requestId"] {
+		t.Fatalf("missing canonical model/request identity: %s", output.String())
+	}
+	for _, legacy := range []string{"time", "request_id", "model"} {
+		if _, exists := event[legacy]; exists {
+			t.Fatalf("legacy field %q is still emitted", legacy)
+		}
+	}
+	if value, ok := event["timestamp"].(string); !ok || len(value) != 24 {
+		t.Fatalf("invalid canonical timestamp: %s", output.String())
+	} else if _, err := time.Parse("2006-01-02T15:04:05.000Z", value); err != nil {
+		t.Fatal(err)
 	}
 
 	output.Reset()
@@ -50,10 +65,13 @@ func TestRequestSummaryHasStableSchemaAndDropsUnsafeIdentifiers(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &event); err != nil {
 		t.Fatalf("invalid normalized JSON log line: %v: %s", err, output.String())
 	}
-	for _, key := range []string{"request_id", "provider_ref", "model", "error_code", "http_status", "latency_ms", "queue_time_ms", "outcome"} {
+	for _, key := range []string{"requestId", "provider_ref", "message", "error_code", "http_status", "latency_ms", "queue_time_ms", "outcome"} {
 		if _, ok := event[key]; !ok {
 			t.Errorf("stable field %q missing from event: %s", key, output.String())
 		}
+	}
+	if _, exists := event["message"].(map[string]any)["usage"]; exists {
+		t.Fatal("local rejection fabricated usage")
 	}
 }
 

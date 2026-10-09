@@ -91,16 +91,27 @@ def audits(path):
         return [json.loads(row[0]) for row in db.execute("SELECT record_json FROM request_audit ORDER BY rowid")]
 
 
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        assert key not in value, "duplicate JSON field: " + key
+        value[key] = item
+    return value
+
+
 def verify_records(output, rows, groups, omitted=()):
     expected = {row["id"]: row for row in rows if row["id"] not in omitted}
     records = {}
     for path in output.glob("projects/tidemux/*.jsonl"):
         for line in path.read_text().splitlines():
-            record = json.loads(line)
+            record = json.loads(line, object_pairs_hook=unique_object)
             identity = record["requestId"]
             assert identity not in records, "terminal request logged twice"
             assert record["message"]["id"] == identity and record["type"] == "assistant"
             assert "costUSD" not in record and "tidemux" not in record
+            assert record["schema_version"] == 2 and record["event"] == "request_terminal"
+            assert all(key in record for key in ("level", "msg", "protocol", "provider_protocol", "provider_ref", "endpoint", "outcome", "error_code", "http_status", "latency_ms", "queue_time_ms", "upstream_attempted", "record_persisted"))
+            assert not any(key in record for key in ("time", "request_id", "model"))
             group = groups[identity]
             assert path.stem == (group or "ungrouped") and record.get("sessionId", "") == group, (expected[identity].get("provider_ref"), path.stem, record.get("sessionId"), group)
             row = expected[identity]
@@ -276,11 +287,12 @@ def main():
                 assert len(settled) == sum(row.get("provider_ref") == "usd" for row in rows)
                 assert all(math.isclose(amount, by_id[identity]["estimated_cost"], rel_tol=1e-12) for identity, amount in settled)
                 assert db.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == sum(len(row["events"]) for row in rows)
-            terminals = {event["request_id"]: event for event in (json.loads(line) for line in (root / "stderr").read_text().splitlines()) if event.get("event") == "request_terminal"}
+            terminals = {event["requestId"]: event for event in (json.loads(line, object_pairs_hook=unique_object) for line in (root / "stderr").read_text().splitlines()) if event.get("event") == "request_terminal"}
             assert terminals.keys() == by_id.keys()
             for identity, record in records.items():
-                for key, val in record.items():
-                    assert terminals[identity][key] == val, "stderr and file log formats differ"
+                assert terminals[identity] == record, "stderr and file log records differ"
+                assert record["provider_ref"] == by_id[identity]["provider_ref"]
+                assert record["latency_ms"] == by_id[identity]["latency_ms"]
             blob = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file()) + (root / "stdout").read_bytes() + (root / "stderr").read_bytes()
             for sentinel in (PROMPT, SESSION, RESPONSE, GATEWAY_KEY, PROVIDER_KEY, "private-error-sentinel"):
                 assert sentinel.encode() not in blob, "private data leaked"
@@ -291,7 +303,7 @@ def main():
             rejected = subprocess.run([str(binary), "serve", "--config", str(config)], env=env, capture_output=True, text=True, timeout=10)
             assert rejected.returncode != 0, "removed export configuration accepted"
             result = {"result": "passed", "fixture_requests": len(rows), "logged_requests": len(records),
-                      "default_direct_logging": True, "stderr_same_envelope": True, "no_export_state_or_config": True,
+                      "default_direct_logging": True, "single_log_format": True, "stderr_file_identical": True, "no_export_state_or_config": True,
                       "session_restart_and_reload": True, "unknown_and_cache_counts": True,
                       "log_fault_request_and_budget_isolation": True, "no_history_replay": True, "privacy": True}
             if evidence:

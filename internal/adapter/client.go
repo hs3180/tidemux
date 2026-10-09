@@ -172,7 +172,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			observability.LoggerOrDiscard(c.Logger).Error("request handler panic recovered",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "request_panic"),
-				slog.String("request_id", id),
+				slog.String("requestId", id),
 			)
 		}
 		if a.EstimatedCost == nil && attempted {
@@ -199,7 +199,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			observability.LoggerOrDiscard(c.Logger).Error("request audit append failed",
 				slog.Int("schema_version", observability.SchemaVersion),
 				slog.String("event", "request_audit_write_failure"),
-				slog.String("request_id", id),
+				slog.String("requestId", id),
 				slog.String("failure_code", "audit_write_failed"),
 			)
 			response = nil

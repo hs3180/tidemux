@@ -1,0 +1,35 @@
+# Filebeat 9.4.2. Install index-template.json before the first event.
+# Collect either runtime stderr or session files, not both copies of requests.
+filebeat.inputs:
+  - type: filestream
+    id: tidemux-runtime
+    paths: ["${TIDEMUX_LOG_PATH}"]
+    # Local filesystem identity also harvests a single short session record.
+    file_identity.native: ~
+    parsers:
+      - ndjson:
+          target: tidemux
+          add_error_key: true
+
+processors:
+  - timestamp:
+      field: tidemux.timestamp
+      layouts: ["2006-01-02T15:04:05.000Z"]
+      test: ["2026-10-09T12:40:00.047Z"]
+  - copy_fields:
+      fields:
+        - from: tidemux.event
+          to: event.action
+        - from: tidemux.level
+          to: log.level
+      fail_on_error: true
+      ignore_missing: false
+
+output.elasticsearch:
+  hosts: ["${TIDEMUX_ES_URL}"]
+  api_key: "${TIDEMUX_ES_API_KEY}"
+  ssl.certificate_authorities: ["${TIDEMUX_ES_CA}"]
+  index: "${TIDEMUX_ES_INDEX_PREFIX}-%{+yyyy.MM.dd}"
+
+setup.ilm.enabled: false
+setup.template.enabled: false

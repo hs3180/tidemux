@@ -36,10 +36,10 @@ def check_events(stdout, stderr, root):
             continue
         event = json.loads(line)
         if not isinstance(event, dict) or not all(
-                field in event for field in ("time", "level", "msg", "schema_version", "event")):
+                field in event for field in ("timestamp", "level", "msg", "schema_version", "event")):
             raise RuntimeError("serve stderr does not match the JSON event envelope")
-        if event["schema_version"] != 1:
-            raise RuntimeError("existing runtime schema changed")
+        if event["schema_version"] != 2:
+            raise RuntimeError("unexpected runtime schema version")
         events.append(event)
     return events
 
