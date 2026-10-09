@@ -101,8 +101,10 @@ func TestProviderBudgetCommandMovesFormerGlobalPolicy(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	config := providerBudgetTestConfig(path)
 	former := ledger.BudgetPolicy{Currency: "USD", FiveHourLimit: 5, WeeklyLimit: 80, AlertThreshold: .7, Mode: "soft"}
-	config.LegacyBudget = &former
-	data, err := json.Marshal(config)
+	data, err := json.Marshal(struct {
+		gateway.Config
+		Budget ledger.BudgetPolicy `json:"budget"`
+	}{Config: config, Budget: former})
 	if err != nil {
 		t.Fatal(err)
 	}

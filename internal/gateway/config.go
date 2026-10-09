@@ -108,7 +108,6 @@ type SecretLookup interface {
 }
 
 type Config struct {
-	LegacyBudget                    *ledger.BudgetPolicy     `json:"budget,omitempty"` // accepted only by the provider-budget migration command
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
 	ReportWebhook                   ReportWebhookConfig      `json:"report_webhook,omitempty"`
@@ -148,9 +147,6 @@ func decodeValidatedConfig(data []byte) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if c.LegacyBudget != nil && *c.LegacyBudget != (ledger.BudgetPolicy{}) {
-		return Config{}, errors.New("global budget settings are no longer supported; assign them with `tidemux provider budget REF`")
-	}
 	return c, c.Validate()
 }
 
@@ -161,24 +157,19 @@ func LoadConfigForProviderBudgetMigration(path string) (Config, ledger.BudgetPol
 	if err != nil {
 		return Config{}, ledger.BudgetPolicy{}, false, errors.New("cannot read config")
 	}
-	c, err := decodeConfig(data)
+	c, legacyBudget, err := decodeConfigForProviderBudgetMigration(data)
 	legacyFieldsReplaced := false
 	if err != nil {
 		clean, replaced, stripErr := stripLegacyBudgetSection(data)
 		if stripErr != nil || !replaced {
 			return Config{}, ledger.BudgetPolicy{}, false, err
 		}
-		c, err = decodeConfig(clean)
+		c, legacyBudget, err = decodeConfigForProviderBudgetMigration(clean)
 		if err != nil {
 			return Config{}, ledger.BudgetPolicy{}, false, err
 		}
 		legacyFieldsReplaced = true
 	}
-	var legacyBudget ledger.BudgetPolicy
-	if c.LegacyBudget != nil {
-		legacyBudget = *c.LegacyBudget
-	}
-	c.LegacyBudget = nil
 	if err := c.Validate(); err != nil {
 		return Config{}, ledger.BudgetPolicy{}, false, err
 	}
@@ -219,22 +210,40 @@ func stripLegacyBudgetSection(data []byte) ([]byte, bool, error) {
 }
 
 func decodeConfig(data []byte) (Config, error) {
-	var c Config
-	if adapter.StrictJSON(data, &c) != nil {
+	c, legacyBudget, err := decodeConfigForProviderBudgetMigration(data)
+	if err != nil {
+		return Config{}, err
+	}
+	if legacyBudget != (ledger.BudgetPolicy{}) {
+		return Config{}, errors.New("global budget settings are no longer supported; assign them with `tidemux provider budget REF`")
+	}
+	return c, nil
+}
+
+func decodeConfigForProviderBudgetMigration(data []byte) (Config, ledger.BudgetPolicy, error) {
+	// The former global budget is decode-only migration input. It cannot be
+	// carried into runtime configuration or serialized by config-writing commands.
+	var decoded struct {
+		Config
+		Budget *ledger.BudgetPolicy `json:"budget"`
+	}
+	if adapter.StrictJSON(data, &decoded) != nil {
 		var raw struct {
 			Budget map[string]json.RawMessage `json:"budget"`
 		}
 		if json.Unmarshal(data, &raw) == nil {
 			for _, key := range []string{"daily_limit", "monthly_limit", "timezone", "reserve_amount"} {
 				if _, ok := raw.Budget[key]; ok {
-					return c, errors.New("legacy budget fields cannot be migrated automatically; configure a new policy with `tidemux provider budget REF`")
+					return Config{}, ledger.BudgetPolicy{}, errors.New("legacy budget fields cannot be migrated automatically; configure a new policy with `tidemux provider budget REF`")
 				}
 			}
 		}
-		return c, errors.New("invalid config: use the current example; plaintext and legacy fields are not supported")
+		return Config{}, ledger.BudgetPolicy{}, errors.New("invalid config: use the current example; plaintext and legacy fields are not supported")
 	}
-	if c.LegacyBudget != nil && *c.LegacyBudget == (ledger.BudgetPolicy{}) {
-		c.LegacyBudget = nil
+	c := decoded.Config
+	var legacyBudget ledger.BudgetPolicy
+	if decoded.Budget != nil {
+		legacyBudget = *decoded.Budget
 	}
 	for name, provider := range c.Providers {
 		if provider.Budget != nil && *provider.Budget == (ledger.BudgetPolicy{}) {
@@ -242,12 +251,9 @@ func decodeConfig(data []byte) (Config, error) {
 			c.Providers[name] = provider
 		}
 	}
-	return c, nil
+	return c, legacyBudget, nil
 }
 func (c Config) Validate() error {
-	if c.LegacyBudget != nil {
-		return errors.New("global budget settings are no longer supported; assign them with `tidemux provider budget REF`")
-	}
 	if err := c.Reconciliation.Validate(); err != nil {
 		return err
 	}

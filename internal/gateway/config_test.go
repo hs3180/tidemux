@@ -381,8 +381,10 @@ func TestGlobalBudgetMustBeAssignedToAProvider(t *testing.T) {
 		UpstreamID: "test", UpstreamKeychain: KeychainReference{Service: "test.provider", Account: "default"},
 		Prices: map[string]adapter.Price{"custom-model": testPrice()},
 	}
-	c.LegacyBudget = &policy
-	data, err := json.Marshal(c)
+	data, err := json.Marshal(struct {
+		Config
+		Budget ledger.BudgetPolicy `json:"budget"`
+	}{Config: c, Budget: policy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,8 +398,22 @@ func TestGlobalBudgetMustBeAssignedToAProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if moved != policy || replaced || loaded.LegacyBudget != nil {
+	if moved != policy || replaced {
 		t.Fatalf("migration result config=%+v budget=%+v replaced=%t", loaded, moved, replaced)
+	}
+	clean, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(clean, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := raw["budget"]; exists {
+		t.Fatal("migration input leaked into serialized runtime config")
+	}
+	if _, err := decodeValidatedConfig(clean); err != nil {
+		t.Fatalf("clean migrated config cannot be loaded: %v", err)
 	}
 }
 
