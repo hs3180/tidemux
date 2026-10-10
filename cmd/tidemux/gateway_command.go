@@ -40,6 +40,7 @@ func gatewayConfigure(args []string, stdout, stderr *os.File) error {
 	maxInFlight := flags.Int("max-in-flight", 0, "maximum simultaneous upstream requests")
 	maxSessions := flags.Int("max-active-sessions", -1, "maximum active logical sessions; zero disables the limit")
 	idleSeconds := flags.Int("active-session-idle-timeout-seconds", -1, "idle time before releasing a retained session; zero uses five minutes")
+	healthDiagnostics := flags.Bool("health-diagnostics", true, "enable optional per-key attempt counters and recent failovers")
 	rotateKey := flags.Bool("rotate-key", false, "set a new gateway key using hidden input; Enter generates one")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -63,7 +64,7 @@ func gatewayConfigure(args []string, stdout, stderr *os.File) error {
 			return err
 		}
 	}
-	interactive := !flagWasSet(flags, "listen", "max-in-flight", "max-active-sessions", "active-session-idle-timeout-seconds", "rotate-key")
+	interactive := !flagWasSet(flags, "listen", "max-in-flight", "max-active-sessions", "active-session-idle-timeout-seconds", "rotate-key", "health-diagnostics")
 	var tty *os.File
 	if interactive || (*listen == "0.0.0.0" && isLoopbackListenAddr(c.ListenAddr)) || *rotateKey || credentialRefEmpty(c.AccessTokenKeychain) {
 		if runtime.GOOS != "darwin" {
@@ -120,6 +121,10 @@ func gatewayConfigure(args []string, stdout, stderr *os.File) error {
 	}
 	if interactive || flagWasSet(flags, "active-session-idle-timeout-seconds") {
 		c.ActiveSessionIdleTimeoutSeconds = *idleSeconds
+	}
+
+	if flagWasSet(flags, "health-diagnostics") {
+		c.HealthDiagnostics = healthDiagnostics
 	}
 
 	wasLoopback := isLoopbackListenAddr(mustCurrentListenAddr(before, c.ListenAddr))

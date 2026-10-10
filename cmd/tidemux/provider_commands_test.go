@@ -381,7 +381,7 @@ func TestGatewayConfigureChangesOnlyGatewaySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stderr.Close()
-	args := []string{"--config", path, "--listen", "loopback", "--max-in-flight", "4", "--max-active-sessions", "12", "--active-session-idle-timeout-seconds", "180"}
+	args := []string{"--config", path, "--listen", "loopback", "--max-in-flight", "4", "--max-active-sessions", "12", "--active-session-idle-timeout-seconds", "180", "--health-diagnostics=false"}
 	if err := gatewayConfigure(args, stdout, stderr); err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestGatewayConfigureChangesOnlyGatewaySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.ListenAddr != defaultListenAddr || updated.MaxInFlight != 4 || updated.MaxActiveSessions != 12 || updated.ActiveSessionIdleTimeoutSeconds != 180 {
+	if updated.ListenAddr != defaultListenAddr || updated.MaxInFlight != 4 || updated.MaxActiveSessions != 12 || updated.ActiveSessionIdleTimeoutSeconds != 180 || updated.HealthDiagnosticsEnabled() {
 		t.Fatalf("gateway settings=%+v", updated)
 	}
 	if updated.Providers["p"].BaseURL != c.Providers["p"].BaseURL {
