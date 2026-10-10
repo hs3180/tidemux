@@ -7,6 +7,7 @@ No production configuration, index, registry or credential is accessed.
 import argparse
 from datetime import datetime
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -38,7 +39,9 @@ def published_events(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--binary", type=Path)
+    source.add_argument("--fixture", type=Path, help="directory prepared from the Darwin package")
     parser.add_argument("--logs", required=True, type=Path)
     parser.add_argument("--records", required=True, type=Path)
     parser.add_argument("--es-url", required=True)
@@ -56,7 +59,12 @@ def main():
     root = args.evidence.resolve()
     root.mkdir(parents=True, exist_ok=False)
     records = json.loads(args.records.read_text())
-    version = subprocess.check_output([str(args.binary.resolve()), "version"], text=True).strip()
+    if args.binary:
+        version = subprocess.check_output([str(args.binary.resolve()), "version"], text=True).strip()
+        binary_sha256 = hashlib.sha256(args.binary.read_bytes()).hexdigest()
+    else:
+        metadata = json.loads((args.fixture / "fixture.json").read_text())
+        version, binary_sha256 = metadata["binary_version"], metadata["binary_sha256"]
     validate_runtime_events(records, version, one_instance=False)
     expected = {record["event_id"]: record for record in records}
     actual = [json.loads(line) for path in args.logs.glob("projects/tidemux/*.jsonl")
@@ -152,7 +160,7 @@ def main():
         raise RuntimeError("Collector fabricated or removed usage")
     for name, data in (("documents", documents), ("aggregation", aggregation)):
         (root / (name + ".json")).write_text(json.dumps(data, indent=2) + "\n")
-    result = {"passed": True, "binary_version": version, "filebeat": tool_version,
+    result = {"passed": True, "binary_version": version, "binary_sha256": binary_sha256, "filebeat": tool_version,
               "elasticsearch": es_version, "distinct_events": len(expected), "replays": 2,
               "replay_output": replay_output, "document_versions": sorted({hit["_version"] for hit in documents}),
               "exact_record_and_event_time": True, "known_usage_records": known, "tokens": counts}
