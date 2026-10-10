@@ -45,7 +45,7 @@ def main():
         root = Path(temporary)
         home = root / "home"
         home.mkdir()
-        data = home / ".config" / "tidemux"
+        data = home / "Library" / "Application Support" / "TideMux"
         data.mkdir(parents=True)
         config = data / "config.json"
         config.write_text(json.dumps({"listen_addr": "127.0.0.1:4000", "max_in_flight": 1,
@@ -75,7 +75,7 @@ cp "$TIDEMUX_LOCAL_ASSETS/${url##*/}" "$dest"
 ''')
         curl.chmod(0o755)
         security = mock / "security"
-        security.write_text('#!/bin/sh\nprintf invoked >> "$TIDEMUX_SECURITY_MARKER"\nexit 1\n')
+        security.write_text('#!/bin/sh\nprintf invoked >> "$TIDEMUX_SECURITY_MARKER"\ncase "$*" in *test.gateway*) echo fixture-gateway-secret;; *test.provider*) echo fixture-provider-secret;; *) exit 1;; esac\n')
         security.chmod(0o755)
         destination = root / "install with spaces"
         env = dict(os.environ, HOME=str(home), PATH=str(mock) + ":" + os.environ["PATH"],
@@ -85,15 +85,17 @@ cp "$TIDEMUX_LOCAL_ASSETS/${url##*/}" "$dest"
         def verify_data():
             if {str(p.relative_to(data)): digest(p) for p in data.rglob("*") if p.is_file()} != original:
                 raise RuntimeError("Install/uninstall modified existing user data")
-            if (root / "security-invoked").exists():
-                raise RuntimeError("Installer accessed Keychain")
 
         def install():
+            marker = root / "security-invoked"
+            prior_access = marker.read_bytes() if marker.exists() else b""
             subprocess.run(["sh", str(installer)], env=env, check=True, capture_output=True, text=True)
             binary = destination / "tidemux"
             if digest(binary) != binary_hash or subprocess.check_output([str(binary), "version"], text=True).strip() != args.version:
                 raise RuntimeError("Installed binary differs from qualified package")
-            subprocess.run([str(binary), "doctor", "--config", str(config)], env=env, capture_output=True, text=True)
+            if (marker.read_bytes() if marker.exists() else b"") != prior_access:
+                raise RuntimeError("Installer accessed Keychain")
+            subprocess.run([str(binary), "doctor", "--config", str(config)], env=env, check=True, capture_output=True, text=True)
             if list(destination.glob(".tidemux-install.*")):
                 raise RuntimeError("Installer retained a temporary executable")
             verify_data()
@@ -105,7 +107,7 @@ cp "$TIDEMUX_LOCAL_ASSETS/${url##*/}" "$dest"
         install()
     print(json.dumps({"passed": True, "version": args.version, "archive_sha256": digest(archive),
                       "binary_sha256": binary_hash, "real_archive_installer": True, "reinstall": True,
-                      "manual_uninstall_preserves_data": True, "keychain_untouched": True,
+                      "manual_uninstall_preserves_data": True, "installer_keychain_untouched": True, "doctor_uses_synthetic_keychain": True,
                       "formula_matches_archive": True, "public_download_and_homebrew_install": "pending publication"}))
 
 
