@@ -16,7 +16,7 @@ an OS lock sidecar and bounded in-memory state do not migrate accounting data.
 | [#98](https://github.com/hs3180/tidemux/issues/98), [PR #107](https://github.com/hs3180/tidemux/pull/107) | Report commands preserve live reservations; queued cancellation releases without dispatch/latching. Gateway ownership excludes a second process and preserves genuine SIGKILL recovery. `report_reservations_test.go`, ledger ownership tests, `test_report_budget_package.py`. |
 | [#99](https://github.com/hs3180/tidemux/issues/99), [PR #108](https://github.com/hs3180/tidemux/pull/108) | 256-entry / 16 MiB / five-minute idle prompt retention, quiet background expiry and no generated-ID retention; prefix estimation and cost fallback preserved. Cache churn/LRU/byte/expiry/concurrency tests and gateway anonymous-request tests. |
 | [#106](https://github.com/hs3180/tidemux/issues/106), [PR #109](https://github.com/hs3180/tidemux/pull/109) | 0.3.0 SSE reproduction saved malformed assistant tool_result then returned 400. Withhold malformed web/image blocks and reject poisoned replay with exact paths, both provider protocols, with/without compaction. Valid native/client tool round trips preserved. `tool_history_test.go`, `test_tool_history_package.py`. |
-| [#105](https://github.com/hs3180/tidemux/issues/105), [PR #111](https://github.com/hs3180/tidemux/pull/111) | Actual Logstash/ES typed ingestion of packaged stderr; success/rejection/lifecycle/HTTP 200 stream failure searchable; same-request events distinct; parse failures retained and mapping failures read from DLQ. `examples/elasticsearch/`, `test_elasticsearch_package.py`. |
+| [#105](https://github.com/hs3180/tidemux/issues/105), [PR #111](https://github.com/hs3180/tidemux/pull/111) | Actual Logstash/ES typed ingestion of packaged stderr; success/rejection/lifecycle/HTTP 200 stream failure searchable; same-request events distinct; parse failures retained and mapping failures read from DLQ. test-only collector fixtures, `test_elasticsearch_package.py`. |
 
 Each bug's failing reproduction was captured before implementation. Source
 build, tests, vet, gofmt and race checks remain mandatory. Issues stay open
@@ -51,7 +51,7 @@ clock and the packaged PTY provider setup. The Claude gate uses an isolated real
 Claude Code CLI against loopback mocks, including native/conversion and
 compaction follow-ups. It sends no paid provider request. Run
 `scripts/test_elasticsearch_package.py` with an explicit isolated target; this
-release smoke exercises the Logstash fixture in `examples/elasticsearch/` and
+release smoke exercises the Logstash test-only collector fixture and
 is separate from the basic Filebeat example in the README.
 Record source commit, binary/archive hashes, test results and index evidence in
 private operations records; do not put real configuration or credentials in

@@ -308,69 +308,14 @@ tidemux serve --config /path/to/config.json \
   >> /var/log/tidemux/console.log 2>> /var/log/tidemux/runtime.jsonl
 ```
 
-For example, point Filebeat at that `stderr` file and set its Elasticsearch
-output. Replace the paths and endpoint:
-
-```yaml
-filebeat.inputs:
-  - type: filestream
-    id: tidemux-runtime
-    paths: ["/var/log/tidemux/runtime.jsonl"]
-    file_identity.native: ~
-    parsers:
-      - ndjson:
-          target: tidemux
-          add_error_key: true
-
-processors:
-  - timestamp:
-      field: tidemux.timestamp
-      layouts: ["2006-01-02T15:04:05.000Z"]
-  - copy_fields:
-      fields:
-        - from: tidemux.event
-          to: event.action
-        - from: tidemux.level
-          to: log.level
-
-output.elasticsearch:
-  hosts: ["https://elasticsearch.example:9200"]
-  index: tidemux-runtime
-  api_key: "${TIDEMUX_ES_API_KEY}"
-
-setup.ilm.enabled: false
-setup.template.enabled: false
-```
-
-Once, as the same user that runs Filebeat, create its keystore and store the
-API key under the referenced name; then check the configuration:
-
-```sh
-filebeat keystore create
-filebeat keystore add TIDEMUX_ES_API_KEY
-filebeat test config
-```
-
-The `tidemux` namespace avoids conflicts between TideMux's `event` and Claude's
-`message` object and ECS fields. The timestamp processor uses
-`tidemux.timestamp` as `@timestamp`. Grant the collector read access
-to the log and only the required write access in Elasticsearch. Use HTTPS with
-a trusted CA. Install the [index template](examples/elasticsearch/index-template.json)
-before the first event to index model IDs, request/session IDs and the four
-usage fields for filtering and numeric aggregations. When moving from schema 1
-to schema 2, update field paths and use a new index prefix with this template.
-The complete [Filebeat](examples/elasticsearch/filebeat.yml) and
-[Logstash](examples/elasticsearch/tidemux.conf) examples use the same fields.
-Manage index lifecycle and retention in Elasticsearch. See
-[runtime log fields and privacy](docs/runtime-logging.md) and the official
-[Filebeat filestream](https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-input-filestream.html)
-and [Elasticsearch output](https://www.elastic.co/guide/en/beats/filebeat/current/elasticsearch-output.html)
-references for collector details.
-
-To collect the same session files ccusage reads, use
-`/path/to/tidemux/logs/projects/tidemux/*.jsonl` as the collector path. Collect
-either this path or runtime stderr for requests, not both copies. The stderr
-stream additionally contains startup, shutdown and local rejection events.
+Use one request source: runtime stderr includes lifecycle and rejection events;
+`logs/projects/tidemux/*.jsonl` contains the terminal records ccusage reads.
+Decode JSON under `tidemux`, map its `timestamp` to `@timestamp`, and copy
+`tidemux.event_id` to the collector document ID for replay deduplication.
+`requestId` joins request/audit records. See the concise
+[Elasticsearch collection guide](docs/elasticsearch.md) for Filebeat settings,
+field types and model/usage queries, and [runtime logs](docs/runtime-logging.md)
+for the event schema and privacy. Collector setup and retention are operator-managed.
 
 ## Documentation
 

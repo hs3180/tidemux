@@ -170,6 +170,28 @@
             "failure_code": {
               "type": "keyword",
               "ignore_above": 1024
+            },
+            "event_id": {
+              "type": "keyword",
+              "ignore_above": 128
+            },
+            "service": {
+              "dynamic": false,
+              "properties": {
+                "name": {
+                  "type": "keyword"
+                },
+                "version": {
+                  "type": "keyword"
+                },
+                "instance": {
+                  "properties": {
+                    "id": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
             }
           }
         },
