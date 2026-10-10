@@ -107,6 +107,7 @@ type SecretLookup interface {
 }
 
 type Config struct {
+	HealthDiagnostics               *bool                    `json:"health_diagnostics,omitempty"`
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
 	ReportWebhook                   ReportWebhookConfig      `json:"report_webhook,omitempty"`

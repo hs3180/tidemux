@@ -383,7 +383,8 @@ type ProviderAvailability struct {
 	Ref        string `json:"ref"`
 	Generation uint64 `json:"generation"`
 	AvailabilityStatus
-	Models []ModelAvailability `json:"models"`
+	Models  []ModelAvailability `json:"models"`
+	KeyPool *KeyPoolStatus      `json:"key_pool,omitempty"`
 }
 
 type AvailabilityReport struct {
@@ -414,6 +415,7 @@ func (h *handler) availabilityReport() AvailabilityReport {
 		generation := h.providerGenerations[ref]
 		provider := ProviderAvailability{Ref: ref, Generation: generation,
 			AvailabilityStatus: availabilityStatus(s.entries[availabilityTarget{ref, "", generation}], now), Models: []ModelAvailability{}}
+		provider.KeyPool = h.keyPools[ref].diagnosticStatus(now)
 		if _, unavailable := h.unavailableProviders[ref]; unavailable {
 			provider.State, provider.Reason = "unavailable", "protocol_unresolved"
 		}

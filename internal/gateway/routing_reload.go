@@ -35,6 +35,9 @@ func (h *handler) prepareRouting(previous *handler, changedChain bool) {
 // so bindings created while preparation was in progress are included. Old
 // requests keep the old auto-chain state and cannot overwrite current affinity.
 func (h *handler) activateRouting() {
+	for _, pool := range h.keyPools {
+		pool.setDiagnostics(h.config.HealthDiagnosticsEnabled())
+	}
 	h.availability.activate(h.routingEpoch, h.providerGenerations, h.supportScopeAllows)
 	if prepared := h.preparedRouting; prepared != nil {
 		for _, entry := range h.config.AutoChain {
