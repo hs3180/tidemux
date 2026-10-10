@@ -56,8 +56,8 @@ func TestReloadAutoChainSemanticBindingsAndPublication(t *testing.T) {
 	root.autoChain.advanceForNewSessions(1)
 	root.autoChain.sessions[hashAutoChainSessionID("expired")] = autoChainBinding{index: 0, lastTouch: time.Now().Add(-25 * time.Hour)}
 	unchanged := reloadTestView(t, root, root, c, c, upstream.Client())
-	if unchanged.autoChain != root.autoChain {
-		t.Fatal("unchanged chain did not reuse its state")
+	if unchanged.autoChain == root.autoChain || unchanged.autoChain.next != root.autoChain.next || len(unchanged.autoChain.sessions) != 2 {
+		t.Fatal("compatible publication did not preserve bindings in an isolated chain view")
 	}
 	if _, ok := unchanged.autoChain.selectForSession("fresh", true); ok {
 		t.Fatal("unchanged reload reset exhaustion")
