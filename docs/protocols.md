@@ -73,7 +73,7 @@ requests queued on an older view keep
 their original configuration and settlement snapshot. A successfully applied
 configuration removes bindings invalidated by provider/model removal or scope
 changes; an invalid reload retains the entire last valid configuration. See
-[automatic provider application](provider-cli.md#automatic-provider-application-031).
+[automatic provider application](provider-cli.md#automatic-configuration-application).
 
 For shared-model bindings, a model-not-found failure remains ineligible until
 the connection generation changes or the route is removed from an applied
