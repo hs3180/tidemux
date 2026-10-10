@@ -108,7 +108,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	keyPools := make(map[string]*providerKeyPool, len(providers))
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
-	runtime := &handlerRuntime{usageLog: usageLog, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
+	runtime := &handlerRuntime{availability: newAvailabilityState(logger), usageLog: usageLog, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
 	providerGenerations := make(map[string]uint64, len(providers))
 	for name, provider := range providers {
 		if _, unavailable := unavailableProviders[name]; unavailable {
@@ -123,6 +123,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		}
 	}
 	h := &handler{config: c, ledger: l, handlerRuntime: runtime, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
+	h.availability.activate(h.routingEpoch, h.providerGenerations, h.supportScopeAllows)
 	return h, func() error {
 		stopReconciliation()
 		h.closeProviderSessions()

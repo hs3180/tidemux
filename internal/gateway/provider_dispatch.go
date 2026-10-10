@@ -121,21 +121,34 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 
 	call := func() ([]byte, string, error) {
 		if pool == nil {
-			return providerClient.CallFrom(clientProtocol, r.Context(), routeBody, route.model, sink, options)
+			candidates = []providerKeyCandidate{{key: providerClient.APIKey}}
 		}
 		keys := make([]string, len(candidates))
 		for i, candidate := range candidates {
 			keys[i] = candidate.key
 		}
 		callbacks := adapter.KeyCandidateCallbacks{
+			Completed: func(err error) {
+				if result, ok := r.Context().Value(availabilityResultContextKey{}).(*availabilityResult); ok {
+					result.finish(err)
+				}
+			},
 			Ready: func(candidateIndex int) (bool, time.Duration) {
+				if lease, ok := r.Context().Value(availabilityLeaseContextKey{}).(*availabilityLease); ok {
+					if blocked := h.availability.dispatch(lease); blocked != nil {
+						return false, blocked.Cooldown
+					}
+				}
+				if pool == nil {
+					return true, 0
+				}
 				if candidateIndex < 0 || candidateIndex >= len(candidates) {
 					return false, 0
 				}
 				return pool.CandidateReadyAt(candidates[candidateIndex].index, time.Now())
 			},
 			Failed: func(candidateIndex int, callErr *adapter.CallError) (bool, time.Duration) {
-				if candidateIndex < 0 || candidateIndex >= len(candidates) || callErr == nil {
+				if candidateIndex < 0 || candidateIndex >= len(candidates) || callErr == nil || pool == nil {
 					return false, 0
 				}
 				if callErr.UpstreamNotAttempted && callErr.Code == "upstream_transport_error" {

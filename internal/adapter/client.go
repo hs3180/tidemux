@@ -73,8 +73,9 @@ func (e *CallError) Error() string { return e.Code }
 // KeyCandidateCallbacks rechecks cooldown state before an attempt and records
 // retryable failures while preserving one audit record for the logical call.
 type KeyCandidateCallbacks struct {
-	Ready  func(index int) (bool, time.Duration)
-	Failed func(index int, callErr *CallError) (hasNext bool, earliestCooldown time.Duration)
+	Completed func(err error) // upstream result, before releasing the dispatch gate
+	Ready     func(index int) (bool, time.Duration)
+	Failed    func(index int, callErr *CallError) (hasNext bool, earliestCooldown time.Duration)
 }
 
 type observedReader struct {
@@ -259,6 +260,11 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		return nil, id, &CallError{Status: 408, Code: "request_canceled"}
 	}
 	defer c.Gate.Release()
+	defer func() {
+		if attempted && callbacks.Completed != nil {
+			callbacks.Completed(err)
+		}
+	}()
 	if e = ctx.Err(); e != nil {
 		return nil, id, &CallError{Status: 408, Code: "request_canceled"}
 	}

@@ -49,6 +49,7 @@ common examples:
   tidemux report schedule --time 09:00 --channel webhook
   tidemux gateway configure --listen loopback
   tidemux gateway check
+  tidemux gateway availability --json
   tidemux claude --model deepseek-flash
   tidemux serve --config /path/to/config.json
 
