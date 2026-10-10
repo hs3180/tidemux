@@ -45,8 +45,10 @@ class Fixture(BaseHTTPRequestHandler):
             payload = (FIXTURES / ("glm_dual_output." + suffix)).read_bytes()
         elif body.get("stream"):
             from test_client_recovery_package import frames
+            events = frames(expected["content"])
+            events[0][1]["message"]["usage"] = {**expected["usage"], "output_tokens": 0}
             payload = "".join("event: " + event + "\ndata: " + json.dumps(data) + "\n\n"
-                              for event, data in frames(expected["content"])).encode()
+                              for event, data in events).encode()
         else:
             payload = json.dumps(expected).encode()
         self.wfile.write(payload)
@@ -155,7 +157,7 @@ def main():
             if row.get("status") != "ok" or row.get("input_tokens") != 10 or row.get("output_tokens") != 10 or abs(row.get("estimated_cost", 0) - 0.00005) > 1e-12:
                 raise RuntimeError("compatibility handling changed usage or budget charge")
         private = logs + json.dumps(rows)
-        if any(marker in private for marker in ("GLM_WEB_READER_OUTPUT", "fixture-web-reader", "private-glm-request", GATEWAY_KEY, PROVIDER_KEY)):
+        if any(marker in private for marker in ("GLM_WEB_READER_OUTPUT", "fixture-web-reader", "fixture-unpaired-result", "private-glm-request", GATEWAY_KEY, PROVIDER_KEY)):
             raise RuntimeError("tool content, IDs or credentials leaked into gateway logs or audits")
     print(json.dumps({"binary": str(binary), "cases": cases, "native_and_converted_buffered_and_streaming": True,
                       "preserved_output_and_valid_continuation": True, "no_gateway_replay": True,
