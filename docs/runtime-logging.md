@@ -109,16 +109,8 @@ commands retain their human-facing output and error behavior.
 empty and exit **0**, without loading configuration or credentials. Normal
 startup still emits `gateway_start`; graceful shutdown emits `gateway_shutdown`.
 Runtime failures after startup remain separate server/shutdown events, not a
-second startup failure. Run the candidate gate with:
-
-```sh
-python3 scripts/test_startup_logs_package.py --binary /path/to/extracted/tidemux
-```
-
-The gate uses only synthetic configuration, fake Keychain credentials and
-loopback listeners. The optional `--evidence DIR` saves a result and redacted
-startup events for isolated collection verification. It never contacts
-production services or requires the user's real secrets.
+second startup failure. Developer verification methods are documented in the
+[release procedure](releasing.md#runtime-checks).
 
 ## External collection and privacy
 

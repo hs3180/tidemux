@@ -1,4 +1,4 @@
-# Protocol support — 0.3.2
+# Protocol support
 
 TideMux exposes both client protocols simultaneously. OpenAI clients use
 `/v1/chat/completions`; Anthropic clients use `/v1/messages`. Each named
@@ -82,8 +82,9 @@ a five-minute protection period. Recovery makes the route eligible again but
 does not move a healthy binding back from another provider.
 
 The 0.1.x single-provider configuration remains a migration/compatibility path.
-New 0.3.0 routing fields are omitted until enabled, so an unchanged 0.2.2
-configuration loads with routing disabled.
+Optional routing fields are omitted until enabled. Validate configuration with
+the selected binary when changing versions; an older binary can reject newer
+fields or error categories.
 
 For named providers, an explicitly configured `protocol` of `openai` or
 `anthropic` forces that upstream format and skips detection. Otherwise TideMux
@@ -192,9 +193,8 @@ actionable `unsupported_request_feature` error on `tools`. Audio, Responses API,
 embeddings, batches and token-counting endpoints are not implemented. These
 remain explicit boundaries; normal tested client workflows do not prove every
 client feature or every upstream model is supported. See the
-[current client acceptance matrix](client-compatibility.md) for the tested
-versions, route combinations and artifact boundaries; historical release
-evidence is identified separately on that page.
+[client compatibility](client-compatibility.md) for supported interfaces and
+workflow limits.
 
 ## Streaming and errors
 

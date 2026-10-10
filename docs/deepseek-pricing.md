@@ -16,7 +16,7 @@ the price snapshot used when they were written.
 
 ## Set a provider price
 
-The 0.2.2 CLI keeps rates with a provider and model. After adding a
+The CLI keeps rates with a provider and model. After adding a
 provider and obtaining its reference from `provider list`, set or override its
 price with:
 
