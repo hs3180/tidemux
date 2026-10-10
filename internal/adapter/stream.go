@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -160,28 +159,15 @@ func readStreamWithLimits(protocol string, r io.Reader, limits Limits, emit func
 					if json.Unmarshal(obj["message"], &msg) != nil || msg.Role != "assistant" || merge(msg.Usage) != nil {
 						return fail("invalid_upstream_stream")
 					}
-					if path := assistantToolResultPath(msg.Content, "message.content"); path != "" {
-						return TokenUsage{}, nil, &CallError{Status: 502, Code: "invalid_upstream_tool_history", Param: path}
+					if len(msg.Content) > 0 && !messageContent("anthropic", msg.Content) {
+						return fail("invalid_upstream_stream")
 					}
 				case "content_block_start":
 					if !started {
 						return fail("invalid_upstream_stream")
 					}
-					var block struct {
-						Index   *int `json:"index"`
-						Content struct {
-							Type string `json:"type"`
-						} `json:"content_block"`
-					}
-					if json.Unmarshal([]byte(data), &block) != nil {
+					if !nativeContentBlock(obj["content_block"]) {
 						return fail("invalid_upstream_stream")
-					}
-					if block.Content.Type == "tool_result" {
-						path := "content_block.type"
-						if block.Index != nil && *block.Index >= 0 {
-							path = fmt.Sprintf("content[%d].type", *block.Index)
-						}
-						return TokenUsage{}, nil, &CallError{Status: 502, Code: "invalid_upstream_tool_history", Param: path}
 					}
 				case "message_delta":
 					if !started {

@@ -1,7 +1,7 @@
 # Client compatibility
 
-The current CLI matrix was verified on macOS arm64 on 2026-10-06 with actual
-installed clients, isolated profiles and a scripted loopback provider. Each
+The CLI matrix is verified on macOS arm64 with actual installed clients,
+isolated profiles and a scripted loopback provider. Each
 client ran through the TideMux launcher. The provider was a test fixture;
 these results do not certify a paid model's reasoning, pricing or invoice.
 The first verification used the v0.3.1 source baseline `4886a58`; the same
@@ -24,31 +24,32 @@ this verification.
 
 ## Error display and recovery
 
-The controlled failure sends a legal text block before an assistant generic
-`tool_result`. In all three routes the wire preserves the legal prefix, then
-emits one safe terminal error with `code: invalid_upstream_tool_history`,
-`param: content[1].type` and `recovery.retryable: false`. The malformed content
-and its tool ID are withheld. HTTP remains 200 after streaming begins, while
-the gateway terminal log and audit record report failure.
+The controlled failure sends legal text before a content block whose `type`
+is not a string. The native and converted routes retain the delivered prefix
+and emit one safe terminal error with `code: invalid_upstream_stream` and the
+request ID. The invalid block and its private fields are withheld. HTTP remains
+200 after streaming begins; the gateway log and audit record report failure.
+Buffered structural failures use `invalid_upstream_response`.
 
-| Client | Observed noninteractive display | Client requests in this fixture |
-| --- | --- | --- |
-| Claude Code 2.1.283 | Shows the safe text, then “API Error: Server error mid-response. The response above may be incomplete.” It does not expose the TideMux code or recovery object. | Four streaming requests: the original and three client-generated continuations. |
-| Kilo CLI 7.8.1 | Shows safe text and `invalid_upstream_tool_history`, `content[1].type`, and the instruction to start a clean conversation or explicitly repair saved history. | One streaming request. |
-| Hermes 0.21.2 | Does not display the safe text or TideMux code; reports “No visible answer was produced” and attributes it to an output-token limit. Confirm the gateway error code before following that suggestion. | One nonstreaming auxiliary request and four streaming requests. |
+Client displays and automatic retry counts vary. Claude can display a generic
+mid-response error, Kilo can expose the gateway code, and Hermes can report that
+no visible answer was produced. Check the wire or gateway log before attributing
+a failure to token limits. Each client request causes at most one dispatched
+attempt after output begins; the gateway does not replay partial responses.
+Logs and the ledger contain neither withheld content nor tool IDs.
 
-These request counts describe this fixture and these versions. Client retry
-behavior can change. Each client request caused exactly one upstream dispatch;
-the gateway never replayed a dispatched request after partial output. Each
-failed request produced one terminal error. Logs and the ledger contained
-neither the withheld tool content nor its ID.
+Generic assistant `tool_result` is a separate compatibility case: native routes
+preserve it without a tool-role or ID-pairing check. The packaged GLM
+reproduction checks completion and continuation with matching IDs, unmatched
+IDs and no preceding server-tool block. Each Claude turn must finish in exactly
+one client request and upstream dispatch. Converted routes retain
+available text and report server-tool fields without a target representation.
+The fixture reproduces the reported structure; it is not a production capture.
 
-The tested recovery starts a new conversation without `--continue` or
-`--resume`, performs the complete tool workflow, then resumes that successful
-conversation. [Client setup and recovery](clients.md#recover-after-a-tool-history-error)
-provides the commands and a safe log-based diagnostic path when a client hides
-the protocol error. Repairing arbitrary historical client files is a manual,
-client-specific operation; the gateway does not rewrite them automatically.
+The recovery check starts a new conversation, performs the complete tool
+workflow, then resumes that successful conversation.
+[Client setup and recovery](clients.md#recover-after-a-response-error) provides
+the commands and safe diagnostics. The gateway does not edit client history.
 
 ## Protocol and profile boundaries
 
@@ -64,11 +65,10 @@ not passed to clients. Hermes uses an explicit custom provider with Chat
 Completions transport; its OpenAI provider can select Responses API, which
 TideMux does not serve. Kilo uses an environment-variable credential reference.
 
-The package wire regression separately checks native Anthropic and converted
-OpenAI output after a legal prefix, web/image malformed blocks, local rejection
-of unchanged poisoned history with and without compaction, valid native server
-tools, and valid client tool-result continuation. It does not imply that
-provider-hosted tools can be translated to every client protocol.
+The package wire regression also checks opaque web/image results, native
+history with and without compaction, local rejection of unsupported converted
+history, valid client tool-result continuation and structural failures after a
+legal prefix. Provider-hosted tools cannot be translated to every client API.
 
 ## Capacity rejection and recovery
 

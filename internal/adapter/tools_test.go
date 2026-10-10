@@ -108,9 +108,9 @@ func TestMalformedToolMessagesRejected(t *testing.T) {
 		}
 	}
 	for _, block := range []string{
-		`{"type":"tool_use","id":"c1","name":"f","input":{}}`,
-		`{"type":"tool_result","tool_use_id":"c1","content":[{"type":"tool_use","id":"c2","name":"f","input":{}}]}`,
-		`{"type":"text","text":"hi","cache_control":{"type":"invalid"}}`,
+		`null`,
+		`{"text":"hi"}`,
+		`{"type":17,"text":"hi"}`,
 	} {
 		body := `{"max_tokens":10,"messages":[{"role":"user","content":[` + block + `]}]}`
 		if _, _, err := Request("anthropic", []byte(body), "m"); err == nil {

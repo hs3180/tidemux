@@ -51,7 +51,7 @@ class Mock(BaseHTTPRequestHandler):
             self.wfile.write(b'data: {"choices":[{"index":0,"delta":{"content":"usage-private-response-sentinel"}}]}\n\n')
             self.wfile.flush()
             self.server.started.set()
-            self.server.release.wait(10)
+            self.server.release.wait()
             try:
                 self.wfile.write(b'data: [DONE]\n\n')
                 self.wfile.flush()
@@ -245,11 +245,16 @@ def main():
                 assert code == (502 if provider == "error" else 200), (provider, code)
             assert request("usd", SESSION, "anthropic")[0] == 200
             stream = request("unknown", SESSION, stream=True)
-            assert upstream.started.wait(5)
-            stream.readline()
-            stream.close()
-            upstream.release.set()
-            wait_for(lambda: any(row["status"] == "canceled" for row in audits(ledger)), "canceled audit")
+            canceled_id = stream.headers["X-TideMux-Request-ID"]
+            try:
+                assert upstream.started.wait(5)
+                stream.readline()
+                stream.close()
+                # Keep the upstream open until the gateway observes the client disconnect.
+                wait_for(lambda: any(row["id"] == canceled_id and row["status"] == "canceled" for row in audits(ledger)), "canceled audit")
+            finally:
+                stream.close()
+                upstream.release.set()
             stop()
             snapshot("initial")
             start()

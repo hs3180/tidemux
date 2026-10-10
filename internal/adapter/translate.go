@@ -468,6 +468,9 @@ func translateAnthropicUserBlocks(blocks []contentBlock, messageIndex int) ([]Me
 			hasText = true
 		case "tool_result":
 			flushText()
+			if block.ToolUseID == "" {
+				return nil, validationError("invalid_request", fmt.Sprintf("messages[%d].content[%d].tool_use_id", messageIndex, index))
+			}
 			content, err := anthropicToolResultText(block.Content)
 			if err != nil {
 				return nil, validationError("unsupported_request_feature", fmt.Sprintf("messages[%d].content[%d].content", messageIndex, index))
@@ -746,15 +749,16 @@ func TranslateResponseWithWarnings(providerProtocol, clientProtocol string, data
 	for index, block := range in.Content {
 		switch block.Type {
 		case "text":
-			if block.Text != nil {
-				text.WriteString(*block.Text)
+			if block.Text == nil {
+				return nil, nil, errors.New("invalid_upstream_response")
 			}
+			text.WriteString(*block.Text)
 		case "thinking":
 			if block.Thinking != nil {
 				reasoning.WriteString(*block.Thinking)
 			}
 		case "tool_use":
-			if block.ID == "" || block.Name == "" || len(block.Input) == 0 {
+			if block.ID == "" || block.Name == "" || !object(block.Input) {
 				return nil, nil, errors.New("invalid_upstream_response")
 			}
 			calls = append(calls, map[string]any{
@@ -1041,6 +1045,7 @@ type anthropicStreamTranslator struct {
 	created      int64
 	inputTokens  *int64
 	toolIndices  map[int]int
+	serverTools  map[int]struct{}
 	nextTool     int
 	omitted      []string
 	sawVisible   bool
@@ -1105,11 +1110,20 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 			return nil, errors.New("invalid_upstream_stream")
 		}
 		if block.ContentBlock.Type != "tool_use" {
+			if block.ContentBlock.Type == "server_tool_use" {
+				if t.serverTools == nil {
+					t.serverTools = make(map[int]struct{})
+				}
+				t.serverTools[block.Index] = struct{}{}
+			}
 			if block.ContentBlock.Type != "text" && block.ContentBlock.Type != "thinking" {
 				t.omitted = append(t.omitted, fmt.Sprintf("content[%d].type", block.Index))
 				t.sawDropped = true
 			}
 			return nil, nil
+		}
+		if block.ContentBlock.ID == "" || block.ContentBlock.Name == "" {
+			return nil, errors.New("invalid_upstream_stream")
 		}
 		t.sawVisible = true
 		index := t.nextTool
@@ -1149,6 +1163,11 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 			}
 			return t.chunk(map[string]any{"reasoning_content": delta.Delta.Thinking}, nil, nil), nil
 		case "input_json_delta":
+			// A provider-hosted tool was already omitted at block_start. Its
+			// arguments are not a client tool call and have no OpenAI equivalent.
+			if _, serverTool := t.serverTools[delta.Index]; serverTool {
+				return nil, nil
+			}
 			index, ok := t.toolIndices[delta.Index]
 			if !ok {
 				return nil, errors.New("invalid_upstream_stream")

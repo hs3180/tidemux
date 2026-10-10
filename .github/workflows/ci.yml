@@ -42,6 +42,7 @@ jobs:
               binary, = Path(temporary).glob("tidemux-*/tidemux")
               for script in ["test_anthropic_server_tools_package.py",
                              "test_tool_history_package.py",
+                             "test_glm_tool_results_package.py",
                              "test_shared_model_affinity_package.py",
                              "test_auto_chain_package.py",
                              "test_hot_reload_package.py",

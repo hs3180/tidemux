@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Reproduce built-in-tool history poisoning and verify recovery in a binary.
+"""Verify native content boundaries and tool continuation in a packaged binary.
 
-Loopback fixtures cover web reading, image analysis, native Anthropic, protocol
-conversion, compaction and valid client/server tools. No real credentials used.
+Loopback fixtures cover opaque web/image results, structural failures, protocol
+conversion, compaction and client/server tools. No real credentials used.
 """
 import argparse
 from http.server import BaseHTTPRequestHandler
@@ -44,6 +44,7 @@ class ToolUpstream(BaseHTTPRequestHandler):
         if "image" in first:
             generic["content"].append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}})
         if "malformed" in first:
+            generic["type"] = 17  # Invalid tagged-object envelope, not a tool-role defect.
             if body.get("stream"):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -69,6 +70,17 @@ class ToolUpstream(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 return
             content = [generic]
+        elif len(messages) == 1 and "generic" in first:
+            content = [{"type": "text", "text": SAFE_PREFIX}, generic]
+            if body.get("stream"):
+                from test_client_recovery_package import frames
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for event, data in frames(content):
+                    self.wfile.write(("event: " + event + "\ndata: " + json.dumps(data) + "\n\n").encode())
+                self.wfile.flush()
+                return
         elif len(messages) == 1 and "server" in first:
             content = [{"type": "server_tool_use", "id": PRIVATE_ID, "name": "webReader", "input": {"url": "https://example.com"}},
                        {"type": "webReader_tool_result", "tool_use_id": PRIVATE_ID, "content": {"opaque": PRIVATE}},
@@ -94,9 +106,9 @@ def request_body(provider, text, stream=False):
             "messages": [{"role": "user", "content": text}]}
 
 
-def recovery(data, code, path):
-    if data.get("code") != code or data.get("param") != path or data.get("recovery", {}).get("retryable") is not False:
-        raise RuntimeError("missing bounded tool-history diagnostic/recovery: " + json.dumps(data))
+def failure(data, code):
+    if data.get("code") != code:
+        raise RuntimeError("missing safe structural failure: " + json.dumps(data))
 
 
 def main():
@@ -105,26 +117,32 @@ def main():
     args = parser.parse_args()
     cases = 0
     with running_gateway(args.binary.resolve(), upstream_handler=ToolUpstream) as gateway:
+        for native in (True, False):
+            for tool in ("web", "image"):
+                for stream in (True, False):
+                    before = gateway["upstream"].posts
+                    status, body = post(gateway["url"], request_body("anthropic", "generic-" + tool, stream), anthropic=native)
+                    terminal = "message_stop" if native else "[DONE]"
+                    if status != 200 or SAFE_PREFIX not in body or (stream and terminal not in body) or '"error"' in body:
+                        raise RuntimeError("generic provider result aborted available output")
+                    if native != (PRIVATE in body and PRIVATE_ID in body):
+                        raise RuntimeError("native result lost or provider content leaked through conversion")
+                    if gateway["upstream"].posts != before + 1:
+                        raise RuntimeError("generic result caused gateway replay")
+                    cases += 1
         for tool in ("web", "image"):
             for stream in (True, False):
                 before = gateway["upstream"].posts
                 status, body = post(gateway["url"], request_body("anthropic", "malformed-" + tool, stream))
                 if stream:
-                    # On the old binary this response can be stored as assistant
-                    # history. Replay its bad block to reproduce the next 400.
-                    if PRIVATE in body:
-                        replay = request_body("anthropic", "follow-up")
-                        replay["messages"] = [{"role": "assistant", "content": [{"type": "tool_result", "tool_use_id": PRIVATE_ID, "content": PRIVATE}]}, {"role": "user", "content": "continue"}]
-                        replay_status, _ = post(gateway["url"], replay)
-                        raise RuntimeError(f"upstream built-in {tool} SSE poisoned history; next request HTTP {replay_status}")
                     errors = [json.loads(line[6:])["error"] for line in body.splitlines() if line.startswith("data: ") and '"error"' in line]
                     if status != 200 or len(errors) != 1 or "message_stop" in body:
                         raise RuntimeError("malformed stream was not terminated safely")
-                    recovery(errors[0], "invalid_upstream_tool_history", "content[0].type")
+                    failure(errors[0], "invalid_upstream_stream")
                 else:
                     if status != 502:
                         raise RuntimeError("malformed response was admitted")
-                    recovery(json.loads(body)["error"], "invalid_upstream_tool_history", "content[0].type")
+                    failure(json.loads(body)["error"], "invalid_upstream_response")
                 if PRIVATE in body or PRIVATE_ID in body or gateway["upstream"].posts != before + 1:
                     raise RuntimeError("malformed content escaped or upstream was retried")
                 cases += 1
@@ -135,25 +153,30 @@ def main():
                 errors = [json.loads(line[6:])["error"] for line in body.splitlines() if line.startswith("data: ") and '"error"' in line]
                 if status != 200 or SAFE_PREFIX not in body or len(errors) != 1 or "message_stop" in body or "[DONE]" in body:
                     raise RuntimeError("native or converted stream lost legal prefix or emitted false success")
-                recovery(errors[0], "invalid_upstream_tool_history", "content[1].type")
+                failure(errors[0], "invalid_upstream_stream")
                 if PRIVATE in body or PRIVATE_ID in body or gateway["upstream"].posts != before + 1:
                     raise RuntimeError("malformed block after legal output escaped or was replayed")
                 cases += 1
         for provider in ("anthropic", "openai"):
             for compacted in (False, True):
                 before = gateway["upstream"].posts
-                poisoned = request_body(provider, "continue")
+                history = request_body(provider, "continue")
                 prefix = [{"role": "assistant", "content": [{"type": "compaction", "content": "summary"}]}] if compacted else [{"role": "user", "content": "earlier"}]
-                poisoned["messages"] = prefix + [{"role": "assistant", "content": [{"type": "text", "text": "earlier"}, {"type": "tool_result", "tool_use_id": PRIVATE_ID, "content": PRIVATE}]}, {"role": "user", "content": "continue"}]
+                history["messages"] = prefix + [{"role": "assistant", "content": [{"type": "text", "text": "earlier"}, {"type": "tool_result", "tool_use_id": PRIVATE_ID, "content": PRIVATE}]}, {"role": "user", "content": "continue"}]
                 for _ in range(2):
-                    status, body = post(gateway["url"], poisoned)
-                    if status != 400:
-                        raise RuntimeError("poisoned replay not rejected")
-                    recovery(json.loads(body)["error"], "invalid_tool_history", "messages[1].content[1].type")
+                    status, body = post(gateway["url"], history)
+                    if provider == "anthropic":
+                        if status != 200 or "continued" not in body:
+                            raise RuntimeError("native generic history was rejected")
+                    else:
+                        if status != 400:
+                            raise RuntimeError("unsupported history was misrepresented during conversion")
+                        failure(json.loads(body)["error"], "unsupported_request_feature")
                     if PRIVATE in body or PRIVATE_ID in body:
-                        raise RuntimeError("history content leaked")
-                if gateway["upstream"].posts != before:
-                    raise RuntimeError("unchanged poisoned history was dispatched")
+                        raise RuntimeError("history content leaked in a diagnostic")
+                expected = before + (2 if provider == "anthropic" else 0)
+                if gateway["upstream"].posts != expected:
+                    raise RuntimeError("native history was blocked or unsupported conversion dispatched")
                 cases += 1
         for scene, providers in (("server", ("anthropic",)), ("client", ("anthropic", "openai"))):
             for provider in providers:
@@ -182,9 +205,9 @@ def main():
         if PRIVATE in persisted or PRIVATE_ID in persisted:
             raise RuntimeError("tool content or IDs leaked into ledger/logs")
     print(json.dumps({"binary": str(args.binary), "cases": cases, "native_and_conversion_history_paths": True,
-                      "web_and_image_malformed_blocks_withheld": True, "stream_error_after_http_200": True,
+                      "native_generic_web_and_image_results_preserved": True, "invalid_content_envelopes_withheld": True, "stream_error_after_http_200": True,
                       "native_and_converted_legal_prefix_before_error": True,
-                      "compacted_and_uncompacted_replay_not_dispatched": True, "valid_server_and_client_tools_preserved": True,
+                      "native_compacted_history_preserved": True, "unsupported_converted_history_not_dispatched": True, "valid_server_and_client_tools_preserved": True,
                       "tool_roundtrip_and_compaction": True, "privacy": True}))
 
 

@@ -193,103 +193,27 @@ type contentBlock struct {
 	FileID           string          `json:"file_id,omitempty"`
 }
 
-func messageContent(protocol, role string, raw json.RawMessage) bool {
+func messageContent(protocol string, raw json.RawMessage) bool {
 	var s string
 	if json.Unmarshal(raw, &s) == nil && string(raw) != "null" {
 		return true
 	}
-	var blocks []contentBlock
+	if protocol == "anthropic" {
+		return nativeContentBlocks(raw)
+	}
+	var blocks []struct {
+		Type string  `json:"type"`
+		Text *string `json:"text"`
+	}
 	if LenientJSON(raw, &blocks) != nil || len(blocks) == 0 {
 		return false
 	}
-	for _, b := range blocks {
-		// Native Anthropic content is an extensible tagged union. Keep
-		// validating known variants locally, but let the configured Anthropic
-		// endpoint validate future block types. The raw content remains opaque
-		// and is forwarded without pruning.
-		if protocol == "anthropic" && !supportedContentBlockType(protocol, b.Type) {
-			if b.Type == "" {
-				return false
-			}
-			continue
-		}
-		if !b.CacheControl.valid() || protocol == "openai" && b.CacheControl != nil {
-			return false
-		}
-		switch b.Type {
-		case "text":
-			if b.Text == nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-		case "image":
-			if protocol != "anthropic" || role != "user" && role != "tool_result" || !object(b.Source) || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Citations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-		case "document":
-			if protocol != "anthropic" || role != "user" && role != "tool_result" || !object(b.Source) || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Transformations != nil || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-		case "search_result":
-			if protocol != "anthropic" || b.Content == nil || b.Source == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Transformations != nil || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-		case "tool_use":
-			if protocol != "anthropic" || role != "assistant" || b.ID == "" || b.Name == "" || !object(b.Input) || b.Text != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-		case "tool_result":
-			if protocol != "anthropic" || role != "user" || b.ToolUseID == "" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-			if b.Content != nil && !messageContent(protocol, "tool_result", b.Content) {
-				return false
-			}
-		case "thinking", "redacted_thinking":
-			if protocol != "anthropic" || role != "assistant" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-			if b.Type == "thinking" && (b.Thinking == nil || b.Signature == "" || b.Data != "") {
-				return false
-			}
-			if b.Type == "redacted_thinking" && (b.Data == "" || b.Thinking != nil || b.Signature != "") {
-				return false
-			}
-		case "compaction":
-			if protocol != "anthropic" || role != "assistant" || !validCompactionContent(b.Content) || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-		case "server_tool_use":
-			if protocol != "anthropic" || role != "assistant" || b.ID == "" || b.Name == "" || !object(b.Input) || b.Text != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" || b.FileID != "" {
-				return false
-			}
-		case "web_search_tool_result", "web_fetch_tool_result":
-			if protocol != "anthropic" || b.ToolUseID == "" || b.Content == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.FileID != "" {
-				return false
-			}
-		case "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result", "tool_search_tool_result":
-			if protocol != "anthropic" || b.ToolUseID == "" || b.Content == nil || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.FileID != "" {
-				return false
-			}
-		case "container_upload":
-			if protocol != "anthropic" || b.FileID == "" || b.Text != nil || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil || b.Thinking != nil || b.Signature != "" || b.Data != "" || b.Source != nil || b.Citations != nil || b.Transformations != nil || b.Title != "" || b.Context != "" || b.Caller != nil || b.EncryptedContent != "" || b.ReturnCode != nil || b.Stderr != "" {
-				return false
-			}
-		default:
+	for _, block := range blocks {
+		if block.Type != "text" || block.Text == nil {
 			return false
 		}
 	}
 	return true
-}
-
-func validCompactionContent(raw json.RawMessage) bool {
-	if len(raw) == 0 {
-		return false
-	}
-	if strings.TrimSpace(string(raw)) == "null" {
-		return true
-	}
-	var content string
-	return json.Unmarshal(raw, &content) == nil
 }
 
 func unsupportedContentBlockPath(protocol, role string, raw json.RawMessage, path string) string {
