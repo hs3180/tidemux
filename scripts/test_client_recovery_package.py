@@ -250,13 +250,13 @@ def client_arguments(client, prompt, continuing=False):
             "--max-turns", "8", "--run-budget", "40"] + (["--continue"] if continuing else [])
 
 
-def execute(binary, client, executable, config, gateway, prompt, continuing=False):
+def execute(binary, client, executable, config, gateway, prompt, continuing=False, model=None):
     env = environment(gateway)
     if client == "kilo":
         env["KILO_CONFIG_CONTENT"] = json.dumps({"permission": {"*": "deny", "read": "allow", "edit": "allow",
             "external_directory": {str(gateway["work"]) + "/*": "allow"},
             "bash": {"*": "deny", "python3 -m unittest*": "allow"}}})
-    command = [str(binary), client, "--config", str(config), "--model", "anthropic/" + MODEL,
+    command = [str(binary), client, "--config", str(config), "--model", model or ("anthropic/" + MODEL),
                "--executable", str(executable), "--"] + client_arguments(client, prompt, continuing)
     process = subprocess.Popen(command, cwd=gateway["work"], env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=True)
@@ -539,7 +539,7 @@ def main():
     parser.add_argument("--client", action="append", choices=["claude", "kilo", "hermes"])
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--capacity-scope", choices=["gateway", "provider", "both"], default="both",
-                        help="both is the 0.3.2 release gate; gateway checks the older baseline")
+                        help="both is the 0.3.3 release gate; gateway checks the older baseline")
     args = parser.parse_args()
     binary = args.binary.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
