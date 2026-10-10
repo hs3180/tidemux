@@ -20,7 +20,7 @@ historical database identifiers when needed for attribution or compatibility.
 - Bug reports with clear steps to reproduce the problem.
 - Focused improvements that keep the tool **simple by design** - we prefer
   solving a real, proven need over speculative features.
-- Changes that respect user privacy, with no telemetry or undisclosed data collection.
+- Changes that respect user privacy, with no undisclosed data collection. Local optional diagnostic counters are documented in the availability manual.
 
 ## Get started
 
@@ -33,7 +33,9 @@ historical database identifiers when needed for attribution or compatibility.
 4. **Run the checks** before submitting:
    - `go build ./...` and `go test ./...`
    - `go vet ./...` and `gofmt -l .` (must be clean)
-   - Add/update tests for behavior you change.
+   - Add/update meaningful tests for behavior you change.
+   - Run `python3 scripts/check_docs.py` for Markdown changes and affected
+     package gates for runtime changes. See [core design](docs/design.md).
 
 ## Pull request template
 
@@ -46,7 +48,11 @@ trade-offs.
 - Write clear commit messages (why, not just what).
 - Address each review comment individually; if you disagree, explain why
   rather than ignoring it.
-- Be patient and kind - healthy collaboration is the goal.
+- Wait for human review of the latest PR commit and explicit user authorization
+  for that PR before merging. New commits require renewed review. Do not use
+  auto-merge, a merge queue or direct pushes to main. Follow [AGENTS](AGENTS.md).
+- Keep validation evidence and execution history outside the source tree; manuals
+  contain lasting methods and limits. See [release procedure](docs/releasing.md).
 
 ## Scope
 

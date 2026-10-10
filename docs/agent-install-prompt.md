@@ -34,12 +34,13 @@ Configure Claude Code with `tidemux claude --model MODEL_ID`, Hermes with
 `tidemux hermes --model MODEL_ID -- ...`, or dsh as a custom provider at
 `http://127.0.0.1:4000/v1` with model `MODEL_ID` and the local gateway key.
 Use `REF/MODEL_ID` for explicit provider selection or when model scopes overlap.
-If dsh saves the custom provider but omits its model from the picker, follow the
-full install guide's verified `agent-default-model` profile workaround; keep
-the gateway key in dsh's credential UI and preserve the rest of the profile.
+For dsh, choose Chat Completions or Anthropic Messages in its custom provider;
+select a configured model for a new session and enter the gateway credential
+only through the client credential UI. Follow its official model configuration
+guide for client settings.
 Codex may run this setup, but direct Codex model routing is unsupported because
 TideMux does not implement the Responses API. See the Codex custom-provider
-`wire_api` reference: https://developers.openai.com/codex/config-reference/.
+`wire_api` reference: https://learn.chatgpt.com/docs/config-file/config-reference.
 
 Verify the pinned binary version, run `tidemux doctor`, list the selected
 provider/model scope and run `tidemux gateway check` against the running local
