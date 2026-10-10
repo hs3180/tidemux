@@ -26,7 +26,10 @@ is on stdout. Startup failures exit with status 1. Help exits with status 0.
 // configuration or credentials. flag's raw diagnostics can contain private
 // arguments; discard them rather than attempting to redact arbitrary text.
 func serveCommand(args []string, stdout, stderr *os.File) error {
-	logger := observability.JSONLogger(stderr)
+	logger, err := serveRuntimeLogger(stdout, stderr)
+	if err != nil {
+		return err
+	}
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() { fmt.Fprint(stdout, serveUsage) }
@@ -49,6 +52,15 @@ func serveCommand(args []string, stdout, stderr *os.File) error {
 		return logStartupFailure(logger, stdout, "credentials", "credential_resolution_failed", err)
 	}
 	return serveConfigFile(resolved, *path, stdout, stderr)
+}
+
+func serveRuntimeLogger(stdout, stderr io.Writer) (*slog.Logger, error) {
+	logger, err := observability.NewJSONLogger(stderr, version)
+	if err != nil {
+		fmt.Fprintln(stdout, "TideMux could not start: logging (runtime_identity_failed). See docs/runtime-logging.md for recovery.")
+		return nil, &runtimeLoggedError{err: err}
+	}
+	return logger, nil
 }
 
 // Only callers' fixed code/stage pairs enter the event or the human message.
