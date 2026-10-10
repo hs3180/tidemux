@@ -8,6 +8,7 @@ import argparse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -46,22 +47,8 @@ class Upstream(BaseHTTPRequestHandler):
         else:
             self.reply({'id':'test','object':'chat.completion','model':'custom-model','choices':[{'index':0,'message':{'role':'assistant','content':'hi'},'finish_reason':'stop'}],'usage':{'prompt_tokens':7,'completion_tokens':2,'prompt_tokens_details':{'cached_tokens':3,'cache_write_tokens':1}}})
 
-def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--binary',required=True,type=Path);p.add_argument('--es-url',required=True);p.add_argument('--index-prefix',required=True);p.add_argument('--evidence',required=True,type=Path);p.add_argument('--docker',default='docker');a=p.parse_args()
-    parsed=urlparse(a.es_url)
-    if parsed.scheme!='http' or parsed.hostname not in ('127.0.0.1','localhost','::1') or parsed.username or parsed.path not in ('','/'):
-        raise SystemExit('Smoke requires an explicitly supplied isolated loopback HTTP ES fixture, without credentials.')
-    if not a.index_prefix.startswith('tidemux-smoke-') or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in a.index_prefix):raise SystemExit('Use a fresh lowercase tidemux-smoke-* prefix.')
-    root=a.evidence.resolve();root.mkdir(parents=True,exist_ok=False)
-    def es(method,path,value=None):
-        req=Request(a.es_url.rstrip('/')+path,None if value is None else json.dumps(value).encode(),{'Content-Type':'application/json'},method=method)
-        with urlopen(req,timeout=10) as r:return json.load(r)
-    version=es('GET','/')['version']['number']
-    if version!='8.19.5':raise RuntimeError('Expected tested ES 8.19.5, got '+version)
-    if es('GET','/_cat/indices/'+a.index_prefix+'*?format=json'):raise RuntimeError('Namespace already contains indices')
-    template=json.loads((ROOT/'scripts/fixtures/elasticsearch/index-template.json').read_text());template['index_patterns']=[a.index_prefix+'*']
-    es('PUT','/_index_template/'+a.index_prefix,template)
-    with running_gateway(a.binary.resolve(),upstream_handler=Upstream) as gateway:
+def prepare_fixture(binary, root):
+    with running_gateway(binary.resolve(),upstream_handler=Upstream) as gateway:
         status,_,headers=read_response(request(gateway,'openai',REQUEST_SENTINEL,session=SESSION_SENTINEL));success=headers['X-TideMux-Request-ID']
         if status!=200:raise RuntimeError('success fixture failed')
         status,data,headers=read_response(request(gateway,'openai',REQUEST_SENTINEL,stream=True,session=SESSION_SENTINEL));stream=headers['X-TideMux-Request-ID']
@@ -77,7 +64,7 @@ def main():
     startup_failures=[]
     for options,stage,code in [(['--startup-private-argument'], 'arguments', 'invalid_arguments'),
                                (['--config',str(root/'startup-private-missing-config')], 'config', 'config_load_failed')]:
-        failed=subprocess.run([str(a.binary.resolve()),'serve',*options],capture_output=True,text=True,timeout=10,
+        failed=subprocess.run([str(binary.resolve()),'serve',*options],capture_output=True,text=True,timeout=10,
                               env={'PATH':'/usr/bin:/bin','HOME':str(root)})
         failure_events=[json.loads(line) for line in failed.stderr.splitlines() if line.strip()]
         if failed.returncode!=1 or len(failure_events)!=1:raise RuntimeError('missing unique early startup failure')
@@ -85,10 +72,52 @@ def main():
         if (failure.get('event'),failure.get('outcome'),failure.get('startup_stage'),failure.get('error_code'))!=('gateway_start','error',stage,code):raise RuntimeError('early startup classification mismatch')
         if 'startup-private' in failed.stderr or str(root) in failed.stderr:raise RuntimeError('startup input leaked')
         runtime+=failed.stderr;events+=failure_events;startup_failures.append((stage,code))
-    binary_version=subprocess.check_output([str(a.binary.resolve()),'version'],text=True).strip()
+    binary_version=subprocess.check_output([str(binary.resolve()),'version'],text=True).strip()
     validate_runtime_events(events,binary_version,one_instance=False)
     if any(marker in runtime for marker in (GATEWAY_KEY,PROVIDER_KEY,REQUEST_SENTINEL,SESSION_SENTINEL)):raise RuntimeError('private data in runtime events')
     (root/'runtime.jsonl').write_text(runtime)
+    metadata = {'binary_version':binary_version, 'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),
+                'success_request_id':success, 'stream_failure_request_id':stream, 'rejection_request_id':rejected,
+                'startup_failures':startup_failures}
+    (root/'fixture.json').write_text(json.dumps(metadata,indent=2)+'\n')
+    return metadata
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--binary',type=Path);p.add_argument('--fixture',type=Path);p.add_argument('--prepare-only',action='store_true');p.add_argument('--es-url');p.add_argument('--index-prefix');p.add_argument('--evidence',required=True,type=Path);p.add_argument('--docker',default='docker');a=p.parse_args()
+    if bool(a.binary)==bool(a.fixture) or a.prepare_only and not a.binary:
+        raise SystemExit('Choose --binary or a package-produced --fixture; --prepare-only requires --binary.')
+    if a.prepare_only:
+        root=a.evidence.resolve();root.mkdir(parents=True,exist_ok=False)
+        print(json.dumps(prepare_fixture(a.binary.resolve(),root)));return
+    if not a.es_url or not a.index_prefix:
+        raise SystemExit('Ingestion requires --es-url and --index-prefix.')
+    parsed=urlparse(a.es_url)
+    if parsed.scheme!='http' or parsed.hostname not in ('127.0.0.1','localhost','::1') or parsed.username or parsed.path not in ('','/'):
+        raise SystemExit('Smoke requires an explicitly supplied isolated loopback HTTP ES fixture, without credentials.')
+    if not a.index_prefix.startswith('tidemux-smoke-') or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in a.index_prefix):raise SystemExit('Use a fresh lowercase tidemux-smoke-* prefix.')
+    root=a.evidence.resolve();root.mkdir(parents=True,exist_ok=False)
+    def es(method,path,value=None):
+        req=Request(a.es_url.rstrip('/')+path,None if value is None else json.dumps(value).encode(),{'Content-Type':'application/json'},method=method)
+        with urlopen(req,timeout=10) as r:return json.load(r)
+    version=es('GET','/')['version']['number']
+    if version!='8.19.5':raise RuntimeError('Expected tested ES 8.19.5, got '+version)
+    if es('GET','/_cat/indices/'+a.index_prefix+'*?format=json'):raise RuntimeError('Namespace already contains indices')
+    template=json.loads((ROOT/'scripts/fixtures/elasticsearch/index-template.json').read_text());template['index_patterns']=[a.index_prefix+'*']
+    es('PUT','/_index_template/'+a.index_prefix,template)
+    if a.fixture:
+        metadata=json.loads((a.fixture/'fixture.json').read_text())
+        runtime=(a.fixture/'runtime.jsonl').read_text()
+        (root/'runtime.jsonl').write_text(runtime)
+    else:
+        metadata=prepare_fixture(a.binary.resolve(),root)
+        runtime=(root/'runtime.jsonl').read_text()
+    if a.prepare_only:
+        print(json.dumps(metadata));return
+    events=[json.loads(line) for line in runtime.splitlines()]
+    binary_version=metadata['binary_version']
+    validate_runtime_events(events,binary_version,one_instance=False)
+    success,stream,rejected=(metadata[key] for key in ('success_request_id','stream_failure_request_id','rejection_request_id'))
+    startup_failures=metadata['startup_failures']
     now=datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace('+00:00','Z')
     synthetic={'timestamp':now,'level':'INFO','msg':'synthetic schema check','schema_version':2,'service':events[0]['service'],'event_id':'synthetic-schema-0001','event':'schema_smoke','requestId':'shared-smoke-id','outcome':'success','latency_ms':7,'queue_time_ms':2,'http_status':200,'upstream_attempted':True,'record_persisted':False}
     second=dict(synthetic,event='second_smoke',outcome='error',event_id='synthetic-schema-0002')
@@ -188,7 +217,7 @@ def main():
     failures=[json.loads(line) for line in (collector/'mapping-failures.jsonl').read_text().splitlines()]
     if not any(f.get('tidemux',{}).get('requestId')=='mapping-smoke-id' and 'latency_ms' in f['collector'].get('reason','') for f in failures):raise RuntimeError('mapping failure has no retained event/reason')
     (root/'documents.json').write_text(json.dumps(documents,indent=2))
-    result={'binary':str(a.binary),'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'canonical_usage_aggregations':True,'canonical_model_query':True,'startup_failure_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'event_id_replayed_twice_deduplicated':True,'runtime_service_metadata_indexed':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
+    result={'binary_sha256':metadata['binary_sha256'],'binary_version':binary_version,'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'canonical_usage_aggregations':True,'canonical_model_query':True,'startup_failure_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'event_id_replayed_twice_deduplicated':True,'runtime_service_metadata_indexed':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
     (root/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 
 if __name__=='__main__':main()
