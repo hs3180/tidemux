@@ -60,14 +60,27 @@ tidemux hermes --model deepseek-flash -- -q 'Explain this project'
 ```
 
 `--model` is required by these TideMux launch commands. If you configure a
-client directly instead, use a bare model ID only when it maps to one provider,
-or use `REF/MODEL_ID` to select explicitly. Either
+client directly instead, use a bare model ID when it maps to one provider or a
+shared-model strategy is enabled, or use `REF/MODEL_ID` to select explicitly. Either
 OpenAI or Anthropic client can use any selected provider; TideMux converts
 between client and upstream protocols when necessary. A provider/model error
 does not trigger a retry on another provider. Install each client first. If
 its executable is not on `PATH`, pass
 `--executable /absolute/path/to/client` before `--`. Arguments after `--` go
 to the client.
+
+When multiple providers serve the same model, enable a
+[shared-model strategy](protocols.md) to launch with its bare ID:
+
+```sh
+tidemux routing set --shared-model-strategy random
+tidemux claude --model glm-5.3
+```
+
+The gateway selects the provider. With `random`, a stable client session ID
+keeps the session bound to that provider. The default strategy is `off`, which
+requires `REF/MODEL_ID` when provider scopes overlap. Shared-model launchers do
+not advertise one candidate's declared context or output limits.
 
 Hermes uses a named custom provider with `chat_completions` transport. Selecting
 its `openai-api` provider can select the Responses API, which TideMux does not
