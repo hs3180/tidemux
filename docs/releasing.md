@@ -43,6 +43,19 @@ Install Claude Code, Kilo CLI and Hermes Agent separately, then run:
 python3 scripts/test_client_recovery_package.py --binary /path/to/extracted/tidemux --evidence /path/to/private/evidence
 ```
 
+Verify shared-model launch through the packaged gateway, including default
+ambiguity, explicit scope, session binding, cooled model skips and actual key
+attempt counts. The CI runs the disposable HTTP child gate. Final acceptance
+also requires all installed clients under both shared strategies:
+
+```sh
+python3 scripts/test_shared_model_launch_package.py --binary /path/to/extracted/tidemux --installed-clients --evidence /path/to/private/shared-launch-evidence
+```
+
+The fixture supplies a stable gateway session header to real client requests;
+this verifies the affinity contract without claiming every client generates
+that header itself. Models and credentials are scripted loopback fixtures.
+
 All three clients and both gateway/provider capacity scopes are required.
 Diagnostic client/scope subsets do not satisfy the full gate. The script uses
 synthetic Keychain responses, isolated child profiles and loopback model

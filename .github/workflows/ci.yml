@@ -49,6 +49,7 @@ jobs:
                              "test_tool_history_package.py",
                              "test_glm_tool_results_package.py",
                              "test_shared_model_affinity_package.py",
+                             "test_shared_model_launch_package.py",
                              "test_auto_chain_package.py",
                              "test_route_recovery_package.py",
                              "test_availability_package.py",

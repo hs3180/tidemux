@@ -250,13 +250,13 @@ def client_arguments(client, prompt, continuing=False):
             "--max-turns", "8", "--run-budget", "40"] + (["--continue"] if continuing else [])
 
 
-def execute(binary, client, executable, config, gateway, prompt, continuing=False):
+def execute(binary, client, executable, config, gateway, prompt, continuing=False, model=None):
     env = environment(gateway)
     if client == "kilo":
         env["KILO_CONFIG_CONTENT"] = json.dumps({"permission": {"*": "deny", "read": "allow", "edit": "allow",
             "external_directory": {str(gateway["work"]) + "/*": "allow"},
             "bash": {"*": "deny", "python3 -m unittest*": "allow"}}})
-    command = [str(binary), client, "--config", str(config), "--model", "anthropic/" + MODEL,
+    command = [str(binary), client, "--config", str(config), "--model", model or ("anthropic/" + MODEL),
                "--executable", str(executable), "--"] + client_arguments(client, prompt, continuing)
     process = subprocess.Popen(command, cwd=gateway["work"], env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=True)

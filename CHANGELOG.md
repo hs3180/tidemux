@@ -5,6 +5,8 @@
 - Share bounded provider/model availability across explicit, shared-model and
   auto-chain selection and the post-queue dispatch boundary. Recover through
   one request-driven probe, bounded backoff/jitter and generation/epoch fencing.
+- Let client launchers delegate overlapping bare model IDs to enabled shared-model
+  routing, without advertising one candidate's context/output limits.
 - Add authenticated availability API/CLI with safe key labels, cooldowns,
   actual HTTP attempt/outcome counters and bounded recent failover diagnosis.
   Optional key telemetry can be changed without altering routing/accounting.
