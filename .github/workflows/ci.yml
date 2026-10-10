@@ -65,3 +65,59 @@ jobs:
           name: candidate-darwin-arm64
           path: dist/
           if-no-files-found: error
+  collectors:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.1'
+          cache: true
+      - name: Build a native collector fixture from this commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/collector-evidence"
+          CGO_ENABLED=0 go build -trimpath -buildvcs=true -o "$RUNNER_TEMP/tidemux" ./cmd/tidemux
+          git rev-parse HEAD > "$RUNNER_TEMP/collector-evidence/source-commit.txt"
+          go version -m "$RUNNER_TEMP/tidemux" > "$RUNNER_TEMP/collector-evidence/build.txt"
+          sha256sum "$RUNNER_TEMP/tidemux" > "$RUNNER_TEMP/collector-evidence/binary-sha256.txt"
+      - name: Start isolated Elasticsearch and install official Filebeat
+        run: |
+          docker run --detach --name tidemux-es -p 9200:9200 \
+            -e discovery.type=single-node -e xpack.security.enabled=false \
+            -e 'ES_JAVA_OPTS=-Xms512m -Xmx512m' \
+            docker.elastic.co/elasticsearch/elasticsearch:8.19.5
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:9200/ > "$RUNNER_TEMP/collector-evidence/elasticsearch.json"; then break; fi
+            sleep 2
+          done
+          test -s "$RUNNER_TEMP/collector-evidence/elasticsearch.json"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --remote-name \
+            https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-9.4.2-linux-x86_64.tar.gz
+          curl --fail --silent --show-error --location --remote-name \
+            https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-9.4.2-linux-x86_64.tar.gz.sha512
+          sha512sum --check filebeat-9.4.2-linux-x86_64.tar.gz.sha512
+          cp filebeat-9.4.2-linux-x86_64.tar.gz.sha512 collector-evidence/
+          tar -xzf filebeat-9.4.2-linux-x86_64.tar.gz
+      - name: Verify actual Logstash and Filebeat ingestion and replay
+        run: |
+          python3 scripts/test_elasticsearch_package.py --binary "$RUNNER_TEMP/tidemux" \
+            --es-url http://127.0.0.1:9200 --index-prefix "tidemux-smoke-ls-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --evidence "$RUNNER_TEMP/collector-evidence/logstash"
+          python3 scripts/test_usage_logs_package.py --binary "$RUNNER_TEMP/tidemux" \
+            --evidence "$RUNNER_TEMP/collector-evidence/usage"
+          python3 scripts/test_filebeat_package.py --binary "$RUNNER_TEMP/tidemux" \
+            --logs "$RUNNER_TEMP/collector-evidence/usage/final" \
+            --records "$RUNNER_TEMP/collector-evidence/usage/final-records.json" \
+            --es-url http://127.0.0.1:9200 --index-prefix "tidemux-smoke-fb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --filebeat "$RUNNER_TEMP/filebeat-9.4.2-linux-x86_64/filebeat" \
+            --evidence "$RUNNER_TEMP/collector-evidence/filebeat"
+      - name: Retain collector diagnostics
+        if: always()
+        run: docker logs tidemux-es > "$RUNNER_TEMP/collector-evidence/elasticsearch.log" 2>&1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: collector-evidence
+          path: ${{ runner.temp }}/collector-evidence/
+          if-no-files-found: error

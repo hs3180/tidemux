@@ -20,6 +20,22 @@ from runtime_event_checks import validate_runtime_events
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def published_events(path):
+    """Return output deltas, excluding the cumulative shutdown report."""
+    counts = {"total": 0, "acked": 0, "duplicates": 0}
+    for line in path.read_text().splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not entry.get("message", "").startswith("Non-zero metrics"):
+            continue
+        events = entry.get("monitoring", {}).get("metrics", {}).get("libbeat", {}).get("output", {}).get("events", {})
+        for key in counts:
+            counts[key] += events.get(key, 0)
+    return counts
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
@@ -72,9 +88,12 @@ def main():
     tool_version = subprocess.check_output([args.filebeat, "version"], text=True).strip()
     subprocess.run([args.filebeat, "test", "config", "-c", str(config)], env=env, check=True)
     documents = []
+    replay_output = []
     for replay in (1, 2):
-        log = (root / ("filebeat-replay-%d.log" % replay)).open("w")
+        log_path = root / ("filebeat-replay-%d.log" % replay)
+        log = log_path.open("w")
         process = subprocess.Popen([args.filebeat, "-e", "-c", str(config),
+                                    "-E", "logging.metrics.period=1s",
                                     "--path.data", str(root / ("data-%d" % replay)),
                                     "--path.logs", str(root / ("logs-%d" % replay))],
                                    env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -88,8 +107,14 @@ def main():
                     documents = es("POST", "/" + args.index_prefix + "*/_search",
                                    {"size": len(expected) + 1, "version": True,
                                     "query": {"match_all": {}}})["hits"]["hits"]
+                    output = published_events(log_path)
+                    # Filebeat 9.x uses create: a replay is a duplicate (409)
+                    # and leaves _version=1. Index can instead yield version 2.
                     if (len(documents) == len(expected) and {hit["_id"] for hit in documents} == expected.keys()
-                            and all(hit["_version"] == replay for hit in documents)):
+                            and output["total"] >= len(expected)
+                            and output["acked"] + output["duplicates"] >= len(expected)
+                            and all(hit["_version"] in (1, replay) for hit in documents)):
+                        replay_output.append(output)
                         break
                 except HTTPError as error:
                     if error.code != 404:
@@ -129,6 +154,7 @@ def main():
         (root / (name + ".json")).write_text(json.dumps(data, indent=2) + "\n")
     result = {"passed": True, "binary_version": version, "filebeat": tool_version,
               "elasticsearch": es_version, "distinct_events": len(expected), "replays": 2,
+              "replay_output": replay_output, "document_versions": sorted({hit["_version"] for hit in documents}),
               "exact_record_and_event_time": True, "known_usage_records": known, "tokens": counts}
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result))

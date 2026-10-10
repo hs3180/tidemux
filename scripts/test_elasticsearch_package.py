@@ -109,7 +109,7 @@ def main():
     (collector/'test-ca.pem').write_text(ssl.DER_cert_to_PEM_cert(certificate))
     name=a.index_prefix+'-collector' 
     def docker_run(settings, container=name):
-        command=[a.docker,'run','--name',container,'-v',str(collector)+':/work']
+        command=[a.docker,'run','--name',container,'--add-host=host.docker.internal:host-gateway','-v',str(collector)+':/work']
         for key,value in settings.items():command+=['-e',key+'='+value]
         return command
     docker=docker_run(env)

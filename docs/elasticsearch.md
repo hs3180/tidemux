@@ -45,8 +45,9 @@ restarts; handle rotation according to the
 
 The event identity fields are added in 0.3.3; older schema-2 records without an
 `event_id` need a separate ingestion policy. Copying `event_id` preserves it in `_source` as well as using it for `_id`.
-Replaying the same line into the same index overwrites its document. Daily
-indices must use event time, including during replay. IDs do not deduplicate
+Replaying the same line into the same index leaves one document: Filebeat can
+acknowledge an existing ID as a duplicate, while Logstash's index operation
+replaces it. Daily indices must use event time, including during replay. IDs do not deduplicate
 across different indices or independent client log records. Choose one source
 for each request; stderr and session files contain identical event copies.
 `requestId` correlates multiple events and audit rows; it is not a document key.
