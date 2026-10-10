@@ -43,6 +43,7 @@ jobs:
                       raise SystemExit("Test fixtures and example directories must not ship")
                   archive.extractall(temporary)
               binary, = Path(temporary).glob("tidemux-*/tidemux")
+              subprocess.run(["python3", "scripts/test_install_package.py", "--directory", str(archives[0].parent)], check=True)
               subprocess.run(["python3", "scripts/check_docs.py", "--root", str(binary.parent)], check=True)
               for script in ["test_anthropic_server_tools_package.py",
                              "test_tool_history_package.py",

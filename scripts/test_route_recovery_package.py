@@ -83,8 +83,8 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
-    if subprocess.check_output([str(binary), "version"], text=True).strip() != "0.3.2":
-        raise RuntimeError("expected a packaged 0.3.2 candidate")
+    if subprocess.check_output([str(binary), "version"], text=True).strip() != "0.3.3":
+        raise RuntimeError("expected a packaged 0.3.3 candidate")
     scenarios = []
     with ExitStack() as stack:
         for protocol in ("openai", "anthropic"):

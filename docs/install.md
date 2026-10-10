@@ -19,12 +19,12 @@ Upgrade with `brew upgrade tidemux`; uninstall with `brew uninstall tidemux`.
 
 ## Install without Homebrew
 
-Install version 0.3.2:
+Install version 0.3.3:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.2/scripts/install.sh -o /tmp/tidemux-install.sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.3/scripts/install.sh -o /tmp/tidemux-install.sh
 less /tmp/tidemux-install.sh
-TIDEMUX_VERSION=0.3.2 sh /tmp/tidemux-install.sh
+TIDEMUX_VERSION=0.3.3 sh /tmp/tidemux-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -68,3 +68,13 @@ helper once:
 ```sh
 brew install terminal-notifier
 ```
+
+## Uninstall and preserve data
+
+For a standalone installation, remove only the `tidemux` executable from its
+install directory. Homebrew users can run `brew uninstall tidemux`. Stop the
+gateway before removing its executable. Configuration, Keychain items, the
+SQLite ledger, logs, statements and reports remain separate; preserve them for
+reinstallation or further accounting. Data deletion is a separate operator
+choice. Never delete a live ledger lock or replace a Homebrew-managed binary
+with the standalone installer.

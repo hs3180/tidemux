@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	version = "0.3.2"
+	version = "0.3.3"
 	usage   = `usage: tidemux <command> [options]
 
 commands:
@@ -32,7 +32,7 @@ commands:
   provider    add, inspect, edit and reset budgets for upstream providers
   auto-chain  show, replace or clear the instance provider/model chain
   routing     configure shared-model selection and billing failover
-  gateway     configure settings or check the running gateway
+  gateway     configure settings or query the running gateway
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
               inspect delivery attempts with report deliveries --id N

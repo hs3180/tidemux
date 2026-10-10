@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.3 — Unreleased
+
+- Share bounded provider/model availability across explicit, shared-model and
+  auto-chain selection and the post-queue dispatch boundary. Recover through
+  one request-driven probe, bounded backoff/jitter and generation/epoch fencing.
+- Add authenticated availability API/CLI with safe key labels, cooldowns,
+  actual HTTP attempt/outcome counters and bounded recent failover diagnosis.
+  Optional key telemetry can be changed without altering routing/accounting.
+- Attach service version, process instance and persistent unique event ID to
+  every runtime JSONL event, including early startup failures. Preserve the
+  same encoded terminal record in stderr and session files for replay deduping.
+- Provide concise Filebeat/Logstash collection instructions. Keep test fixtures
+  and examples out of distributed archives and Homebrew installation.
+- Consolidate user manuals and core design, add repository review rules, remove
+  release execution history from distributed docs and check local links/anchors.
+
+
 ## 0.3.2 — 2026-10-10
 
 - Coordinate hot-reloaded routes by provider/model identity. New configuration
