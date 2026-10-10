@@ -199,18 +199,12 @@ func TestSharedModelFailureBindingProtectionAndReconfiguration(t *testing.T) {
 			failure := &adapter.CallError{FailoverSafe: true, Category: category}
 			a.recordFailure(1, "a", "shared-model", gen, failure, nil, false)
 			selectProvider("active", 1, "b")
-			now = started.Add(5*time.Minute - time.Nanosecond)
+			cooldown := recoveryCooldown(failure)
+			now = started.Add(cooldown - time.Nanosecond)
 			selectProvider("before-protection-expiry", 1, "b")
-			now = started.Add(5 * time.Minute)
-			want := "a"
-			if category == adapter.ProviderErrorModelNotFound {
-				now = started.Add(48 * time.Hour)
-				want = "b"
-			}
-			selectProvider("after-protection-expiry", 1, want)
-			if category != adapter.ProviderErrorModelNotFound {
-				selectProvider("active", 1, "b")
-			}
+			now = started.Add(cooldown)
+			selectProvider("after-protection-expiry", 1, "a")
+			selectProvider("active", 1, "b")
 			gen = 2
 			a.activate(2, func(binding sharedModelBinding) bool { return binding.generation == gen })
 			if len(a.failedRoutes) != 0 {

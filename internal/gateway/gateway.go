@@ -647,7 +647,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 					route = rebound[0]
 				}
 				r = withRequestLogDetails(r, route.provider, route.model)
-				response, id, callErr, handled = h.callRouteCandidate(w, r, protocol, route, body, options, sink)
+				response, id, callErr, handled = h.callRouteWithRecovery(w, r, protocol, route, body, options, sink, &delivered)
 				var preDispatchErr *adapter.CallError
 				if route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || preDispatchErr.Code != "provider_keys_cooling_down" {
 					break
@@ -665,12 +665,6 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 				return nil, id, callErr, false
 			}
 			lastErr = adapterErr
-			if route.autoChainIndex != nil {
-				h.autoChain.recordFailure(*route.autoChainIndex, len(h.config.AutoChain), adapterErr, r.Context().Err(), delivered)
-			}
-			if route.sessionKey != nil {
-				h.sharedAffinity.recordFailure(h.routingEpoch, route.provider, route.model, h.providerGenerations[route.provider], adapterErr, r.Context().Err(), delivered)
-			}
 			if firstBalanceErr == nil && adapterErr.Category == adapter.ProviderErrorInsufficientBalance {
 				firstBalanceErr, firstBalanceID = adapterErr, id
 			}

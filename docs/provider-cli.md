@@ -411,8 +411,13 @@ An explicit model request never uses the auto chain.
 An exact, safe model-not-found, temporarily-unavailable or insufficient-balance
 classification makes that route invalid for later requests. Existing sessions
 bound to it must select again, as do unbound sessions; valid bindings to other
-entries are retained. The failed entry remains skipped until its connection
-generation changes or the route is removed from an applied configuration.
+entries are retained. A failed pair cools down for 30 seconds, or five minutes
+for insufficient balance; a longer upstream retry delay or key cooldown also
+applies. After that, one later request can test the pair while concurrent
+requests use another eligible route (or receive `auto_chain_exhausted`). A
+successful test restores its configured preference for new bindings; a failed
+test starts another cooldown. An exhausted chain therefore recovers without a
+restart or configuration change. Healthy existing bindings do not move back.
 A transport failure proven to precede request headers
 may also advance the preference when safe and before response output.
 Validation, authentication, unsupported-request errors, unclassified billing
@@ -490,11 +495,14 @@ including all-key cooldown, TideMux removes that binding and selects another
 eligible provider for a later request. A safely classified model-not-found,
 insufficient-balance or temporarily-unavailable failure likewise invalidates
 the affected route for later requests and prevents immediately selecting that
-failed pair again. A model-not-found marker remains until that provider's
-connection generation changes or the route is removed from an applied
-configuration. Insufficient-balance and temporarily-unavailable failures have
-a five-minute protection period; the route may become eligible afterwards,
-but an already valid binding to another provider does not move back merely
+failed pair again. Model-not-found and temporarily-unavailable failures cool
+down for 30 seconds; insufficient balance cools down for five minutes. A longer
+upstream retry delay or key cooldown also applies. After expiry, one later
+request tests the failed pair; concurrent requests select another eligible
+provider or receive `provider_keys_cooling_down`. A successful test restores
+eligibility; a failed test starts another cooldown. No background request is
+sent, and recovery needs no restart or configuration change. An already valid
+binding to another provider does not move back merely
 because the failed route recovers. Before any upstream dispatch, readiness is
 rechecked within the request's original configuration view. Once dispatched,
 a session-bound request never switches providers, even if billing-exhaustion failover is

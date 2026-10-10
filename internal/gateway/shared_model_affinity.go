@@ -38,7 +38,7 @@ type sharedModelAffinity struct {
 	nextSweep    time.Time
 	now          func() time.Time
 	activeEpoch  uint64
-	failedRoutes map[sharedModelRoute]time.Time
+	failedRoutes map[sharedModelRoute]*routeFailure
 }
 
 func newSharedModelSessionKey(namespace, protocol, model, sessionID string) sharedModelSessionKey {
@@ -93,9 +93,12 @@ func (a *sharedModelAffinity) activateForView(epoch uint64, valid func(sharedMod
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.activeEpoch = epoch
-	for route := range a.failedRoutes {
+	for route, failure := range a.failedRoutes {
 		if !valid(sharedModelBinding{provider: route.provider, model: route.model, generation: route.generation}) || generation != nil && route.generation != generation(route.provider) {
 			delete(a.failedRoutes, route)
+		} else {
+			// An old view's in-flight probe cannot own the new view's state.
+			a.failedRoutes[route] = &routeFailure{retryAt: failure.retryAt}
 		}
 	}
 	for key, binding := range a.bindings {
@@ -129,12 +132,7 @@ func (a *sharedModelAffinity) selectProviderForView(key sharedModelSessionKey, m
 	eligible := make([]string, 0, len(candidates))
 	for _, provider := range candidates {
 		route := sharedModelRoute{provider: provider, model: model, generation: generation(provider)}
-		until, failed := a.failedRoutes[route]
-		if failed && !until.IsZero() && !now.Before(until) {
-			delete(a.failedRoutes, route)
-			failed = false
-		}
-		if !failed && available(provider) {
+		if a.failedRoutes[route].eligible(now) && available(provider) {
 			eligible = append(eligible, provider)
 		}
 	}
@@ -178,20 +176,54 @@ func (a *sharedModelAffinity) recordFailure(epoch uint64, provider, model string
 		return
 	}
 	if a.failedRoutes == nil {
-		a.failedRoutes = make(map[sharedModelRoute]time.Time)
+		a.failedRoutes = make(map[sharedModelRoute]*routeFailure)
 	}
-	until := time.Time{}
-	if callErr.Category != adapter.ProviderErrorModelNotFound {
-		now := time.Now()
-		if a.now != nil {
-			now = a.now()
-		}
-		until = now.Add(billingExhaustionCooldown)
+	now := time.Now()
+	if a.now != nil {
+		now = a.now()
 	}
-	a.failedRoutes[sharedModelRoute{provider: provider, model: model, generation: generation}] = until
+	a.failedRoutes[sharedModelRoute{provider: provider, model: model, generation: generation}] = &routeFailure{retryAt: now.Add(recoveryCooldown(callErr))}
 	for key, binding := range a.bindings {
 		if binding.provider == provider && binding.model == model && binding.generation == generation {
 			delete(a.bindings, key)
 		}
+	}
+}
+
+func (a *sharedModelAffinity) beginRecovery(epoch uint64, route sharedModelRoute) (*routeFailure, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if epoch != a.activeEpoch {
+		return nil, true // Old admitted views cannot mutate active health state.
+	}
+	now := time.Now()
+	if a.now != nil {
+		now = a.now()
+	}
+	probe := a.failedRoutes[route]
+	if !probe.eligible(now) {
+		return nil, false
+	}
+	if probe != nil {
+		probe.probing = true
+	}
+	return probe, true
+}
+
+func (a *sharedModelAffinity) finishRecovery(epoch uint64, route sharedModelRoute, probe *routeFailure, handled bool, callErr, ctxErr error) {
+	if probe == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if epoch != a.activeEpoch || a.failedRoutes[route] != probe {
+		return
+	}
+	now := time.Now()
+	if a.now != nil {
+		now = a.now()
+	}
+	if completeRecovery(probe, now, handled, callErr, ctxErr) {
+		delete(a.failedRoutes, route)
 	}
 }
