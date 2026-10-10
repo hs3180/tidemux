@@ -66,7 +66,7 @@ separate cache-write price.
 Rates are stored per model with currency, source and version. TideMux supplies a
 fixed peak price for recognized DeepSeek endpoints and models; custom `prices`
 entries override those built-in rates. The 0.1.1 CLI used a legacy top-level
-`configure` flow; the 0.2.2 CLI manages rates with
+`configure` flow; the CLI manages rates with
 `tidemux provider pricing`. There is no generic price discovery, default
 currency, or provider discount calculation.
 The gateway's configuration supplies the upstream context. Successful requests
@@ -106,12 +106,8 @@ add `--json` for a structured array. Local rejections are not billed attempts.
 Preserve unknown-cost counts and group by currency rather than silently treating
 unknown amounts as free or adding different currencies.
 
-Validation compares each response's request ID and usage with its audit record,
-then independently recomputes cost from the recorded rates. Tests cover unknown
-usage, failures, cancellation, queueing and atomic writes. Real DeepSeek acceptance
-also compared response/cache usage and independently calculated Decimal estimates
-with recorded results. Those runs verified selected configured prices; they did
-not reconcile supplier invoices.
+Cost estimates use the recorded usage and price snapshot. They are not supplier
+invoices; use reconciliation to compare normalized supplier statements.
 
 ## Automatic reconciliation
 

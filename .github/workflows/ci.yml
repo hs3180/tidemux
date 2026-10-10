@@ -21,25 +21,29 @@ jobs:
           CGO_ENABLED=0 go vet ./...
           go test -race ./...
           python3 scripts/test_provider_add_pty.py
-          python3 -m py_compile scripts/test_elasticsearch_package.py
+          python3 -m py_compile scripts/test_elasticsearch_package.py scripts/test_filebeat_package.py
           python3 -m py_compile scripts/test_client_recovery_package.py
           sh -n scripts/install.sh
           python3 scripts/test_install.py
           python3 scripts/test_client_commands.py
+          python3 scripts/check_docs.py
       - name: Build candidate
         run: python3 scripts/release.py --build-id commit
       - name: Verify packaged routing, budgets and logs
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import subprocess, tarfile, tempfile
+          import os, subprocess, tarfile, tempfile
           archives = list(Path("dist").glob("*/*.tar.gz"))
           if len(archives) != 1:
               raise SystemExit("Expected one immutable candidate archive")
           with tempfile.TemporaryDirectory(prefix="tidemux-package-ci.") as temporary:
               with tarfile.open(archives[0]) as archive:
+                  if any("/examples/" in member.name or "/scripts/" in member.name for member in archive.getmembers()):
+                      raise SystemExit("Test fixtures and example directories must not ship")
                   archive.extractall(temporary)
               binary, = Path(temporary).glob("tidemux-*/tidemux")
+              subprocess.run(["python3", "scripts/check_docs.py", "--root", str(binary.parent)], check=True)
               for script in ["test_anthropic_server_tools_package.py",
                              "test_tool_history_package.py",
                              "test_glm_tool_results_package.py",
@@ -58,10 +62,73 @@ jobs:
                              "test_startup_logs_package.py",
                              "test_usage_logs_package.py",
                              "test_runtime_logs_package.py"]:
-                  subprocess.run(["python3", "scripts/" + script, "--binary", str(binary)], check=True)
+                  options = []
+                  if script == "test_usage_logs_package.py":
+                      options = ["--evidence", os.environ["RUNNER_TEMP"] + "/collector-input/usage"]
+                  subprocess.run(["python3", "scripts/" + script, "--binary", str(binary), *options], check=True)
+              subprocess.run(["python3", "scripts/test_elasticsearch_package.py", "--binary", str(binary),
+                              "--prepare-only", "--evidence", os.environ["RUNNER_TEMP"] + "/collector-input/logstash"], check=True)
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: candidate-darwin-arm64
           path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: collector-input
+          path: ${{ runner.temp }}/collector-input/
+          if-no-files-found: error
+  collectors:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: collector-input
+          path: ${{ runner.temp }}/collector-input/
+      - name: Record source and Darwin package identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/collector-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/collector-evidence/source-commit.txt"
+          cp "$RUNNER_TEMP/collector-input/logstash/fixture.json" "$RUNNER_TEMP/collector-evidence/fixture.json"
+      - name: Start isolated Elasticsearch and install official Filebeat
+        run: |
+          docker run --detach --name tidemux-es -p 9200:9200 \
+            -e discovery.type=single-node -e xpack.security.enabled=false \
+            -e 'ES_JAVA_OPTS=-Xms512m -Xmx512m' \
+            docker.elastic.co/elasticsearch/elasticsearch:8.19.5
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:9200/ > "$RUNNER_TEMP/collector-evidence/elasticsearch.json"; then break; fi
+            sleep 2
+          done
+          test -s "$RUNNER_TEMP/collector-evidence/elasticsearch.json"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --remote-name \
+            https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-9.4.2-linux-x86_64.tar.gz
+          curl --fail --silent --show-error --location --remote-name \
+            https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-9.4.2-linux-x86_64.tar.gz.sha512
+          sha512sum --check filebeat-9.4.2-linux-x86_64.tar.gz.sha512
+          cp filebeat-9.4.2-linux-x86_64.tar.gz.sha512 collector-evidence/
+          tar -xzf filebeat-9.4.2-linux-x86_64.tar.gz
+      - name: Verify actual Logstash and Filebeat ingestion and replay
+        run: |
+          python3 scripts/test_elasticsearch_package.py --fixture "$RUNNER_TEMP/collector-input/logstash" \
+            --es-url http://127.0.0.1:9200 --index-prefix "tidemux-smoke-ls-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --evidence "$RUNNER_TEMP/collector-evidence/logstash"
+          python3 scripts/test_filebeat_package.py --fixture "$RUNNER_TEMP/collector-input/logstash" \
+            --logs "$RUNNER_TEMP/collector-input/usage/final" \
+            --records "$RUNNER_TEMP/collector-input/usage/final-records.json" \
+            --es-url http://127.0.0.1:9200 --index-prefix "tidemux-smoke-fb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --filebeat "$RUNNER_TEMP/filebeat-9.4.2-linux-x86_64/filebeat" \
+            --evidence "$RUNNER_TEMP/collector-evidence/filebeat"
+      - name: Retain collector diagnostics
+        if: always()
+        run: docker logs tidemux-es > "$RUNNER_TEMP/collector-evidence/elasticsearch.log" 2>&1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: collector-evidence
+          path: ${{ runner.temp }}/collector-evidence/
           if-no-files-found: error

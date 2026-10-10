@@ -38,7 +38,7 @@ the endpoint; use `--name LABEL` only when you want a different reference. If
 the endpoint does not identify the protocol, `--protocol openai` or
 `--protocol anthropic` forces it. `--model MODEL[,MODEL...]` restricts the
 provider to those IDs; omit it to allow all models. Use `tidemux provider list`
-to get the provider reference. A running v0.3.1 gateway automatically applies
+to get the provider reference. A running gateway automatically applies
 provider changes from its config file; wait for applied status before routing
 requests to a newly added provider. In a client, use the
 bare upstream model ID when its configured scope selects one provider, or use
@@ -51,9 +51,9 @@ gateway credential settings are retained. Remove an obsolete top-level `budget`
 field before configuring a provider policy with `tidemux provider budget REF`.
 Configuration changes are validated and atomically installed.
 
-## Automatic provider application (0.3.1)
+## Automatic configuration application
 
-Provider automatic application was added in 0.3.1. The 0.3.2 contract also
+Automatic configuration application also
 coordinates compatible route and session state across configuration changes.
 
 A running `tidemux serve --config PATH` polls that file and its provider
@@ -147,7 +147,16 @@ provider changes automatically. Removing every named provider is supported in a
 running gateway and leaves an empty model catalog. No persisted config or ledger
 schema is added by automatic application.
 
-## Provider logical-session capacity (0.3.2)
+## Gateway availability
+
+Run `tidemux gateway availability` or add `--json` to inspect provider/model
+state, connection generations, retry times, key cooldowns and optional counters.
+The running endpoint requires gateway authentication. It sends no upstream
+requests. `tidemux gateway configure --health-diagnostics=false` disables
+optional key counters/history while retaining operational cooldown and routing
+state. See [availability](availability.md) for counting/reset and recovery rules.
+
+## Provider logical-session capacity
 
 Configure a cap for one provider without changing the optional gateway-wide
 ceiling:
@@ -524,15 +533,9 @@ separately. A mapped balance exhaustion cools all keys in that provider profile
 for five minutes; cooldowns reset when the gateway restarts. Budget reservations,
 usage and cost remain attached to the provider that handled each attempt.
 
-The new config fields are omitted while routing is disabled, so an untouched
-0.2.2 config remains readable by both versions. Before rolling back a config
-that uses 0.3.0 routing fields, clear the instance auto chain and disable
-both routing options with the commands above; then install v0.2.2. The local
-ledger and Keychain entries do not need migration. Also remove any
-`temporarily_unavailable` error-code mapping first because v0.2.2 does not
-recognize that new category; list and remove mappings with
-`tidemux provider error-map list REF` and
-`tidemux provider error-map remove REF --code CODE [--status STATUS]`.
+Keep a private configuration backup when changing versions. An older binary can
+reject newer routing fields or error categories; validate the selected version
+before replacing a running installation. Preserve the ledger and Keychain data.
 
 ## Provider budget
 
