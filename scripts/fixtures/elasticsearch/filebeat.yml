@@ -1,4 +1,5 @@
-# Filebeat 9.4.2. Install index-template.json before the first event.
+# Test fixture for Filebeat 9.4.2; not distributed or an operator deployment.
+# Install the test index template before the first event.
 # Collect either runtime stderr or session files, not both copies of requests.
 filebeat.inputs:
   - type: filestream
@@ -18,6 +19,8 @@ processors:
       test: ["2026-10-09T12:40:00.047Z"]
   - copy_fields:
       fields:
+        - from: tidemux.event_id
+          to: "@metadata._id"
         - from: tidemux.event
           to: event.action
         - from: tidemux.level

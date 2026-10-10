@@ -18,6 +18,7 @@ import time
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from runtime_event_checks import validate_runtime_events
 from test_client_reliability_package import running_gateway, request, read_response, start_frame
 from test_runtime_logs_package import GATEWAY_KEY, PROVIDER_KEY, REQUEST_SENTINEL, SESSION_SENTINEL
 
@@ -58,7 +59,7 @@ def main():
     version=es('GET','/')['version']['number']
     if version!='8.19.5':raise RuntimeError('Expected tested ES 8.19.5, got '+version)
     if es('GET','/_cat/indices/'+a.index_prefix+'*?format=json'):raise RuntimeError('Namespace already contains indices')
-    template=json.loads((ROOT/'examples/elasticsearch/index-template.json').read_text());template['index_patterns']=[a.index_prefix+'*']
+    template=json.loads((ROOT/'scripts/fixtures/elasticsearch/index-template.json').read_text());template['index_patterns']=[a.index_prefix+'*']
     es('PUT','/_index_template/'+a.index_prefix,template)
     with running_gateway(a.binary.resolve(),upstream_handler=Upstream) as gateway:
         status,_,headers=read_response(request(gateway,'openai',REQUEST_SENTINEL,session=SESSION_SENTINEL));success=headers['X-TideMux-Request-ID']
@@ -84,22 +85,26 @@ def main():
         if (failure.get('event'),failure.get('outcome'),failure.get('startup_stage'),failure.get('error_code'))!=('gateway_start','error',stage,code):raise RuntimeError('early startup classification mismatch')
         if 'startup-private' in failed.stderr or str(root) in failed.stderr:raise RuntimeError('startup input leaked')
         runtime+=failed.stderr;events+=failure_events;startup_failures.append((stage,code))
+    binary_version=subprocess.check_output([str(a.binary.resolve()),'version'],text=True).strip()
+    validate_runtime_events(events,binary_version,one_instance=False)
     if any(marker in runtime for marker in (GATEWAY_KEY,PROVIDER_KEY,REQUEST_SENTINEL,SESSION_SENTINEL)):raise RuntimeError('private data in runtime events')
     (root/'runtime.jsonl').write_text(runtime)
     now=datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace('+00:00','Z')
-    synthetic={'timestamp':now,'level':'INFO','msg':'synthetic schema check','schema_version':2,'event':'schema_smoke','requestId':'shared-smoke-id','outcome':'success','latency_ms':7,'queue_time_ms':2,'http_status':200,'upstream_attempted':True,'record_persisted':False}
-    second=dict(synthetic,event='second_smoke',outcome='error')
-    bad=dict(synthetic,event='mapping_smoke',requestId='mapping-smoke-id',latency_ms='not-a-number')
+    synthetic={'timestamp':now,'level':'INFO','msg':'synthetic schema check','schema_version':2,'service':events[0]['service'],'event_id':'synthetic-schema-0001','event':'schema_smoke','requestId':'shared-smoke-id','outcome':'success','latency_ms':7,'queue_time_ms':2,'http_status':200,'upstream_attempted':True,'record_persisted':False}
+    second=dict(synthetic,event='second_smoke',outcome='error',event_id='synthetic-schema-0002')
+    bad=dict(synthetic,event='mapping_smoke',requestId='mapping-smoke-id',event_id='synthetic-mapping-bad',latency_ms='not-a-number')
     collector=root/'collector';collector.mkdir();collector.chmod(0o777)
     for name in ('data','dlq','dlq-reader'):(collector/name).mkdir();(collector/name).chmod(0o777)
-    (collector/'input.jsonl').write_text(runtime+'\n'.join(json.dumps(v) for v in (synthetic,second,bad))+'\nlegacy mixed non-JSON line\n')
+    replay=runtime+'\n'.join(json.dumps(v) for v in (synthetic,second))+'\n'
+    replay_ids={event['event_id'] for event in events}|{synthetic['event_id'],second['event_id']}
+    (collector/'input.jsonl').write_text(replay+replay+json.dumps(bad)+'\nlegacy mixed non-JSON line\n')
     # Only transport security is removed for this isolated security-disabled fixture.
-    conf=(ROOT/'examples/elasticsearch/tidemux.conf').read_text();conf='\n'.join(line for line in conf.splitlines() if not any(setting in line for setting in ('api_key =>','ssl_enabled =>','ssl_certificate_authorities =>')))+'\n'
-    (collector/'pipeline.conf').write_text(conf);shutil.copy(ROOT/'examples/elasticsearch/logstash.yml',collector/'logstash.yml');shutil.copy(ROOT/'examples/elasticsearch/read-dlq.conf',collector/'read-dlq.conf')
+    conf=(ROOT/'scripts/fixtures/elasticsearch/tidemux.conf').read_text();conf='\n'.join(line for line in conf.splitlines() if not any(setting in line for setting in ('api_key =>','ssl_enabled =>','ssl_certificate_authorities =>')))+'\n'
+    (collector/'pipeline.conf').write_text(conf);shutil.copy(ROOT/'scripts/fixtures/elasticsearch/logstash.yml',collector/'logstash.yml');shutil.copy(ROOT/'scripts/fixtures/elasticsearch/read-dlq.conf',collector/'read-dlq.conf')
     container_url='http://host.docker.internal:'+str(parsed.port or 9200)
     env={'TIDEMUX_LOG_PATH':'/work/input.jsonl','TIDEMUX_SINCEDB_PATH':'/work/sincedb','TIDEMUX_ES_INDEX_PREFIX':a.index_prefix,'TIDEMUX_ES_URL':container_url,'TIDEMUX_LOGSTASH_DATA':'/work/data','TIDEMUX_DLQ_PATH':'/work/dlq','TIDEMUX_PARSE_FAILURE_PATH':'/work/parse-failures.jsonl','TIDEMUX_MAPPING_FAILURE_PATH':'/work/mapping-failures.jsonl','LS_JAVA_OPTS':'-Xms256m -Xmx256m'}
     # Syntax-check the unmodified TLS/API-key reference with public CA material.
-    (collector/'production.conf').write_text((ROOT/'examples/elasticsearch/tidemux.conf').read_text())
+    (collector/'production.conf').write_text((ROOT/'scripts/fixtures/elasticsearch/tidemux.conf').read_text())
     certificate=ssl.create_default_context().get_ca_certs(binary_form=True)[0]
     (collector/'test-ca.pem').write_text(ssl.DER_cert_to_PEM_cert(certificate))
     name=a.index_prefix+'-collector' 
@@ -121,8 +126,8 @@ def main():
             indices=es('GET','/_cat/indices/'+a.index_prefix+'*?format=json')
             if indices:
                 es('POST','/'+a.index_prefix+'*/_refresh')
-                documents=es('POST','/'+a.index_prefix+'*/_search',{'size':100,'query':{'match_all':{}}})['hits']['hits']
-                if len(documents)>=len(events)+3 and (collector/'parse-failures.jsonl').exists() and list((collector/'dlq/main').glob('*.log')):break
+                documents=es('POST','/'+a.index_prefix+'*/_search',{'size':100,'version':True,'query':{'match_all':{}}})['hits']['hits']
+                if len(documents)==len(events)+3 and all(any(hit['_id']==identity and hit.get('_version')==2 for hit in documents) for identity in replay_ids) and (collector/'parse-failures.jsonl').exists() and list((collector/'dlq/main').glob('*.log')):break
             time.sleep(.5)
         else:raise RuntimeError('Indexing or failure capture timed out')
     finally:
@@ -144,6 +149,9 @@ def main():
         if result['hits']['total']['value']!=1:raise RuntimeError('early startup typed query failed')
         source=result['hits']['hits'][0]['_source'];timestamp=event_time(source['@timestamp']);native=event_time(source['tidemux']['timestamp'])
         if abs(timestamp.timestamp()-native.timestamp())>.002:raise RuntimeError('early startup timestamp mismatch')
+    for event in events:
+        hit,=[hit for hit in documents if hit['_id']==event['event_id']]
+        if hit['_source']['tidemux']!=event or hit['_version']!=2:raise RuntimeError('replay changed or duplicated a runtime event')
     shared=[s for s in sources if s.get('tidemux',{}).get('requestId')=='shared-smoke-id']
     if len(shared)!=2:raise RuntimeError('requestId overwrote distinct events')
     sample=next(s for s in shared if s['tidemux']['event']=='schema_smoke')
@@ -153,7 +161,7 @@ def main():
     mapping=es('GET','/'+a.index_prefix+'*/_mapping');(root/'mapping.json').write_text(json.dumps(mapping,indent=2))
     for entry in mapping.values():
         properties=entry['mappings']['properties']['tidemux']['properties']
-        for field,kind in [('requestId','keyword'),('event','keyword'),('startup_stage','keyword'),('latency_ms','long'),('http_status','long'),('record_persisted','boolean'),('timestamp','date')]:
+        for field,kind in [('requestId','keyword'),('event_id','keyword'),('event','keyword'),('startup_stage','keyword'),('latency_ms','long'),('http_status','long'),('record_persisted','boolean'),('timestamp','date')]:
             if properties[field]['type']!=kind:raise RuntimeError('ES mapping type mismatch')
     usage_query=es('POST','/'+a.index_prefix+'*/_search',{'size':0,'query':{'term':{'tidemux.requestId':success}},'aggs':{key:{'sum':{'field':'tidemux.message.usage.'+key}} for key in ('input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens')}})
     for key,expected in [('input_tokens',3),('output_tokens',2),('cache_read_input_tokens',3),('cache_creation_input_tokens',1)]:
@@ -163,7 +171,7 @@ def main():
     (root/'usage-aggregation.json').write_text(json.dumps(usage_query,indent=2))
     # A reader uses separate data and no DLQ writer, so it can run alongside main.
     reader=docker_run(dict(env,TIDEMUX_LOGSTASH_DATA='/work/dlq-reader'),name+'-dlq')
-    settings=collector/'reader-settings';settings.mkdir();shutil.copy(ROOT/'examples/elasticsearch/read-dlq.yml',settings/'logstash.yml')
+    settings=collector/'reader-settings';settings.mkdir();shutil.copy(ROOT/'scripts/fixtures/elasticsearch/read-dlq.yml',settings/'logstash.yml')
     reader_args=[IMAGE,'bin/logstash','--path.settings','/work/reader-settings','-f','/work/read-dlq.conf']
     run(reader+['--rm']+reader_args+['--config.test_and_exit'],'dlq-config-check.log')
     try:
@@ -180,7 +188,7 @@ def main():
     failures=[json.loads(line) for line in (collector/'mapping-failures.jsonl').read_text().splitlines()]
     if not any(f.get('tidemux',{}).get('requestId')=='mapping-smoke-id' and 'latency_ms' in f['collector'].get('reason','') for f in failures):raise RuntimeError('mapping failure has no retained event/reason')
     (root/'documents.json').write_text(json.dumps(documents,indent=2))
-    result={'binary':str(a.binary),'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'canonical_usage_aggregations':True,'canonical_model_query':True,'startup_failure_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
+    result={'binary':str(a.binary),'elasticsearch':version,'logstash':'8.19.5','index_prefix':a.index_prefix,'runtime_events':len(events),'indexed_documents':len(documents),'success_request_id':success,'stream_failure_request_id':stream,'rejection_request_id':rejected,'typed_queries':True,'canonical_usage_aggregations':True,'canonical_model_query':True,'startup_failure_queries':True,'ecs_namespace_and_timestamp':True,'distinct_same_request_events':True,'event_id_replayed_twice_deduplicated':True,'runtime_service_metadata_indexed':True,'parse_failure_retained':True,'mapping_failure_dlq_read':True,'privacy':True}
     (root/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 
 if __name__=='__main__':main()
