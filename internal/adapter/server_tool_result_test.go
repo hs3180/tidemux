@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -107,25 +106,6 @@ func TestNativeServerToolResultsPreserveUniqueContent(t *testing.T) {
 	}
 }
 
-func TestAssistantServerToolPairingCannotUseClientToolsOrOtherMessages(t *testing.T) {
-	for _, before := range []string{
-		``,
-		`{"type":"tool_use","id":"server","name":"read_file","input":{}},`,
-		`{"type":"server_tool_use","id":"other-server","name":"webReader","input":{}},`,
-		`{"type":"server_tool_use","id":"server","name":"webReader","input":null},`,
-	} {
-		content := `[` + before + `{"type":"tool_result","tool_use_id":"server","content":"private-output"}]`
-		body := []byte(`{"type":"message","role":"assistant","content":` + content + `}`)
-		if _, err := ValidateResponse("anthropic", body); err == nil || err.Error() != "invalid_upstream_tool_history" {
-			t.Fatalf("accepted an unpaired assistant result: %v", err)
-		}
-	}
-	body := []byte(`{"model":"m","max_tokens":16,"messages":[{"role":"assistant","content":[{"type":"server_tool_use","id":"server","name":"webReader","input":{}}]},{"role":"assistant","content":[{"type":"tool_result","tool_use_id":"server","content":"private-output"}]}]}`)
-	if _, _, err := Request("anthropic", body, "m"); err == nil || ValidationParameter(err) != "messages[1].content[0].type" {
-		t.Fatalf("paired a result with a server tool from another message: %v", err)
-	}
-}
-
 func TestStreamServerToolResultsPreserveOriginalFrames(t *testing.T) {
 	var fixture bytes.Buffer
 	if err := json.Compact(&fixture, glmDualOutputFixture(t, false)); err != nil {
@@ -140,32 +120,5 @@ func TestStreamServerToolResultsPreserveOriginalFrames(t *testing.T) {
 		if err != nil || emitted.String()+string(terminal) != stream {
 			t.Fatalf("native stream was changed: %v", err)
 		}
-	}
-}
-
-func TestMalformedPairedServerToolResultFailsClosed(t *testing.T) {
-	server := `{"type":"server_tool_use","id":"server","name":"webReader","input":{}}`
-	for _, result := range []string{
-		`{"type":"tool_result","tool_use_id":"other-server","content":"private-result"}`,
-		`{"type":"tool_result","tool_use_id":"server","content":[{"type":"tool_use","id":"private-result","name":"f","input":{}}]}`,
-		`{"type":"tool_result","tool_use_id":"server","content":"private-result","text":"wrong-shape"}`,
-	} {
-		body := []byte(`{"type":"message","role":"assistant","content":[` + server + `,` + result + `]}`)
-		if _, err := ValidateResponse("anthropic", body); err == nil {
-			t.Fatal("malformed paired result was accepted")
-		}
-		stream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n\n" +
-			"event: content_block_start\ndata: " + `{"type":"content_block_start","index":0,"content_block":` + server + "}\n\n" +
-			"event: content_block_start\ndata: " + `{"type":"content_block_start","index":1,"content_block":` + result + "}\n\n"
-		var emitted bytes.Buffer
-		_, terminal, err := readStream("anthropic", strings.NewReader(stream), func(frame []byte) error { emitted.Write(frame); return nil })
-		var failure *CallError
-		if !errors.As(err, &failure) || failure.Code != "invalid_upstream_tool_history" || failure.Param != "content[1].type" || terminal != nil || strings.Contains(emitted.String(), "private-result") {
-			t.Fatalf("invalid result escaped: %v", err)
-		}
-	}
-	duplicate := []byte(`{"type":"message","role":"assistant","content":[` + server + `,{"type":"tool_result","tool_use_id":"server","content":"unique","content":"duplicate"}]}`)
-	if _, err := ValidateResponse("anthropic", duplicate); err == nil {
-		t.Fatal("duplicate JSON keys were accepted")
 	}
 }

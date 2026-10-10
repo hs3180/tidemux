@@ -87,23 +87,22 @@ class Upstream(BaseHTTPRequestHandler):
             return
         if scene == "glm_dual":
             content = json.loads(GLM_FIXTURE.read_text())["content"]
+            if self.server.glm_variant == "unpaired":
+                content[2]["tool_use_id"] = "fixture-unpaired-result"
+            elif self.server.glm_variant == "no_server":
+                content = content[1:]
         elif scene == "glm_continue":
             if GLM_DONE not in json.dumps(body["messages"]):
                 self.server.failures.append("GLM continuation omitted preserved text")
             for message in body["messages"]:
                 if message.get("role") == "assistant" and isinstance(message.get("content"), list):
-                    server_tools = set()
                     for block in message["content"]:
                         if block is None:
                             self.server.failures.append("GLM continuation has a missing content block")
                             continue
-                        if block.get("type") == "server_tool_use":
-                            server_tools.add(block["id"])
-                        if block.get("type") == "tool_result" and block.get("tool_use_id") not in server_tools:
-                            self.server.failures.append("GLM continuation has an unpaired result")
             content = [{"type": "text", "text": "GLM_CONTINUATION_OK"}]
         elif scene == "malformed":
-            content = [{"type": "text", "text": PREFIX}, {"type": "tool_result", "tool_use_id": PRIVATE_ID,
+            content = [{"type": "text", "text": PREFIX}, {"type": 17, "tool_use_id": PRIVATE_ID,
                         "content": [{"type": "text", "text": PRIVATE}]}]
         elif scene == "continue":
             if DONE not in json.dumps(body["messages"]):
@@ -311,29 +310,42 @@ def check_client(binary, client, executable, evidence):
                   "client_api": "anthropic" if client == "claude" else "openai",
                   "provider_api": "anthropic", "cli_mode": "noninteractive"}
         try:
-            upstream.scene = "glm_dual"
-            result["glm_dual"] = execute(binary, client, executable, path, gateway, "Reply to the local GLM dual-output fixture.")
-            result["glm_upstream_calls"] = upstream.posts
-            result["glm_wire"] = [{key: value for key, value in item.items() if key != "body"} for item in observer.requests]
-            if result["glm_dual"]["exit_code"] != 0 or result["glm_dual"]["timed_out"] or GLM_DONE not in result["glm_dual"]["stdout"]:
-                save(evidence, client, result, root)
-                raise RuntimeError(client + ": duplicate GLM tool result did not complete")
-            if client == "claude" and (upstream.posts != 1 or len(observer.requests) != 1):
-                raise RuntimeError("Claude retried the native GLM turn")
-            if any(item.get("status") != 200 or "event: error" in item.get("response", "") or
-                   (client != "claude" and '"tool_result"' in item.get("response", "")) for item in observer.requests):
-                raise RuntimeError(client + ": GLM stream failed or a server tool was exposed as a client tool")
-            if client == "claude" and not any('"tool_result"' in item.get("response", "") and '"server_tool_use"' in item.get("response", "") for item in observer.requests):
-                raise RuntimeError("native Claude route removed server-tool blocks")
-            before = upstream.posts
-            upstream.scene = "glm_continue"
-            result["glm_continuation"] = execute(binary, client, executable, path, gateway, "Continue the prior GLM fixture conversation.", continuing=True)
-            if result["glm_continuation"]["exit_code"] != 0 or result["glm_continuation"]["timed_out"] or "GLM_CONTINUATION_OK" not in result["glm_continuation"]["stdout"] or upstream.failures:
-                save(evidence, client, result, root)
-                raise RuntimeError(client + ": GLM continuation was poisoned")
-            if client == "claude" and upstream.posts != before+1:
-                raise RuntimeError("Claude retried the GLM continuation")
-            result["glm_single_claude_request"] = client == "claude" and before == 1 and upstream.posts == 2
+            result["glm_variants"] = []
+            for variant in ("reported", "unpaired", "no_server"):
+                observer.requests.clear()
+                before = upstream.posts
+                upstream.scene, upstream.glm_variant = "glm_dual", variant
+                case = {"variant": variant}
+                result["glm_variants"].append(case)
+                case["completion"] = execute(binary, client, executable, path, gateway, "Reply to the local GLM dual-output fixture.")
+                case["completion_upstream_calls"] = upstream.posts - before
+                case["wire"] = [{key: value for key, value in item.items() if key != "body"} for item in observer.requests]
+                if case["completion"]["exit_code"] != 0 or case["completion"]["timed_out"] or GLM_DONE not in case["completion"]["stdout"]:
+                    save(evidence, client, result, root)
+                    raise RuntimeError(client + ": GLM " + variant + " result did not complete")
+                if client == "claude" and (case["completion_upstream_calls"] != 1 or len(observer.requests) != 1):
+                    raise RuntimeError("Claude retried the native GLM " + variant + " turn")
+                if any(item.get("status") != 200 or "event: error" in item.get("response", "") or
+                       (client != "claude" and '"tool_result"' in item.get("response", "")) for item in observer.requests):
+                    raise RuntimeError(client + ": GLM stream failed or a server tool was exposed as a client tool")
+                if client == "claude":
+                    wire = "\n".join(item.get("response", "") for item in observer.requests)
+                    if '"tool_result"' not in wire or (variant != "no_server" and '"server_tool_use"' not in wire):
+                        raise RuntimeError("native Claude route removed provider blocks")
+                    if variant == "unpaired" and "fixture-unpaired-result" not in wire:
+                        raise RuntimeError("native Claude route rewrote result IDs")
+                before = upstream.posts
+                upstream.scene = "glm_continue"
+                case["continuation"] = execute(binary, client, executable, path, gateway, "Continue the prior GLM fixture conversation.", continuing=True)
+                case["continuation_upstream_calls"] = upstream.posts - before
+                if case["continuation"]["exit_code"] != 0 or case["continuation"]["timed_out"] or "GLM_CONTINUATION_OK" not in case["continuation"]["stdout"] or upstream.failures:
+                    save(evidence, client, result, root)
+                    raise RuntimeError(client + ": GLM " + variant + " continuation failed")
+                if client == "claude" and case["continuation_upstream_calls"] != 1:
+                    raise RuntimeError("Claude retried the GLM " + variant + " continuation")
+            result["glm_single_claude_request"] = client == "claude" and all(
+                case["completion_upstream_calls"] == case["continuation_upstream_calls"] == 1
+                for case in result["glm_variants"])
             result["glm_compatible_completion_and_continuation"] = True
             observer.requests.clear()
             before_malformed = upstream.posts
@@ -366,8 +378,9 @@ def check_client(binary, client, executable, evidence):
                     if request["status"] != 502:
                         raise RuntimeError(client + ": malformed non-streaming auxiliary response admitted")
                 error = errors[0]
-                if error.get("code") != "invalid_upstream_tool_history" or error.get("param") != "content[1].type" or error.get("recovery", {}).get("retryable") is not False:
-                    raise RuntimeError(client + ": safe recovery diagnostic missing")
+                expected_code = "invalid_upstream_stream" if request["body"].get("stream") else "invalid_upstream_response"
+                if error.get("code") != expected_code:
+                    raise RuntimeError(client + ": safe structural diagnostic missing")
                 if PRIVATE in wire or PRIVATE_ID in wire or "message_stop" in wire or "[DONE]" in wire:
                     raise RuntimeError(client + ": malformed block escaped or false success emitted")
             if not streaming_requests:
@@ -376,8 +389,7 @@ def check_client(binary, client, executable, evidence):
             result["malformed_client_auxiliary_requests"] = len(bad_requests) - streaming_requests
             visible = result["malformed"]["stdout"] + result["malformed"]["stderr"]
             result["client_visible_safe_prefix"] = PREFIX in visible
-            result["client_visible_error_code"] = "invalid_upstream_tool_history" in visible
-            result["client_visible_recovery_text"] = "Start a clean conversation" in visible
+            result["client_visible_error_code"] = "invalid_upstream_stream" in visible
             if upstream.posts - before_malformed != len(bad_requests):
                 raise RuntimeError(client + ": a dispatched client request was replayed by the gateway")
             if PRIVATE in json.dumps(result) or PRIVATE_ID in json.dumps(result):
@@ -404,7 +416,7 @@ def check_client(binary, client, executable, evidence):
             logs = (root / "stderr").read_text()
             terminal = [json.loads(line) for line in logs.splitlines() if line.strip()]
             errors = [event for event in terminal if event.get("event") == "request_terminal"
-                      and event.get("error_code") == "invalid_upstream_tool_history"]
+                      and event.get("error_code") in ("invalid_upstream_stream", "invalid_upstream_response")]
             if len(errors) != len(bad_requests) or any(event.get("outcome") != "error" for event in errors):
                 raise RuntimeError(client + ": each rejected client request needs one terminal error")
             result["malformed_terminal_events"] = errors
@@ -543,7 +555,7 @@ def main():
         result = check_client(binary, client, Path(executable).resolve(), args.evidence)
         results.append({key: result[key] for key in ("client", "version", "client_api", "provider_api", "cli_mode",
             "malformed_client_streaming_requests", "malformed_client_auxiliary_requests", "client_visible_safe_prefix",
-            "client_visible_error_code", "client_visible_recovery_text", "real_client_read_edit_test", "clean_conversation_recovery",
+            "client_visible_error_code", "real_client_read_edit_test", "clean_conversation_recovery",
             "persistent_continuation", "gateway_no_replay_after_output", "privacy",
             "glm_compatible_completion_and_continuation", "glm_single_claude_request")})
         print(json.dumps(results[-1]), flush=True)

@@ -13,9 +13,11 @@
   same records. Missing usage stays unknown, and anonymous session identifiers
   remain stable across gateway restarts with the same credential. Provider
   accounting continues through `tidemux billing`.
-- Document current Claude Code, Kilo and Hermes recovery behavior after a
-  streamed invalid upstream tool-history error, with reproducible client and
-  protocol gates and steps to start a clean conversation.
+- Preserve native Anthropic content and conversation history without local
+  tool-role or ID-pairing checks. Keep JSON, event, usage and size checks;
+  cross-protocol adapters validate fields needed for conversion.
+- Include the audited request ID in terminal SSE errors. Document Claude Code,
+  Kilo and Hermes recovery after structural upstream failures.
 - Emit one private-safe structured failure for early `serve` startup errors,
   including argument, configuration, credential, ledger and listener failures.
 

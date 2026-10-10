@@ -104,42 +104,42 @@ unavailable model-list endpoint. Interactive Claude Code requires a terminal;
 its `-p` mode also supports noninteractive use. Both require a bidirectional
 streaming HTTP connection.
 
-## Recover after a tool-history error
+## Recover after a response error
+
+Some Anthropic-compatible providers, including GLM, return built-in-tool output
+as a generic `tool_result` alongside text in an assistant message. Native
+Anthropic routes preserve these blocks and their fields without checking tool
+roles or ID associations, removing duplicates, or reindexing the stream. The
+same content can be sent back in native conversation history. The provider and
+client decide how to interpret it; no provider setting is needed. OpenAI
+conversion preserves available text, while server-tool-specific blocks follow
+the limits in [protocol support](protocols.md).
 
 If a reply stops after some normal text, check the terminal running `tidemux
 serve` for its `request_terminal` JSON event. HTTP 200 can still have
-`outcome: "error"`; use `error_code` to identify the failure. If the operator
-collects runtime logs in a file, search that file, for example:
+`outcome: "error"`; use `error_code` to identify the failure. If runtime logs
+are collected in a file, search that file, for example:
 
 ```sh
-rg 'invalid_upstream_tool_history|invalid_tool_history' /path/to/tidemux-runtime.jsonl
+rg 'invalid_upstream_stream|invalid_upstream_response|incomplete_upstream_stream' /path/to/tidemux-runtime.jsonl
 ```
 
-Use only the timestamp, request ID and safe error code when reporting the
-problem. The gateway log does not contain your prompt or tool output. See
-[runtime logging](runtime-logging.md) for log locations and fields. Kilo 7.8.1
-also displays the code and recovery instructions in its error. Claude Code
-2.1.283 displays a generic mid-response error. Hermes 0.21.2 can instead report
-that no answer was produced because of an output-token limit; confirm the
-gateway code before changing model limits.
+An invalid JSON or event envelope, missing terminal marker, invalid usage,
+upstream error or size limit can end a response safely. A generic assistant
+`tool_result` alone is not a gateway error. A terminal SSE error includes
+`request_id`, matching `X-TideMux-Request-ID` and the runtime log's `requestId`.
+Use the timestamp, request ID and safe error code when reporting the problem;
+the gateway log does not contain prompts or tool output. See
+[runtime logging](runtime-logging.md) for log locations and fields.
 
-Some Anthropic-compatible providers, including GLM, return their built-in-tool
-output as a generic `tool_result` alongside text in an assistant message.
-TideMux preserves these blocks on native Anthropic routes when they reference
-a `server_tool_use` earlier in the same message. No provider setting is needed;
-TideMux does not remove duplicate results or reindex the stream. The same
-structure can be sent back in native conversation history. OpenAI conversion
-preserves the assistant's text; server-tool-specific blocks have no equivalent
-and follow the limits in [protocol support](protocols.md).
+Clients can hide the gateway code behind a generic mid-response error or a
+message saying that no answer was produced. Confirm the gateway error before
+changing token limits or editing saved history. TideMux does not repair client
+history or replay a dispatched request after output begins. A client may issue
+its own retries, each of which is a new request.
 
-`invalid_upstream_tool_history` means the provider returned an assistant
-`tool_result` without a matching earlier `server_tool_use` in that message, or
-with invalid result content. TideMux withheld that malformed block;
-the safe structure path, such as `content[1].type`, refers to its position and
-does not reveal its content. A terminal SSE error includes `request_id`, matching
-`X-TideMux-Request-ID` and the runtime log's `requestId`. Start a new conversation.
-These examples create a
-new session; choose your configured model and provide the task again:
+If you need a clean conversation after correcting the cause, choose your
+configured model and provide the task again:
 
 ```sh
 tidemux claude --model REF/MODEL_ID -- -p 'Start this task in a new conversation.'
@@ -147,32 +147,16 @@ tidemux kilo --model REF/MODEL_ID -- run 'Start this task in a new conversation.
 tidemux hermes --model REF/MODEL_ID -- -q 'Start this task in a new conversation.' -Q --oneshot
 ```
 
-Do not add the client's `--continue` or `--resume` options when creating this
-clean conversation. Claude and Hermes can send their own continuation attempts
-after a stream failure; those are separate client requests. TideMux does not
-replay a dispatched request after output has begun. Once the new conversation
-works, normal client continuation is available again.
-
-`invalid_tool_history` means the submitted saved conversation already contains
-an unpaired or invalid assistant `tool_result`. Repeating that unchanged history is not a
-network retry and will fail again. To retain that history, first back it up and
-use the client's supported history export/editor/import tools to explicitly
-repair the identified block. TideMux does not modify saved conversations. A
-fork that retains the malformed block also retains the problem. Keep valid
-user-side `tool_result` blocks and their matching tool calls.
-
-When the provider's built-in tool repeatedly produces malformed history, use
-the client's own file, shell or other execution tools instead, with your usual
-permission checks. Valid provider-hosted tools remain supported on native
-Anthropic routes; their cross-protocol limits are described in
-[protocol support](protocols.md). Network failures and rate limits have separate
-error codes and recovery policies.
+Omit the client's `--continue` or `--resume` options for a clean conversation.
+To retain history rejected by a provider or client, back it up and use that
+client's supported history tools. Native passthrough preserves content; it
+cannot guarantee that every provider and client accepts the same extensions.
 
 ## Recover after capacity is full
 
 `active_session_limit` / HTTP 429 means that the selected provider or the whole
 gateway has reached its configured logical-session capacity. It is separate
-from an upstream rate limit and from invalid tool history. Check the safe
+from an upstream rate limit and from a response error. Check the safe
 error's `scope`, provider reference and limit, or the gateway's runtime error
 code when the client hides its retries.
 

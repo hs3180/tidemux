@@ -245,11 +245,6 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 		return nil, "", warnings, validationError("tools", "tool_choice")
 	}
 	for index, m := range in.Messages {
-		if protocol == "anthropic" && m.Role == "assistant" {
-			if path := assistantToolResultPath(m.Content, fmt.Sprintf("messages[%d].content", index)); path != "" {
-				return nil, "", warnings, validationError("invalid_tool_history", path)
-			}
-		}
 		// System-role messages are a compatible-provider extension emitted by
 		// gateway clients. Preserve their position; do not promote or rewrite them.
 		allowed := m.Role == "user" || m.Role == "assistant" || m.Role == "system"
@@ -272,7 +267,7 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 			return nil, "", warnings, validationError("reasoning_content", "messages.reasoning_content")
 		}
 		emptyAssistant := protocol == "openai" && m.Role == "assistant" && len(m.ToolCalls) > 0 && (len(m.Content) == 0 || string(m.Content) == "null")
-		if !emptyAssistant && !messageContent(protocol, m.Role, m.Content) {
+		if !emptyAssistant && !messageContent(protocol, m.Content) {
 			path := fmt.Sprintf("messages[%d].content", index)
 			if unsupported := unsupportedContentBlockPath(protocol, m.Role, m.Content, path); unsupported != path {
 				return nil, "", warnings, validationError("unsupported_request_feature", unsupported)
@@ -310,7 +305,7 @@ func RequestWithWarnings(protocol string, data []byte, defaultModel string) ([]b
 		if in.Thinking != nil && in.Thinking.Type == "enabled" && in.Thinking.BudgetTokens != nil && *in.Thinking.BudgetTokens >= *in.MaxTokens {
 			return nil, "", warnings, validationError("thinking", "thinking.budget_tokens")
 		}
-		if len(in.System) > 0 && !messageContent("anthropic", "system", in.System) {
+		if len(in.System) > 0 && !messageContent("anthropic", in.System) {
 			return nil, "", warnings, validationError("system", "system")
 		}
 		if in.Temperature != nil && *in.Temperature > 1 {
@@ -491,27 +486,21 @@ func (p Price) Estimate(_ string, u TokenUsage) *float64 {
 
 // ValidateResponse preserves the provider's compatible JSON instead of rebuilding it.
 func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
-	var r struct {
-		Choices []struct {
-			Message struct {
-				Role             string          `json:"role"`
-				Content          json.RawMessage `json:"content"`
-				Refusal          string          `json:"refusal"`
-				ReasoningContent string          `json:"reasoning_content"`
-				ToolCalls        []ToolCall      `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Type    string          `json:"type"`
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-		Usage   json.RawMessage `json:"usage"`
-	}
-	if LenientJSON(data, &r) != nil {
-		return TokenUsage{}, errors.New("invalid_upstream_response")
-	}
 	if protocol == "openai" {
-		if len(r.Choices) == 0 {
+		var r struct {
+			Choices []struct {
+				Message struct {
+					Role             string          `json:"role"`
+					Content          json.RawMessage `json:"content"`
+					Refusal          string          `json:"refusal"`
+					ReasoningContent string          `json:"reasoning_content"`
+					ToolCalls        []ToolCall      `json:"tool_calls"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage json.RawMessage `json:"usage"`
+		}
+		if LenientJSON(data, &r) != nil || len(r.Choices) == 0 {
 			return TokenUsage{}, errors.New("invalid_upstream_response")
 		}
 		for _, c := range r.Choices {
@@ -519,15 +508,16 @@ func ValidateResponse(protocol string, data []byte) (TokenUsage, error) {
 				return TokenUsage{}, errors.New("invalid_upstream_response")
 			}
 		}
-	} else {
-		if r.Role == "assistant" {
-			if path := assistantToolResultPath(r.Content, "content"); path != "" {
-				return TokenUsage{}, validationError("invalid_upstream_tool_history", path)
-			}
-		}
-		if r.Type != "message" || r.Role != "assistant" || !messageContent("anthropic", "assistant", r.Content) {
-			return TokenUsage{}, errors.New("invalid_upstream_response")
-		}
+		return ParseUsage(protocol, r.Usage)
+	}
+	var r struct {
+		Type    string          `json:"type"`
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Usage   json.RawMessage `json:"usage"`
+	}
+	if LenientJSON(data, &r) != nil || r.Type != "message" || r.Role != "assistant" || !messageContent("anthropic", r.Content) {
+		return TokenUsage{}, errors.New("invalid_upstream_response")
 	}
 	return ParseUsage(protocol, r.Usage)
 }

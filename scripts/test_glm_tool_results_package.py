@@ -31,21 +31,34 @@ class Fixture(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         with self.server.lock:
             self.server.posts += 1
+        variant = self.server.variant
+        expected = fixture(variant)
         for message in body["messages"]:
             if message["role"] == "assistant" and isinstance(message.get("content"), list):
-                server_tools = set()
-                for block in message["content"]:
-                    if block is None:
-                        raise RuntimeError("continuation has a missing content block")
-                    if block.get("type") == "server_tool_use":
-                        server_tools.add(block["id"])
-                    if block.get("type") == "tool_result" and block.get("tool_use_id") not in server_tools:
-                        raise RuntimeError("unpaired result reached provider")
+                if message["content"] != expected["content"]:
+                    raise RuntimeError("native continuation content was changed")
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream" if body.get("stream") else "application/json")
         self.end_headers()
-        suffix = "sse" if body.get("stream") else "json"
-        self.wfile.write((FIXTURES / ("glm_dual_output." + suffix)).read_bytes())
+        if variant == "reported":
+            suffix = "sse" if body.get("stream") else "json"
+            payload = (FIXTURES / ("glm_dual_output." + suffix)).read_bytes()
+        elif body.get("stream"):
+            from test_client_recovery_package import frames
+            payload = "".join("event: " + event + "\ndata: " + json.dumps(data) + "\n\n"
+                              for event, data in frames(expected["content"])).encode()
+        else:
+            payload = json.dumps(expected).encode()
+        self.wfile.write(payload)
+
+
+def fixture(variant):
+    response = json.loads((FIXTURES / "glm_dual_output.json").read_text())
+    if variant == "unpaired":
+        response["content"][2]["tool_use_id"] = "fixture-unpaired-result"
+    elif variant == "no_server":
+        response["content"] = response["content"][1:]
+    return response
 
 
 def configure(config):
@@ -107,32 +120,34 @@ def main():
         raise RuntimeError("expected a packaged 0.3.2 candidate")
     cases = 0
     with running_gateway(binary, upstream_handler=Fixture, configure=configure) as gateway:
-        for protocol in ("anthropic", "openai"):
-            for streaming in (False, True):
-                before = gateway["upstream"].posts
-                status, output, request_id = request(gateway, protocol, streaming)
-                if status != 200 or not request_id or "GLM_WEB_READER_OUTPUT" not in output or "GLM_DUAL_OUTPUT_OK" not in output or "event: error" in output:
-                    raise RuntimeError("GLM output was lost or aborted")
-                history = response_history(protocol, streaming, output)
-                if protocol == "anthropic":
-                    if history["content"] != json.loads((FIXTURES / "glm_dual_output.json").read_text())["content"]:
-                        raise RuntimeError("native server-tool blocks were changed or removed")
-                elif '"tool_result"' in output or '"server_tool_use"' in output:
-                    raise RuntimeError("server tool was exposed as a client tool")
-                if request(gateway, protocol, False, history)[0] != 200:
-                    raise RuntimeError("GLM history could not continue")
-                if gateway["upstream"].posts - before != 2:
-                    raise RuntimeError("gateway replayed a GLM request")
-                cases += 1
+        for variant in ("reported", "unpaired", "no_server"):
+            gateway["upstream"].variant = variant
+            for protocol in ("anthropic", "openai"):
+                for streaming in (False, True):
+                    before = gateway["upstream"].posts
+                    status, output, request_id = request(gateway, protocol, streaming)
+                    if status != 200 or not request_id or "GLM_WEB_READER_OUTPUT" not in output or "GLM_DUAL_OUTPUT_OK" not in output or "event: error" in output:
+                        raise RuntimeError("GLM output was lost or aborted")
+                    history = response_history(protocol, streaming, output)
+                    if protocol == "anthropic":
+                        if history["content"] != fixture(variant)["content"]:
+                            raise RuntimeError("native server-tool blocks were changed or removed")
+                    elif '"tool_result"' in output or '"server_tool_use"' in output:
+                        raise RuntimeError("server tool was exposed as a client tool")
+                    if request(gateway, protocol, False, history)[0] != 200:
+                        raise RuntimeError("GLM history could not continue")
+                    if gateway["upstream"].posts - before != 2:
+                        raise RuntimeError("gateway replayed a GLM request")
+                    cases += 1
         with sqlite3.connect(gateway["ledger"]) as db:
             rows = [json.loads(row[0]) for row in db.execute("SELECT record_json FROM request_audit")]
             pending, = db.execute("SELECT COUNT(*) FROM budget_charges WHERE state!='settled'").fetchone()
         logs = (gateway["root"] / "stderr").read_text()
         events = [json.loads(line) for line in logs.splitlines() if line.strip()]
         warnings = [event for event in events if event.get("event") == "protocol_conversion_omitted_fields"]
-        if len(rows) != gateway["upstream"].posts or len(rows) != 8 or pending:
+        if len(rows) != gateway["upstream"].posts or len(rows) != 24 or pending:
             raise RuntimeError("GLM dispatches or budget settlement disagree")
-        if len(warnings) != 4 or any(event.get("field_count") != 2 for event in warnings):
+        if sorted(event.get("field_count") for event in warnings) != [1] * 4 + [2] * 8:
             raise RuntimeError("conversion limits were not reported")
         if any(event.get("event") == "upstream_tool_result_suppressed" for event in events):
             raise RuntimeError("native results were suppressed")
@@ -144,7 +159,7 @@ def main():
             raise RuntimeError("tool content, IDs or credentials leaked into gateway logs or audits")
     print(json.dumps({"binary": str(binary), "cases": cases, "native_and_converted_buffered_and_streaming": True,
                       "preserved_output_and_valid_continuation": True, "no_gateway_replay": True,
-                      "native_blocks_preserved": True, "no_provider_policy": True,
+                      "native_blocks_preserved": True, "unpaired_and_no_server_variants": True, "no_provider_policy": True,
                       "usage_and_budget_settlement": True, "private_conversion_warnings": True}))
 
 

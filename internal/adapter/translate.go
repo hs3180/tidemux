@@ -468,6 +468,9 @@ func translateAnthropicUserBlocks(blocks []contentBlock, messageIndex int) ([]Me
 			hasText = true
 		case "tool_result":
 			flushText()
+			if block.ToolUseID == "" {
+				return nil, validationError("invalid_request", fmt.Sprintf("messages[%d].content[%d].tool_use_id", messageIndex, index))
+			}
 			content, err := anthropicToolResultText(block.Content)
 			if err != nil {
 				return nil, validationError("unsupported_request_feature", fmt.Sprintf("messages[%d].content[%d].content", messageIndex, index))
@@ -746,15 +749,16 @@ func TranslateResponseWithWarnings(providerProtocol, clientProtocol string, data
 	for index, block := range in.Content {
 		switch block.Type {
 		case "text":
-			if block.Text != nil {
-				text.WriteString(*block.Text)
+			if block.Text == nil {
+				return nil, nil, errors.New("invalid_upstream_response")
 			}
+			text.WriteString(*block.Text)
 		case "thinking":
 			if block.Thinking != nil {
 				reasoning.WriteString(*block.Thinking)
 			}
 		case "tool_use":
-			if block.ID == "" || block.Name == "" || len(block.Input) == 0 {
+			if block.ID == "" || block.Name == "" || !object(block.Input) {
 				return nil, nil, errors.New("invalid_upstream_response")
 			}
 			calls = append(calls, map[string]any{
@@ -1117,6 +1121,9 @@ func (t *anthropicStreamTranslator) frame(frame []byte) ([]byte, error) {
 				t.sawDropped = true
 			}
 			return nil, nil
+		}
+		if block.ContentBlock.ID == "" || block.ContentBlock.Name == "" {
+			return nil, errors.New("invalid_upstream_stream")
 		}
 		t.sawVisible = true
 		index := t.nextTool

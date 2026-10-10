@@ -182,8 +182,9 @@ inside an Anthropic provider-hosted tool are preserved on native Anthropic
 routes without logging their values. Unknown config fields, duplicate JSON
 keys, multiple JSON documents, malformed custom-tool envelopes and invalid
 beta headers are rejected.
-Native Anthropic routes preserve documented image, document, citation and
-server-tool content blocks for the upstream to validate. Provider-hosted tool
+Native Anthropic routes preserve content blocks and their fields as opaque
+provider data. Strings and arrays of objects with a nonempty string `type` are
+accepted; block-specific fields and semantics belong to the provider and client. Provider-hosted tool
 definitions such as `web_search_20250305` retain their custom fields and do not
 require the custom-tool `input_schema`. TideMux does not translate these tools
 or blocks to OpenAI Chat Completions; a cross-protocol request receives an
@@ -197,30 +198,28 @@ evidence is identified separately on that page.
 
 ## Streaming and errors
 
-A generic Anthropic `tool_result` belongs in a **user** message, following an
-assistant `tool_use`. Some upstream built-in `webReader` / `analyze_image`
-implementations emit a generic `tool_result` in an assistant response instead
-of their provider-specific server-tool result block. Saving that response can
-poison subsequent history, with or without compaction. This is an upstream
-protocol defect; TideMux does not execute those built-in tools or repair stored
-client history silently.
+Native Anthropic content is not checked against a local closed schema. This
+includes generic assistant `tool_result`, `server_tool_use`, provider-specific
+results, citations and compaction. TideMux does not check tool-role placement,
+ID pairing or event order within tool history, and does not strip, normalize or
+repair content. The same content is preserved in native conversation requests,
+buffered responses and SSE frames. Providers and clients validate the semantics
+they require.
 
-TideMux rejects already-poisoned native or converted requests before dispatch
-with HTTP 400, `invalid_tool_history`, and an exact path such as
-`messages[1].content[1].type`. Malformed upstream responses produce HTTP 502
-`invalid_upstream_tool_history`; a malformed SSE block is withheld and the
-stream ends with an error event, possibly after HTTP 200 has started. Previously
-delivered valid frames remain delivered. The diagnostic exposes a structural
-path, never tool contents or IDs, and includes `recovery.retryable: false`.
-Unchanged poisoned history must not be retried. Start a clean conversation or
-explicitly repair the saved history in the client, and use client-executed
-tools as a workaround. TideMux preserves valid native `server_tool_use` and
-provider-specific result blocks, valid user `tool_result`, and compaction;
-it cannot guarantee the provider's built-in tool correctness.
+Gateway checks cover JSON validity and duplicate keys, content/event envelopes,
+stream start and termination, usage used for accounting, and configured size
+and timeout limits. A content block must be an object with a nonempty string
+`type`; its other fields remain opaque. Invalid envelopes fail with
+`invalid_upstream_response` or `invalid_upstream_stream`, without exposing the
+provider body. Cross-protocol adapters validate fields needed to produce the
+target wire format. Unsupported request content fails before dispatch with
+`unsupported_request_feature`; response conversion retains available output
+and reports omitted fields, or fails if nothing can be represented safely.
 
-The binary-level reproduction and valid two-turn controls are in
-`scripts/test_tool_history_package.py`. Existing server-tool and compaction
-gates remain required.
+The packaged regressions in `scripts/test_tool_history_package.py` and
+`scripts/test_glm_tool_results_package.py` cover native generic results,
+continuation with and without compaction, supported conversion, structural
+failures and unchanged usage. Server-tool and compaction gates remain required.
 
 Frames are delivered incrementally, preserving LF/CRLF. Anthropic event names must
 agree with their payload type. The final frame is held until terminal audit
