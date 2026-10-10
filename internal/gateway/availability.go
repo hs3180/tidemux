@@ -30,6 +30,7 @@ type availabilityEntry struct {
 	failures                                   uint16
 	lastSuccess, lastFailure, retryAt, touched time.Time
 	probing                                    bool
+	owner                                      *availabilityLease
 }
 
 func (e *availabilityEntry) eligible(now time.Time) bool {
@@ -90,7 +91,6 @@ func (s *availabilityState) activate(epoch uint64, generations map[string]uint64
 			delete(s.entries, target)
 		} else {
 			copy := *entry
-			copy.probing = false
 			s.entries[target] = &copy
 		}
 	}
@@ -211,6 +211,7 @@ func (s *availabilityState) dispatch(lease *availabilityLease) *adapter.CallErro
 		if entry != nil && entry.failures > 0 && !entry.probing {
 			transitions = append(transitions, availabilityTransition{target, "cooling", "probing", entry.reason, entry.retryAt})
 			entry.probing = true
+			entry.owner = lease
 		}
 	}
 	return nil
@@ -275,7 +276,19 @@ func (s *availabilityState) complete(lease *availabilityLease, handled bool, err
 	modelScope, reason, cooldown := availabilityFailure(err, ctxErr, handled)
 	s.mu.Lock()
 	if lease.epoch != s.epoch {
+		// A compatible reload retains the old claim until its real attempt
+		// ends. Releasing that resource does not confirm or renew health.
+		var released []availabilityTransition
+		for _, target := range lease.targets {
+			if current := s.entries[target]; current != nil && current.owner == lease {
+				next := *current
+				next.probing, next.owner = false, nil
+				s.entries[target] = &next
+				released = append(released, availabilityTransition{target, "probing", "cooling", next.reason, next.retryAt})
+			}
+		}
 		s.mu.Unlock()
+		s.logTransitions(released)
 		return false
 	}
 	for _, target := range lease.targets {
@@ -305,7 +318,7 @@ func (s *availabilityState) complete(lease *availabilityLease, handled bool, err
 		if !success && !fail {
 			if previous != nil && previous.probing {
 				transitions = append(transitions, availabilityTransition{target, "probing", "cooling", previous.reason, previous.retryAt})
-				previous.probing = false
+				previous.probing, previous.owner = false, nil
 			}
 			continue
 		}
@@ -313,7 +326,7 @@ func (s *availabilityState) complete(lease *availabilityLease, handled bool, err
 		if previous != nil {
 			next = *previous
 			next.touched = now
-			next.probing = false
+			next.probing, next.owner = false, nil
 		}
 		if success {
 			next.lastSuccess, next.reason, next.failures, next.retryAt = now, "", 0, time.Time{}

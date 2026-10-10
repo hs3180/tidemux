@@ -55,8 +55,10 @@ query to inspect details. Dynamic selection can choose again after a proven
 pre-dispatch conflict. Existing retry and billing-failover rules still govern
 actual upstream attempts. Partially emitted SSE responses are not replayed.
 
-Compatible reloads preserve observations and healthy semantic bindings while
-releasing old recovery claims. Old requests keep their admitted configuration,
+Compatible reloads preserve observations and healthy semantic bindings. A
+compatible in-flight recovery claim remains held until its request finishes.
+Its old result only releases the claim; it cannot confirm new-epoch health.
+Old requests keep their admitted configuration,
 credentials, prices and accounting snapshot; their results cannot overwrite a
 new configuration epoch. Connection/credential changes and removal/re-addition
 reset the affected generation. Restart resets all in-memory availability.

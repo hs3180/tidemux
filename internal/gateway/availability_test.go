@@ -110,6 +110,9 @@ func TestAvailabilityFencesDispatchAndCompletion(t *testing.T) {
 	*now = now.Add(time.Minute)
 	oldProbe, _ := s.begin(1, "a", "one", 1)
 	s.activate(2, map[string]uint64{"a": 1, "b": 2})
+	if _, blocked := s.begin(2, "a", "one", 1); blocked == nil {
+		t.Fatal("compatible reload started a second concurrent probe")
+	}
 	s.complete(oldProbe, false, nil, nil)
 	if s.entries[availabilityTarget{"a", "one", 1}].state() != "cooling" {
 		t.Fatal("old epoch confirmed recovery")
