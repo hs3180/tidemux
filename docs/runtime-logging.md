@@ -128,23 +128,16 @@ or index. Configure parsing and mappings for the fields above, and use
 `requestId` to correlate events. It is not a unique event ID and must not be
 used alone for deduplication or as an Elasticsearch document ID. Use the persisted
 `event_id` as the document key and `service.instance.id` to group one process run.
-A root request ID spanning provider failover is not supplied by this schema. The short
-Filebeat example in the [README](../README.md#forward-runtime-logs-to-elasticsearch)
-shows the basic setup. The [Filebeat reference](../examples/elasticsearch/filebeat.yml)
-and [Logstash reference](../examples/elasticsearch/tidemux.conf) decode the same
-records under `tidemux`, avoiding a conflict between Claude's `message` object
-and ECS's top-level text field. Both use `tidemux.timestamp` for `@timestamp`.
-Install the [index template](../examples/elasticsearch/index-template.json)
-before writing to a new index prefix; it maps request/session/model IDs as
-keywords, usage and latency as longs, outcomes as keywords, and persistence as
-a boolean. The four usage fields can be summed independently; input plus cache
-read plus cache creation reconstructs total input. Missing usage remains
-absent in Elasticsearch instead of becoming zero. Update collector field paths,
-dashboards and the index template when upgrading from schema 1. Keep
-collector credentials, TLS, buffering, retries, index lifecycle, access
-control, and retention in the collector and Elasticsearch deployment. TideMux
-does not include an Elasticsearch client, endpoint setting, or shipping
-credential.
+A root request ID spanning provider failover is not supplied by this schema. The [Elasticsearch collection guide](elasticsearch.md) shows the minimal
+Filebeat settings, Logstash document key, field types and model/usage queries.
+Decode records under `tidemux` to avoid a conflict between Claude's `message`
+object and ECS's text field. Map `tidemux.timestamp` to `@timestamp`; index model,
+request, session and event IDs as keywords, usage and latency as longs, outcomes
+as keywords, and persistence as a boolean. Input plus cache read plus cache
+creation reconstructs total input. Missing usage stays absent rather than zero.
+Keep collector credentials, TLS, buffering, retries, lifecycle and retention in
+the collector deployment. TideMux has no Elasticsearch client or shipping
+credential and does not distribute collector deployment files.
 
 Terminal request summaries include the [ccusage-compatible usage fields](ccusage.md):
 `timestamp`, `requestId`, optional pseudonymous `sessionId`, `type: "assistant"`
