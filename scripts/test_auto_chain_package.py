@@ -149,12 +149,12 @@ def main():
                 status, _ = post(url, SESSION, model="a/auto")
                 if status != 400:
                     raise RuntimeError("provider-qualified auto was accepted")
-                status, _ = post(url, SESSION, model="a/model-one")
-                if status != 404:
-                    raise RuntimeError("explicit model request used the auto chain")
+                status, result = post(url, SESSION, model="a/model-one")
+                if status != 503 or "model_not_found_cooling_down" not in result:
+                    raise RuntimeError("explicit failed target did not retain its cooldown scope")
                 with upstream.lock:
                     first_run = list(upstream.posts)
-                expected_first_routes = [("a", "model-one")] + [("b", "model-two")] * 5 + [("a", "model-one")]
+                expected_first_routes = [("a", "model-one")] + [("b", "model-two")] * 5
                 if [attempt[:2] for attempt in first_run] != expected_first_routes:
                     raise RuntimeError("auto failure produced duplicate or incorrectly attributed upstream requests")
                 if not first_run[0][2] or len({attempt[2] for attempt in first_run[:3]}) != 1:

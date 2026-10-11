@@ -26,6 +26,7 @@ type routeStep struct {
 	trigger        routeTrigger
 	sessionKey     *sharedModelSessionKey
 	autoChainIndex *int
+	dynamic        bool
 }
 
 func (h *handler) resolveRoutes(modelID, clientProtocol string, body []byte, sessionKey *sharedModelSessionKey) ([]routeStep, string, int) {
@@ -53,7 +54,7 @@ func (h *handler) resolveRoutes(modelID, clientProtocol string, body []byte, ses
 			return nil, "auto_chain_unconfigured", http.StatusBadRequest
 		}
 		route, ok := h.autoChain.selectRouteAvailable(sessionKey, func(entry AutoChainEntry) bool {
-			return h.supportScopeAllows(entry.Provider, entry.Model) && h.providerRouteAvailable(entry.Provider)
+			return h.supportScopeAllows(entry.Provider, entry.Model) && h.modelRouteAvailable(entry.Provider, entry.Model)
 		})
 		if !ok {
 			return nil, "auto_chain_exhausted", http.StatusServiceUnavailable
@@ -80,23 +81,23 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 		return nil, "model_not_found", http.StatusNotFound
 	}
 	if h.config.EffectiveRouting().SharedModelStrategy == "random" && sessionKey != nil {
-		selected, ok := h.sharedAffinity.selectProviderForView(*sessionKey, model, h.routingEpoch, candidates, h.providerRouteAvailable, h.chooseRandomProvider, func(provider string) uint64 { return h.providerGenerations[provider] }, h.reusableRandomCandidates)
+		selected, ok := h.sharedAffinity.selectProviderForView(*sessionKey, model, h.routingEpoch, candidates, func(provider string) bool { return h.modelRouteAvailable(provider, model) }, h.chooseRandomProvider, func(provider string) uint64 { return h.providerGenerations[provider] }, h.reusableRandomCandidates)
 		if !ok {
 			return nil, "provider_keys_cooling_down", http.StatusServiceUnavailable
 		}
 		// Session affinity never adds a provider retry to a dispatched request,
 		// including when the independent billing-failover option is enabled.
-		return []routeStep{{provider: selected, model: model, trigger: routeInitial, sessionKey: sessionKey}}, "", 0
+		return []routeStep{{provider: selected, model: model, trigger: routeInitial, sessionKey: sessionKey, dynamic: true}}, "", 0
 	}
 	if len(candidates) == 1 {
-		return h.appendBillingRoutes([]routeStep{{provider: candidates[0], model: model, trigger: routeInitial}}, candidates[0], model, clientProtocol, body), "", 0
+		return h.appendBillingRoutes([]routeStep{{provider: candidates[0], model: model, trigger: routeInitial, dynamic: true}}, candidates[0], model, clientProtocol, body), "", 0
 	}
 	if h.config.EffectiveRouting().SharedModelStrategy == "" {
 		return nil, "model_ambiguous", http.StatusBadRequest
 	}
 	available := make([]string, 0, len(candidates))
 	for _, name := range candidates {
-		if h.providerRouteAvailable(name) {
+		if h.modelRouteAvailable(name, model) {
 			available = append(available, name)
 		}
 	}
@@ -111,7 +112,7 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 		return nil, "routing_price_unavailable", http.StatusServiceUnavailable
 	}
 	selected := ordered[0]
-	routes := []routeStep{{provider: selected, model: model, trigger: routeInitial}}
+	routes := []routeStep{{provider: selected, model: model, trigger: routeInitial, dynamic: true}}
 	return h.appendBillingRoutes(routes, selected, model, clientProtocol, body), "", 0
 }
 
@@ -128,7 +129,7 @@ func (h *handler) appendBillingRoutes(routes []routeStep, selectedProvider, mode
 	candidates := h.bareModelCandidates(model, true)
 	added := 0
 	for _, name := range candidates {
-		if _, exists := seen[name]; exists || name == selectedProvider || !h.providerRouteAvailable(name) {
+		if _, exists := seen[name]; exists || name == selectedProvider || !h.modelRouteAvailable(name, model) {
 			continue
 		}
 		if clientProtocol != "" && h.clients[name].Protocol != clientProtocol {
