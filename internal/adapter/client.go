@@ -73,7 +73,8 @@ func (e *CallError) Error() string { return e.Code }
 // KeyCandidateCallbacks rechecks cooldown state before an attempt and records
 // retryable failures while preserving one audit record for the logical call.
 type KeyCandidateCallbacks struct {
-	Completed func(err error) // upstream result, before releasing the dispatch gate
+	Attempt   func(index int) func(HTTPAttemptResult) // one actual HTTP initiation/result
+	Completed func(err error)                         // upstream result, before releasing the dispatch gate
 	Ready     func(index int) (bool, time.Duration)
 	Failed    func(index int, callErr *CallError) (hasNext bool, earliestCooldown time.Duration)
 }
@@ -81,10 +82,17 @@ type KeyCandidateCallbacks struct {
 type observedReader struct {
 	io.Reader
 	observed *bytes.Buffer
+	timedOut *bool
 }
 
 func (r observedReader) Read(p []byte) (int, error) {
 	n, err := r.Reader.Read(p)
+	if err != nil && r.timedOut != nil {
+		var network interface{ Timeout() bool }
+		if errors.As(err, &network) && network.Timeout() {
+			*r.timedOut = true
+		}
+	}
 	if n > 0 {
 		r.observed.Write(p[:n])
 	}
@@ -320,7 +328,12 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			}
 		}
 		recordRateLimitRetry := func() { a.Events = append(a.Events, "rate_limit_retry") }
-		data, usage, err = c.doAttemptWithRateLimitRetries(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, handleRateLimit, recordRateLimitRetry)
+		data, usage, err = c.doAttemptWithRateLimitRetries(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, handleRateLimit, recordRateLimitRetry, func() func(HTTPAttemptResult) {
+			if callbacks.Attempt == nil {
+				return nil
+			}
+			return callbacks.Attempt(candidateIndex)
+		})
 		if err == nil {
 			break
 		}
@@ -375,9 +388,9 @@ func (c *Client) cacheSession(clientProtocol, session string) string {
 	return c.CacheNamespace + "\x00" + clientProtocol + "\x00" + session
 }
 
-func (c *Client) doAttemptWithRateLimitRetries(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, onRateLimit func(*CallError), onRetry func()) ([]byte, TokenUsage, error) {
+func (c *Client) doAttemptWithRateLimitRetries(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, onRateLimit func(*CallError), onRetry func(), observers ...HTTPAttemptObserver) ([]byte, TokenUsage, error) {
 	for attempt := 1; ; attempt++ {
-		data, usage, err := c.doAttempt(ctx, clientProtocol, providerBody, model, sink, options, limits, id, apiKey, observed, delivered)
+		data, usage, err := c.doAttempt(ctx, clientProtocol, providerBody, model, sink, options, limits, id, apiKey, observed, delivered, observers...)
 		if err == nil {
 			return data, usage, nil
 		}
@@ -488,7 +501,7 @@ func canFailover(callErr *CallError, hasNext, delivered bool, ctx context.Contex
 	return callErr != nil && callErr.Retryable && hasNext && !delivered && ctx.Err() == nil
 }
 
-func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool) ([]byte, TokenUsage, error) {
+func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, observers ...HTTPAttemptObserver) (attemptResponse []byte, attemptUsage TokenUsage, attemptErr error) {
 	path := "/chat/completions"
 	if c.Protocol == "anthropic" {
 		path = "/messages"
@@ -518,8 +531,19 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		client = *c.HTTP
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if ctx.Err() != nil {
+		return nil, TokenUsage{}, &CallError{Status: 502, Code: "upstream_transport_error"}
+	}
+	timedOut := false
+	if len(observers) > 0 && observers[0] != nil {
+		if finish := observers[0](); finish != nil {
+			defer func() { finish(httpAttemptResult(ctx, attemptErr, timedOut)) }()
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
+		var network interface{ Timeout() bool }
+		timedOut = errors.As(err, &network) && network.Timeout()
 		callErr := &CallError{Status: 502, Code: "upstream_transport_error"}
 		if !headersWritten.Load() && ctx.Err() == nil {
 			callErr.Retryable = true
@@ -533,7 +557,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, TokenUsage{}, upstreamError(resp, c.ErrorCodeMappings...)
 	}
-	recordedBody := observedReader{Reader: resp.Body, observed: observed}
+	recordedBody := observedReader{Reader: resp.Body, observed: observed, timedOut: &timedOut}
 	if sink != nil {
 		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_content_type"}

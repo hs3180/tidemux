@@ -10,10 +10,17 @@ import (
 // keeps each attempted key bound for that attempt and never switches after
 // downstream stream output begins.
 type providerKeyPool struct {
-	keys      []string
-	next      int
-	cooldowns []time.Time
-	mu        sync.Mutex
+	labels           []string
+	failureClasses   []string
+	failureTimes     []time.Time
+	counters         []*KeyCounters
+	telemetryEnabled bool
+	counterEpoch     uint64
+	decisions        []KeyFailover
+	keys             []string
+	next             int
+	cooldowns        []time.Time
+	mu               sync.Mutex
 }
 
 type providerKeyCandidate struct {
@@ -25,7 +32,9 @@ func newProviderKeyPool(keys []string) *providerKeyPool {
 	if len(keys) == 0 {
 		return nil
 	}
-	return &providerKeyPool{keys: append([]string(nil), keys...), cooldowns: make([]time.Time, len(keys))}
+	pool := &providerKeyPool{keys: append([]string(nil), keys...), cooldowns: make([]time.Time, len(keys))}
+	pool.initializeDiagnostics()
+	return pool
 }
 
 func (p *providerKeyPool) hasMultipleKeys() bool {
@@ -76,11 +85,11 @@ func (p *providerKeyPool) CandidatesAt(now time.Time) ([]providerKeyCandidate, t
 	return nil, earliest.Sub(now)
 }
 
-func (p *providerKeyPool) Cooldown(index int, delay time.Duration) {
-	p.CooldownAt(index, delay, time.Now())
+func (p *providerKeyPool) Cooldown(index int, delay time.Duration, reason ...string) {
+	p.CooldownAt(index, delay, time.Now(), reason...)
 }
 
-func (p *providerKeyPool) CooldownAt(index int, delay time.Duration, now time.Time) {
+func (p *providerKeyPool) CooldownAt(index int, delay time.Duration, now time.Time, reason ...string) {
 	if p == nil || index < 0 || index >= len(p.keys) {
 		return
 	}
@@ -94,6 +103,9 @@ func (p *providerKeyPool) CooldownAt(index int, delay time.Duration, now time.Ti
 	p.mu.Lock()
 	if until.After(p.cooldowns[index]) {
 		p.cooldowns[index] = until
+	}
+	if len(reason) > 0 {
+		p.failureClasses[index], p.failureTimes[index] = reason[0], now
 	}
 	p.mu.Unlock()
 }
