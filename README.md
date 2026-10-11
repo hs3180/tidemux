@@ -4,8 +4,6 @@ Use Claude Code, Kilo CLI or Hermes Agent with your own LLM API.
 TideMux is a local macOS gateway for OpenAI Chat Completions and Anthropic
 Messages, with routing, usage accounting and private logs.
 
-Provider/model state and recovery: [availability guide](docs/availability.md).
-
 ## Install
 
 Requires macOS 15+ on Apple Silicon. Install your client CLI separately.
