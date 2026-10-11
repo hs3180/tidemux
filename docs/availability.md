@@ -73,3 +73,54 @@ provider/model identifiers and generation; no provider error text is retained.
 
 See [routing and capacity](clients.md), [accounting](accounting.md) and
 [runtime logs](runtime-logging.md).
+
+## Per-key diagnostics
+
+Each provider includes a `key_pool` with capacity, eligible/cooling counts,
+assigned opaque labels, cooldown expiry and the last fixed failure class.
+Labels are random assignments, independent of credentials and Keychain names.
+Eligibility reflects the key cooldown; it does not prove model or provider
+health. A successful same-key retry can still retain an existing key cooldown.
+
+Optional counters are enabled by default. Change them without restarting:
+
+```sh
+tidemux gateway configure --health-diagnostics=false
+```
+
+Set `health_diagnostics` to `true` (or omit it) to enable them. Disabling counters
+preserves key choice, cooldowns, provider/model availability, budgets and audit
+records. The query still reports pool capacity, labels and operational cooldown
+state; `counters` are absent and `recent_failovers` is empty.
+
+| Counter | Meaning within the current counter epoch |
+| --- | --- |
+| `requests` | Adapter calls that initiate at least one HTTP attempt with this key; one call can count once on multiple keys. |
+| `http_attempts` | Initiated HTTP `Do` calls, including each same-key 429 retry and each failover attempt. |
+| `successes` | Attempts whose response or stream validates and completes successfully. |
+| `failures` | Other unsuccessful attempts, excluding cancellation and timeout. |
+| `cancellations` / `timeouts` | Attempts ended by cancellation or timeout, counted separately. |
+| `in_flight` | Initiated attempts whose response/stream processing has not completed. |
+
+Skipped cooled candidates, validation failures, local capacity/budget rejection
+and cancellation before HTTP initiation add no attempts. Counts describe the
+adapter call and are not cross-provider gateway root-request counts. SQLite
+and JSONL retain their existing authoritative audit/usage semantics.
+`http_attempts` equals completed outcomes plus `in_flight` in an uninterrupted
+epoch; counters saturate at the unsigned 64-bit maximum.
+
+A recent failover records only an actual switch between attempted keys, with
+opaque `from`/`to` labels and a fixed reason. Same-key retries and skipped
+candidates add no decision. Each provider retains at most 32 decisions for one
+hour; queries prune expiry without refreshing retention. Key state has one slot
+per configured credential and no registry of retired labels.
+
+Compatible policy reloads preserve labels, counters and cooldowns. Connection,
+protocol, API-version or credential changes create a new pool and generation;
+removal/re-addition and process restart also reset labels/counters. Changing the
+telemetry flag clears counters/history and increments `counter_epoch` while
+preserving labels and cooldowns. Requests already in flight finish against their
+old counter objects and cannot write the new window. A retry initiated after a
+reset can therefore have an attempt with zero new-window `requests` if that
+adapter call first used the key before the reset. These are process-local
+observations, not persistent accounting totals.

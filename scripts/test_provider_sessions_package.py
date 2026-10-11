@@ -316,8 +316,12 @@ def queued_cancel_action(protocol):
                 headers = f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {GATEWAY_KEY}\r\nContent-Type: application/json\r\nX-TideMux-Session-ID: {PRIVATE_SESSION}-queue-canceled\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
                 queued.sendall(headers.encode() + body)
                 wait_for(lambda: occupancy(2) and len(snapshot()[1]) == 2, "second provider/global lease and queued budget reservation")
-                if upstream.calls != 1:
-                    raise RuntimeError("queued request dispatched before cancellation")
+                # A durable reservation precedes adapter gate entry. Keep the
+                # admitted request alive under the occupied gate before canceling;
+                # otherwise a scheduler can cancel it before queue_wait begins.
+                time.sleep(.25)
+                if not occupancy(2) or len(snapshot()[1]) != 2 or upstream.calls != 1:
+                    raise RuntimeError("queued request lost its lease/reservation or dispatched before cancellation")
                 queued.shutdown(socket.SHUT_RDWR)
                 queued.close()
                 queued = None
@@ -327,7 +331,9 @@ def queued_cancel_action(protocol):
                 canceled_id, raw = next(iter(canceled_audits.items()))
                 record = json.loads(raw)
                 if record.get("status") != "canceled" or record.get("error_code") != "request_canceled" or record.get("events") != ["queue_wait"] or upstream.calls != 1:
-                    raise RuntimeError("queued cancellation was not exactly one undispatched canceled attempt")
+                    raise RuntimeError("queued cancellation invariant failed: " + json.dumps({
+                        "status": record.get("status"), "error_code": record.get("error_code"),
+                        "events": record.get("events"), "queue_ms": record.get("queue_ms"), "upstream_calls": upstream.calls}))
                 def canceled_terminal():
                     events = [json.loads(line) for line in (config.parent / "stderr").read_text().splitlines() if line]
                     return [event for event in events if event.get("event") == "request_terminal" and event.get("requestId") == canceled_id]

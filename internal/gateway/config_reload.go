@@ -137,6 +137,7 @@ func WatchConfig(h http.Handler, path string, original Config, lookup SecretLook
 // Process-wide settings keep their existing startup semantics. Provider,
 // routing and auto-chain data belong to each request's immutable view.
 func runtimeSettings(c Config) Config {
+	c.HealthDiagnostics = nil
 	c.Providers = nil
 	c.Routing = nil
 	c.AutoChain = nil
@@ -223,7 +224,7 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 		}
 		view.models[name], view.modelsKnown[name] = models, known
 		pool := newProviderKeyPool(p.ResolvedAPIKeys())
-		if old, ok := previous.providers[name]; ok && old.BaseURL == p.BaseURL && old.Protocol == p.Protocol && reflect.DeepEqual(old.ResolvedAPIKeys(), p.ResolvedAPIKeys()) {
+		if sameConnection {
 			pool = previous.keyPools[name]
 		}
 		view.keyPools[name] = pool
