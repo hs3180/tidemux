@@ -154,7 +154,7 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				if callErr.UpstreamNotAttempted && callErr.Code == "upstream_transport_error" {
 					return pool.hasMultipleKeys() && candidateIndex+1 < len(candidates), 0
 				}
-				pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown)
+				pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown, adapter.SafeFailureClass(callErr))
 				if !pool.hasMultipleKeys() {
 					return false, 0
 				}
@@ -173,6 +173,21 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				}
 				return false, pool.CooldownWaitAt(now)
 			},
+		}
+		if h.config.HealthDiagnosticsEnabled() && pool != nil {
+			seen := make(map[int]bool, len(candidates))
+			last, reason := -1, "upstream_error"
+			callbacks.Attempt = func(candidateIndex int) func(adapter.HTTPAttemptResult) {
+				index := candidates[candidateIndex].index
+				finish := pool.beginAttempt(index, !seen[index], last, reason, time.Now())
+				seen[index], last = true, index
+				return func(result adapter.HTTPAttemptResult) {
+					reason = result.FailureClass
+					if finish != nil {
+						finish(result)
+					}
+				}
+			}
 		}
 		return providerClient.CallFromKeyCandidates(clientProtocol, r.Context(), routeBody, route.model, sink, options, keys, callbacks)
 	}
