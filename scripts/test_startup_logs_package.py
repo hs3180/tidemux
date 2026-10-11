@@ -62,7 +62,7 @@ def check_failure(binary, args, env, root, stage, code, version):
     if any(event.get("event") == "gateway_start" and event.get("outcome") != "error"
            for event in events) or any(event.get("event") == "gateway_shutdown" for event in events):
         raise RuntimeError("failed startup also emitted successful lifecycle events")
-    if "docs/runtime-logging.md" not in result.stdout:
+    if "docs/guide.md#troubleshooting" not in result.stdout:
         raise RuntimeError("startup did not provide safe human recovery guidance")
     return {"stage": stage, "error_code": code, "exit_code": result.returncode,
             "one_terminal_failure": True, "stderr_json": True, "privacy": True}, result.stderr

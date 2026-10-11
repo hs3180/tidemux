@@ -1,62 +1,80 @@
-# Contributing to TideMux
+# Contributing
 
-Thank you for contributing to TideMux. Read the [project overview](README.md),
-privacy boundaries and [code of conduct](CODE_OF_CONDUCT.md) before you start.
+Read the [user guide](docs/guide.md), [core design](docs/design.md) and
+[code of conduct](CODE_OF_CONDUCT.md). Use plain English for docs, CLI output,
+comments and PRs. Keep providers/currencies configurable and preserve unknown
+usage, privacy and third-party attribution.
 
-## Language and conventions
+## Development
 
-English is the primary language for documentation, CLI output, code comments,
-tests, issue templates and pull requests. Write for an international audience:
-use plain English, explicit units and unambiguous dates such as `2026-09-12`.
-Store timestamps as Unix time and state the time zone when displaying dates.
+Requires Go 1.27+ and macOS arm64 for native package checks.
 
-Keep providers and currencies configurable. Do not infer a user's region,
-currency or time zone from their provider or model. DeepSeek is a quick-start
-example, not a required provider. Preserve third-party names, license texts and
-historical database identifiers when needed for attribution or compatibility.
+```sh
+CGO_ENABLED=0 go build ./...
+CGO_ENABLED=0 go test ./...
+CGO_ENABLED=0 go vet ./...
+go test -race ./...
+gofmt -l cmd internal
+python3 scripts/check_docs.py
+```
 
-## What we look for
+Formatting output must be empty. Use focused tests for changed behavior and the
+affected package gates in `.github/workflows/ci.yml`. For a source installation,
+build `./cmd/tidemux` to your chosen binary directory; preserve existing
+configuration, Keychain and ledger data.
 
-- Bug reports with clear steps to reproduce the problem.
-- Focused improvements that keep the tool **simple by design** - we prefer
-  solving a real, proven need over speculative features.
-- Changes that respect user privacy, with no undisclosed data collection. Local optional diagnostic counters are documented in the availability manual.
+## Pull requests
 
-## Get started
+Keep each PR focused, explain its behavior, validation and limits, and use the
+[pull request template](.github/PULL_REQUEST_TEMPLATE.md). Follow
+[AGENTS](AGENTS.md) for human approval of the latest commit and explicit
+per-PR merge authorization. New commits need renewed review.
 
-1. **Check open issues first** - comment if you plan to work on an existing
-   one to avoid duplicate effort.
-2. **Fork & branch** - work on a descriptive branch (e.g. `fix/limiter-race`).
-3. **Keep PRs small and single-concern**:
-   - One issue / one change per PR.
-   - Split large changes; each PR must be independently reviewable.
-4. **Run the checks** before submitting:
-   - `go build ./...` and `go test ./...`
-   - `go vet ./...` and `gofmt -l .` (must be clean)
-   - Add/update meaningful tests for behavior you change.
-   - Run `python3 scripts/check_docs.py` for Markdown changes and affected
-     package gates for runtime changes. See [core design](docs/design.md).
+Put user instructions in `docs/guide.md` and architectural contracts in
+`docs/design.md`. Prefer CLI help for option lists. Merge repeated explanations;
+keep task progress, review notes, test evidence and release transactions in
+issue/PR attachments or a private workspace outside the source tree.
+Update dependency notices through `scripts/licenses.py`; preserve license,
+privacy, security and SPDX/SBOM material.
 
-## Pull request template
+## Releases
 
-Use [PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) - it asks for
-what reviewers need: the context, the change, how it was verified, and any
-trade-offs.
+1. Align the source version, installer default, changelog and version-pinned
+   installation example. Run the development checks and required CI gates.
+2. From a clean committed tree, run `python3 scripts/release.py --build-id commit`.
+   It creates a macOS arm64 archive, SHA256SUMS, BUILD, SPDX and formula in an
+   immutable `dist/<version>+<commit>/` directory. Scripts/fixtures do not ship.
+3. Verify every checksum, binary version, BUILD source commit, SBOM and archive
+   contents. Extract into a fresh directory; check its Markdown links and run
+   every required package gate against that exact binary.
+4. Finish installed-client, official ccusage and actual collector checks below.
+   Verify installation/reinstallation and data-preserving uninstall in isolated
+   directories. Keep source/archive/binary hashes and results outside the repo.
+5. After the scoped PRs are human-approved and explicitly authorized for merge,
+   align the release with actual main and requalify if the source changed.
+   With separate publication authorization, create the version tag/release,
+   upload the five tested assets and verify their downloaded checksums and the
+   version-pinned installer. Published assets and tags are immutable.
+6. Submit the generated formula to `hs3180/homebrew-tap` as a separate reviewed
+   PR. Verify real Homebrew installation after its authorized merge. Production
+   installation requires separate authorization and preserves local data.
 
-## Commit & PR etiquette
+The required package gates cover protocol/tools, routing/recovery, reload,
+capacity, budgets, startup and JSONL. For actual installed Claude/Kilo/Hermes:
 
-- Write clear commit messages (why, not just what).
-- Address each review comment individually; if you disagree, explain why
-  rather than ignoring it.
-- Wait for human review of the latest PR commit and explicit user authorization
-  for that PR before merging. New commits require renewed review. Do not use
-  auto-merge, a merge queue or direct pushes to main. Follow [AGENTS](AGENTS.md).
-- Keep validation evidence and execution history outside the source tree; manuals
-  contain lasting methods and limits. See [release procedure](docs/releasing.md).
+```sh
+python3 scripts/test_client_recovery_package.py --binary /path/to/extracted/tidemux --evidence /path/to/private/evidence
+```
 
-## Scope
+Require all three clients and both capacity scopes. Record their actual versions,
+read/edit/shell-test, recovery and continuation. Loopback scripted models verify
+client/gateway behavior, not reasoning or paid invoices; interactive TUIs and
+complete dsh/Codex workflows are outside acceptance.
 
-Keep contributions within the [documented product scope](README.md#compatibility).
-Cloud control planes, multi-tenancy and features that collect user data are
-outside the current release scope. Discuss substantial changes before opening
-a large pull request.
+Run the unmodified official ccusage executable on the same package's session
+logs and verify known counts and exclusion of unknown usage. Run actual
+Filebeat/Logstash against isolated ES with fresh namespaces and registries;
+check types/time/usage, replay IDs, parse failures and mapping DLQ. Production
+ES tests require explicit authorization and a dedicated namespace.
+Build and CI artifact upload do not publish a release. If public installation
+fails, resolve it in a new qualified version before announcing delivery.

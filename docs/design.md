@@ -1,98 +1,81 @@
 # Core design
 
-TideMux runs as a local gateway with a process-wide SQLite ledger. Client
-authentication, provider selection, upstream attempts and accounting are
-separate stages. The operational surface is documented in the
-[provider CLI](provider-cli.md), [availability](availability.md),
-[protocols](protocols.md) and [accounting](accounting.md) manuals.
+The [user guide](guide.md) owns setup and operations. CLI help owns flags;
+[CONTRIBUTING](https://github.com/hs3180/tidemux/blob/main/CONTRIBUTING.md) owns validation and releases.
 
-## Configuration publication
+```text
+client -> gateway (view, authentication, route, admission)
+       -> adapter (HTTP, conversion, stream) -> SQLite audit + JSONL summary
+```
 
-Configuration files contain Keychain references, not credentials. Setup writes
-validated files atomically. The watcher resolves credentials and prepares a new
-provider/routing view before publication; failed validation retains the last
-valid view. Configuration application status distinguishes saved intent from
-the running view.
+`cmd/tidemux` owns setup, launchers and startup. `internal/gateway` owns immutable
+views, routing, availability, capacity and reservations. `internal/adapter` owns
+upstream calls and settlement; ledger/observability/limiter own persistence,
+canonical events and shared admission.
 
-Every admitted request uses one immutable view. It keeps the selected endpoint,
-credentials, protocol, model scope, prices, budget policy and accounting
-snapshot while queued or in flight. Compatible connections can reuse clients,
-catalogs and key pools. Endpoint, protocol, API-version or credential changes
-assign a new connection generation and isolate prompt-cache state. Deleted and
-re-added providers get a new generation.
+## Configuration and requests
 
-Publication advances a routing epoch. Semantic session bindings can survive a
-compatible view when their provider/model is still eligible. Old requests may
-finish their own audit and reservation settlement; they cannot overwrite
-current routing preferences or availability observations. An active recovery
-probe keeps its claim across a compatible reload until the old request ends;
-its old result releases the claim without confirming new-epoch recovery.
+Setup atomically saves validated configuration with Keychain references. The
+watcher resolves credentials and prepares a complete provider/routing view;
+failed validation keeps the previous view. Saved intent and applied state differ.
+Admitted requests retain their endpoint, credentials, protocol, prices and budget
+snapshot while queued or in flight.
 
-## Routing and availability
+Compatible policy reloads reuse connections, key pools and eligible bindings.
+Endpoint/protocol/API-version/key changes and removal/re-addition create a new
+connection generation. Publication advances an epoch; old requests may finish
+settlement but cannot overwrite current health or routing. A compatible active
+probe keeps its claim until the old request ends; its old result only releases
+ownership. Local prompt-prefix estimates use the admitted generation, are bounded
+to 256 entries/16 MiB with five-minute idle expiry, and reset on restart.
 
-Explicit `REF/MODEL` selects that profile and strips the first reference prefix.
-A bare model requires an unambiguous configured scope unless shared selection
-opts into random or price priority. `model: auto` uses an ordered instance
-chain. Client protocol does not choose the provider; adapters convert only
-when necessary and supported.
+## Routing and recovery
 
-Healthy session bindings take priority within their routing rules. A confirmed
-failure excludes the affected target from later eligible selections without
-replaying the failed request. Model-not-found and temporary unavailability are
-model-scoped; insufficient balance and proven connection establishment failure
-are provider-scoped. Authentication and rate limits retain key scope.
+Explicit routes, ordered auto chains and shared random/price selection use the
+same eligibility state and recheck it after the concurrency queue. Healthy
+bindings survive when their provider/model stays eligible. Random/auto affinity
+requires a stable caller/protocol/session identity; random also includes the
+bare model. Bindings retain hashes, expire after 24 idle hours and reset on
+restart. Price priority has no affinity. Capacity is an admission check.
 
-Selection and dispatch share the same bounded availability state. Dispatch
-rechecks after the concurrency queue, so a failure observed while waiting can
-block a stale selection before HTTP. Cooling targets become eligible for one
-request-driven probe after their retry time. Backoff/jitter, scope, generation
-and quantity/idle limits are defined in [availability](availability.md). Model
-discovery and expired cooldowns do not confirm inference recovery. There is no
-background model traffic.
+Model-not-found and temporary unavailability affect a provider/model (30-second
+initial cooldown). Insufficient balance affects a provider (five minutes);
+proven pre-header connection failure also affects a provider (30 seconds).
+Authentication/429 retain key scope. Local rejection, cancellation and
+unclassified errors do not create upstream failure evidence.
 
-## Sessions, concurrency and attempts
+After cooldown, at most one real request probes a target. Failed probes double
+backoff to 30 minutes plus 0–20% jitter; longer upstream waits win, bounded to
+24 hours. Success restores eligibility for later requests. There is no background
+inference or timer declaring health. Observations are capped at 4,096 targets,
+24-hour idle retention and 128-byte ASCII model labels; active probes are retained.
 
-The global request gate bounds simultaneous upstream work. Gateway and provider
-logical-session ceilings independently limit active conversations, retaining
-idle bindings for their configured TTL. Admission and local capacity/budget
-rejections occur without an upstream attempt. A request queued under an older
-view retains that view, subject to the final health check.
+Gateway/provider session ceilings count logical conversations separately from
+request concurrency. Within a provider, 429 retries remain on one key for at most
+three total attempts; eligible auth and proven pre-write failures can try another.
+No key/provider replay follows downstream output. Safe mapped billing failover
+is opt-in and bounded; dispatched auto/shared-session calls retain their route.
 
-Within one provider, the key pool orders eligible credentials and rechecks
-cooldowns before later candidates. 429 retries stay on the same key for at most
-three total attempts. Eligible authentication failures and safe connection
-failures can switch keys. Once downstream bytes may have been written, no key
-or provider replay is permitted.
+## Accounting and observability
 
-Optional per-key diagnostics observe each initiated HTTP `Do` and its complete
-response/stream outcome. Same-key retries are separate attempts; cooled skips
-and pre-dispatch failures are excluded. Opaque labels are assigned independently
-of secrets. Counters and a bounded recent failover ring are process-local,
-generation-bound observations. Disabling telemetry preserves routing and
-cooldowns. The authenticated status query never sends upstream requests.
+Each adapter call has one terminal audit; cross-provider attempts have separate
+calls. Queued cancellation is recorded without upstream work. Request/events
+commit together; final SSE completion waits for audit persistence. Budget pending
+attempts survive crashes as unknown charges, fail closed when unresolved and
+settle against the admitted provider/policy. Operational counts add no usage rows.
+Prices/currencies stay with history; missing usage/cost is unknown, and local
+estimates or supplied statement CSVs are not automatically fetched invoices.
 
-## Accounting and logs
+Optional key counters observe initiated HTTP calls and complete outcomes; labels
+are assigned independently of secrets. One state slot exists per configured key,
+and each provider retains at most 32 failover decisions for one hour. Generation
+or telemetry-epoch changes fence old completions; disabling counters preserves
+operational routing/cooldowns. Status queries are authenticated and read-only.
 
-A logical adapter call produces one authoritative audit even if it retries or
-switches keys. Cross-provider routing creates separate adapter calls and audits;
-operational key counts do not invent a gateway root request. Budget reservations
-and settlement remain attached to the admitted provider/policy snapshot. A
-settlement failure blocks further budgeted work until resolved.
-
-Known usage is recorded with its price/currency snapshot. Missing usage or
-cost remains unknown. Supplier CSV reconciliation compares recorded estimates
-with statements; it does not infer invoice truth from HTTP success.
-
-The central logger adds schema version, service/version, a random process
-instance and unique event ID to every runtime event. Each terminal request is
-encoded once and copied unchanged to stderr and its session JSONL file. Known
-usage uses the Claude-compatible assistant envelope; local rejection and other
-diagnostics omit assistant usage, preventing ccusage double counting. Persisted
-event IDs support collector replay deduplication, while `requestId` correlates
-events and is not an event key.
-
-SQLite remains the accounting source of truth. JSONL and status queries are
-bounded operational summaries without credentials, bodies, raw session IDs or
-provider error text. Collector access and retention are operator choices; see
-[runtime logs](runtime-logging.md), [ccusage](ccusage.md) and
-[Elasticsearch](elasticsearch.md).
+The central logger supplies schema 2, service version, a random process identity
+and unique event ID to all runtime events. Identity failure stops startup without
+a colliding fallback. Terminal events are encoded once and copied unchanged to
+stderr/session files. Known usage uses the Claude-compatible assistant envelope;
+other events add no assistant usage. `event_id` deduplicates copies/replay;
+`requestId` correlates events. SQLite is authoritative for accounting. Logs and
+queries omit credentials, bodies, raw session IDs and provider errors.

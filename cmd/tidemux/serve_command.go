@@ -57,7 +57,7 @@ func serveCommand(args []string, stdout, stderr *os.File) error {
 func serveRuntimeLogger(stdout, stderr io.Writer) (*slog.Logger, error) {
 	logger, err := observability.NewJSONLogger(stderr, version)
 	if err != nil {
-		fmt.Fprintln(stdout, "TideMux could not start: logging (runtime_identity_failed). See docs/runtime-logging.md for recovery.")
+		fmt.Fprintln(stdout, "TideMux could not start: logging (runtime_identity_failed). See docs/guide.md#troubleshooting for recovery.")
 		return nil, &runtimeLoggedError{err: err}
 	}
 	return logger, nil
@@ -74,6 +74,6 @@ func logStartupFailure(logger *slog.Logger, stdout io.Writer, stage, code string
 		slog.String("startup_stage", stage),
 		slog.String("error_code", code),
 	)
-	fmt.Fprintf(stdout, "TideMux could not start: %s (%s). See docs/runtime-logging.md for recovery.\n", stage, code)
+	fmt.Fprintf(stdout, "TideMux could not start: %s (%s). See docs/guide.md#troubleshooting for recovery.\n", stage, code)
 	return &runtimeLoggedError{err: err}
 }
