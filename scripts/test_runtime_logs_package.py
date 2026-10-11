@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from runtime_event_checks import validate_runtime_events
+
 GATEWAY_KEY = "local-gateway-key"
 PROVIDER_KEY = "local-provider-key"
 REQUEST_SENTINEL = "package_request_body_sensitive_sentinel"
@@ -183,6 +185,8 @@ def main():
                 raise RuntimeError(f"packaged serve exited {process.returncode}: {stderr or stdout}")
 
             events = [json.loads(line) for line in stderr.splitlines() if line.strip()]
+            version = subprocess.check_output([str(binary), "version"], text=True).strip()
+            validate_runtime_events(events, version)
             by_request = {
                 event.get("requestId"): event
                 for event in events

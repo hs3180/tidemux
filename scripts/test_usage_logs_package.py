@@ -19,6 +19,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from runtime_event_checks import validate_runtime_events
 from test_runtime_logs_package import Server, free_port, GATEWAY_KEY, PROVIDER_KEY
 
 PROMPT = "usage-private-prompt-sentinel"
@@ -292,6 +293,15 @@ def main():
                 assert len(settled) == sum(row.get("provider_ref") == "usd" for row in rows)
                 assert all(math.isclose(amount, by_id[identity]["estimated_cost"], rel_tol=1e-12) for identity, amount in settled)
                 assert db.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == sum(len(row["events"]) for row in rows)
+            runtime_events = [json.loads(line, object_pairs_hook=unique_object) for line in (root / "stderr").read_text().splitlines()]
+            version = subprocess.check_output([str(binary), "version"], text=True).strip()
+            instances = validate_runtime_events(runtime_events, version, one_instance=False)
+            starts = [event["service"]["instance"]["id"] for event in runtime_events if event["event"] == "gateway_start"]
+            assert len(starts) == len(instances) == len(set(starts)), "restart reused process identity"
+            runtime_lines = {json.loads(line)["event_id"]: line for line in (root / "stderr").read_text().splitlines()}
+            for path in output.glob("projects/tidemux/*.jsonl"):
+                for line in path.read_text().splitlines():
+                    assert runtime_lines[json.loads(line)["event_id"]] == line, "event copies differ in encoded content"
             terminals = {event["requestId"]: event for event in (json.loads(line, object_pairs_hook=unique_object) for line in (root / "stderr").read_text().splitlines()) if event.get("event") == "request_terminal"}
             assert terminals.keys() == by_id.keys()
             for identity, record in records.items():

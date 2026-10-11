@@ -212,7 +212,10 @@ func serveWithSignalsUsing(config gateway.Config, stdout, stderr io.Writer, inte
 }
 
 func serveWithSignalsUsingConfig(config gateway.Config, stdout, stderr io.Writer, interrupt <-chan os.Signal, serveServer func(*http.Server, net.Listener) error, path string) error {
-	logger := observability.JSONLogger(stderr)
+	logger, err := serveRuntimeLogger(stdout, stderr)
+	if err != nil {
+		return err
+	}
 	listener, server, closeGateway, err := gateway.OpenWithLogger(config, nil, logger)
 	if err != nil {
 		stage, code := gateway.StartupFailure(err)
