@@ -149,6 +149,35 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
         assert result.stdout == ''
         print('Ambiguous bare-model scope rejected before client launch')
 
+        # An enabled shared-model strategy delegates selection to the gateway.
+        # The clients keep the bare ID and receive neither candidate's limits.
+        server.models = [{'id': 'glm/glm-5.3'}, {'id': 'secondary/glm-5.3'}]
+        for strategy in ['random', 'price_priority']:
+            shared = json.loads(ambiguous.read_text())
+            shared['routing'] = {'shared_model_strategy': strategy}
+            config = root / (strategy + '.json')
+            config.write_text(json.dumps(shared))
+            before = config.read_bytes()
+            for name in ['claude', 'kilo', 'hermes']:
+                result = subprocess.run([binary, name, '--config', str(config), '--model', 'glm-5.3',
+                                         '--executable', str(child), '--', 'shared-model-argument'],
+                                        env=env, capture_output=True, text=True, timeout=15, check=True)
+                record = json.loads(result.stdout)
+                assert record['args'][-1] == 'shared-model-argument'
+                assert record['env']['TIDEMUX_GATEWAY_TOKEN'] == 'synthetic-local-token'
+                assert config.read_bytes() == before
+                if name == 'claude':
+                    assert record['env']['ANTHROPIC_MODEL'] == 'glm-5.3'
+                elif name == 'kilo':
+                    data = json.loads(record['env']['KILO_CONFIG_CONTENT'])
+                    assert data['model'] == 'tidemux-local/glm-5.3'
+                    assert 'limit' not in data['provider']['tidemux-local']['models']['glm-5.3']
+                else:
+                    data = json.loads((Path(record['env']['HERMES_HOME']) / 'config.yaml').read_text())
+                    assert data['model']['default'] == 'glm-5.3'
+                    assert 'context_length' not in data['model']
+                print('Shared-model gateway selection passed:', strategy, name)
+
         for old in ['connect', 'launch']:
             result = subprocess.run([binary, old, 'claude', '--help'], capture_output=True, timeout=5)
             assert result.returncode != 0
