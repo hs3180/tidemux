@@ -41,14 +41,17 @@ func TestMappedProviderFailureCategoriesStayDistinctForClientProtocols(t *testin
 			provider.Protocol = "openai"
 			provider.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: test.upstreamCode, HTTPStatus: test.upstreamHTTP, Category: test.category}}
 			c.Providers["p"] = provider
-			h, closeDB, err := NewHandler(c, upstream.Client())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer closeDB()
-
 			for _, clientProtocol := range []string{"openai", "anthropic"} {
 				t.Run(clientProtocol, func(t *testing.T) {
+					// Each assertion observes a first call. Subsequent calls
+					// correctly share cooldowns across client protocols.
+					current := c
+					current.LedgerPath = filepath.Join(t.TempDir(), "ledger.db")
+					h, closeDB, err := NewHandler(current, upstream.Client())
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer closeDB()
 					path := "/v1/chat/completions"
 					if clientProtocol == "anthropic" {
 						path = "/v1/messages"

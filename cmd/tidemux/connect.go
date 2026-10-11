@@ -174,6 +174,8 @@ func isValidClientModelID(model string) bool {
 	return model != "" && strings.TrimSpace(model) == model && !strings.ContainsAny(model, "\r\n\x00")
 }
 
+// An empty provider reference leaves shared-model selection to the gateway and
+// prevents the launcher from advertising one candidate's model capabilities.
 func resolveClientProvider(c gateway.Config, model string, catalog []string) (string, error) {
 	if !isValidClientModelID(model) {
 		return "", errors.New("--model must be an upstream model ID or REF/MODEL_ID; use a non-empty ID without leading/trailing whitespace")
@@ -217,6 +219,9 @@ func resolveClientProvider(c gateway.Config, model string, catalog []string) (st
 	case 1:
 		return candidates[0], nil
 	default:
+		if c.EffectiveRouting().SharedModelStrategy != "" {
+			return "", nil
+		}
 		return "", fmt.Errorf("model %q matches multiple provider scopes; use REF/MODEL_ID to choose one of: %s", model, strings.Join(candidates, ", "))
 	}
 }
