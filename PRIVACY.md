@@ -10,10 +10,10 @@ TideMux has no separate hosted relay, account service, telemetry, or crash uploa
 The local SQLite ledger stores request metadata, token/cache counts, status,
 latency, events, and estimated-cost fields. It does not intentionally store
 API keys or full prompt/response content. Unknown usage and estimated cost
-remain null. See [accounting](docs/accounting.md) for ledger fields and
-[protocol support](docs/protocols.md) for request-routing boundaries.
+remain null. See [billing](docs/guide.md#billing-and-budgets) for cost estimates and
+[compatibility](docs/guide.md#compatibility) for request-routing boundaries.
 
-[Usage logging](docs/ccusage.md) runs by default and writes ccusage-compatible
+[Usage logging](docs/guide.md#logs-and-collection) runs by default and writes ccusage-compatible
 JSONL directly when a request ends. It records model and token/cache counts;
 unknown required counts are omitted. Session groups are keyed pseudonyms based
 on the gateway credential, stable across restarts with that credential. Runtime

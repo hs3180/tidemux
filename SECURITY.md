@@ -27,9 +27,8 @@ macOS 15+ on Apple Silicon. No response-time guarantee is provided.
 - Requests are sent to the configured upstream. No telemetry or diagnostic
   upload feature is implemented.
 
-See [protocol support](docs/protocols.md) for current gateway boundaries and
-[client compatibility](docs/client-compatibility.md) for the current tested
-client matrix and its boundaries.
+See [compatibility](docs/guide.md#compatibility) for gateway boundaries and
+[client setup](docs/guide.md#clients) for supported interfaces.
 
 Security reports should cover the CLI, HTTP service, ledger, credentials,
 and bundled dependencies. Public release materials must identify affected

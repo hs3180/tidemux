@@ -1,64 +1,42 @@
 # Working in TideMux
 
-These instructions apply to this repository and its worktrees. Follow any
-workspace-wide instructions as well.
+These rules apply to the repository and its worktrees, alongside workspace rules.
 
-## Human review and merge authorization
+## Review and authorization
 
-- Submit independent changes as separate PRs, with necessary validation,
-  concrete behavior changes and known limits.
-- Wait for a human to review and approve the latest PR commit. Merge only after
-  the user explicitly authorizes merging that specific PR.
-- Tests, CI, conflict-free status, bots and other agents do not replace human
-  review or authorize a merge. New commits require another human review.
-- Do not enable auto-merge, use a merge queue, directly push the main branch or
-  bypass this requirement through another API or CLI.
-- General requests to finish work or deliver a version do not authorize PR
-  merges or release steps that depend on them. Continue authorized independent
-  work while waiting. Public releases and production upgrades need their own
-  explicit authorization.
+- Submit independent scopes as separate PRs with behavior, validation and limits.
+- Merge only after a human approves the latest commit and the user explicitly
+  authorizes that PR's merge. New commits require renewed human review.
+- Tests, CI, bots and other agents do not replace human approval. Never auto-merge,
+  queue a merge, directly push main or bypass review through another interface.
+- General completion requests do not authorize merges or dependent release steps.
+  Public publication and production upgrades require explicit authorization.
+  Continue authorized independent work while awaiting review.
 
-## File ownership
+## Source and documentation
 
-- `cmd/tidemux`: CLI, secure setup, launchers and process startup.
-- `internal/gateway`: immutable request views, routing, provider/key availability,
-  capacity, reservations and config publication.
-- `internal/adapter`: upstream HTTP attempts, native forwarding, conversion,
-  streaming limits and logical-call audit settlement.
-- `internal/ledger`, `internal/observability`, `internal/limiter`: accounting,
-  canonical JSONL records and concurrency/session contracts.
-- `docs/`: lasting user manuals, core design and reusable developer procedures.
-  Keep README concise and link to the relevant manual.
-- `scripts/fixtures/`: synthetic test inputs, including collector configuration.
-  Fixtures and tests must stay out of distributed archives and the formula.
-- `dist/`: immutable generated candidates. Generate from a clean commit using
-  `scripts/release.py`; never patch generated assets or replace a published tag.
-- Execution logs, test evidence, review notes, task progress and historical
-  release transactions belong in issue/PR attachments or a private workspace
-  outside this repository. Do not add them to manuals or release archives.
+- CLI/startup code lives in `cmd/tidemux`; runtime stages are in `internal/`.
+  Read [core design](docs/design.md) and the affected code before changing contracts.
+- Keep only two lasting manuals: [user guide](docs/guide.md) and core design.
+  Add explanations to the existing task/contract section; remove duplication.
+  README is the quick start, CLI help is the option reference, and
+  [CONTRIBUTING](CONTRIBUTING.md) owns development/release procedures.
+- Keep synthetic inputs in `scripts/fixtures/`. Tests/fixtures and execution
+  records must not enter release packages. Evidence, progress, review notes and
+  historical transactions belong in issue/PR attachments or a private workspace.
+- Generate immutable `dist/` assets from a clean commit with `scripts/release.py`.
+  Never patch generated assets or replace a published tag.
 
-## Preserve contracts
+## Contracts and verification
 
-Read [core design](docs/design.md) and the affected user manual before changing
-behavior. Requests admitted before a reload keep their credential, policy,
-price, reservation and audit snapshot. Fence old availability/probe results by
-publication epoch and connection generation. Recheck health after the queue,
-before dispatch. Never replay output that may have reached a streaming client.
+Preserve admitted request views, session/capacity/budget semantics, reload epoch
+and connection-generation fences. Recheck health after queuing; never replay
+output that may have reached a client. Credentials stay in Keychain. Exclude
+secrets, bodies, raw sessions, private paths and provider errors from diagnostics.
+Keep unknown usage/cost and currencies distinct; counters never replace SQLite.
 
-Gateway credentials, provider credentials and webhook secrets stay in Keychain.
-Do not print secrets, original request/response content, raw session IDs,
-private paths or raw provider errors in shareable diagnostics. Preserve unknown
-usage/cost and currency separation. Operational counters do not replace SQLite
-accounting or produce additional assistant usage records.
-
-## Verification
-
-Use focused meaningful tests for changed behavior, then the required Go
-test/vet/race checks and affected package gates. Keep Go formatting clean.
-Run `python3 scripts/check_docs.py` after Markdown changes. For final delivery,
-use one exact clean extracted archive, record its source and binary/archive
-hashes, and follow [release procedure](docs/releasing.md). Native collectors and
-installed-client checks must record their actual versions and limitations.
-
-Change dependency notices through `scripts/licenses.py`; review generated
-licenses/SPDX metadata. Preserve privacy, security, license and SBOM documents.
+Run focused meaningful tests, required Go test/vet/race and affected package gates.
+Run `python3 scripts/check_docs.py` after Markdown edits. Final delivery uses one
+clean extracted archive with source/binary/archive hashes and actual tool versions;
+follow [release checks](CONTRIBUTING.md#releases). Update generated notices via
+`scripts/licenses.py`; preserve privacy, security, licenses and SBOM documents.
