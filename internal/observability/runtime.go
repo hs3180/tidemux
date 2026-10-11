@@ -20,11 +20,34 @@ var (
 	requestIDPattern  = regexp.MustCompile(`^[a-f0-9]{32}$`)
 )
 
-// JSONLogger creates the JSON Lines logger used for serve runtime events.
+// JSONLogger is the library logger, with unknown application version. Serve
+// uses NewJSONLogger with the same version that its version command prints.
 func JSONLogger(output io.Writer) *slog.Logger {
+	logger, err := NewJSONLogger(output, "unknown")
+	if err != nil {
+		panic(err)
+	}
+	return logger
+}
+
+// NewJSONLogger establishes the process identity before emitting any event.
+// Failure returns no logger; callers must not substitute a placeholder ID.
+func NewJSONLogger(output io.Writer, version string) (*slog.Logger, error) {
+	identity, err := processRuntimeIdentity()
+	if err != nil {
+		return nil, err
+	}
+	return newJSONLogger(output, version, identity), nil
+}
+
+func newJSONLogger(output io.Writer, version string, identity *runtimeIdentity) *slog.Logger {
+	if !serviceVersionPattern.MatchString(version) {
+		version = "unknown"
+	}
 	w := &jsonOutput{output: output}
 	h := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: canonicalAttribute})
-	return slog.New(&jsonHandler{Handler: h, output: w})
+	return slog.New(&jsonHandler{Handler: h, output: w, identity: identity,
+		service: serviceMetadata{Name: "tidemux", Version: version, Instance: serviceInstance{ID: identity.instance}}, attrs: [][]slog.Attr{nil}})
 }
 
 func canonicalAttribute(groups []string, a slog.Attr) slog.Attr {
@@ -48,7 +71,11 @@ type usageLogDestination struct {
 // stderr and, for terminal requests, the session file used by local readers.
 type jsonHandler struct {
 	slog.Handler
-	output *jsonOutput
+	output   *jsonOutput
+	identity *runtimeIdentity
+	service  serviceMetadata
+	attrs    [][]slog.Attr
+	groups   []string
 }
 
 type jsonOutput struct {
@@ -59,11 +86,28 @@ type jsonOutput struct {
 }
 
 func (h *jsonHandler) Handle(ctx context.Context, r slog.Record) error {
+	id, err := h.identity.eventID()
+	if err != nil {
+		return err
+	}
+	// Keep the envelope at the root even when a caller uses WithGroup, and
+	// reserve its fields so caller attributes cannot replace event identity.
+	attrs := append([]slog.Attr(nil), h.attrs[len(h.groups)]...)
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	for depth := len(h.groups) - 1; depth >= 0; depth-- {
+		attrs = append(append([]slog.Attr(nil), h.attrs[depth]...), slog.Attr{Key: h.groups[depth], Value: slog.GroupValue(attrs...)})
+	}
+	record := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	record.AddAttrs(slog.Any("service", h.service), slog.String("event_id", id))
+	record.AddAttrs(envelopeAttributes(attrs)...)
 	destination, _ := ctx.Value(usageLogContextKey{}).(usageLogDestination)
 	h.output.mu.Lock()
 	h.output.destination = destination
 	h.output.warn = false
-	err := h.Handler.Handle(ctx, r)
+	err = h.Handler.Handle(ctx, record)
 	warn := h.output.warn
 	h.output.destination = usageLogDestination{}
 	h.output.mu.Unlock()
@@ -75,11 +119,55 @@ func (h *jsonHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func (h *jsonHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &jsonHandler{Handler: h.Handler.WithAttrs(attrs), output: h.output}
+	clone := *h
+	clone.attrs = append([][]slog.Attr(nil), h.attrs...)
+	depth := len(h.groups)
+	clone.attrs[depth] = append(append([]slog.Attr(nil), h.attrs[depth]...), resolveAttributes(attrs)...)
+	return &clone
 }
 
 func (h *jsonHandler) WithGroup(name string) slog.Handler {
-	return &jsonHandler{Handler: h.Handler.WithGroup(name), output: h.output}
+	if name == "" {
+		return h
+	}
+	clone := *h
+	clone.groups = append(append([]string(nil), h.groups...), name)
+	clone.attrs = append(append([][]slog.Attr(nil), h.attrs...), nil)
+	return &clone
+}
+
+func reservedEnvelopeAttribute(key string) bool { return key == "service" || key == "event_id" }
+
+// Match slog's binding semantics: a bound LogValuer is resolved once, before
+// concurrent events can use the logger. Copy groups to keep clones immutable.
+func resolveAttributes(attrs []slog.Attr) []slog.Attr {
+	resolved := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		a.Value = a.Value.Resolve()
+		if a.Value.Kind() == slog.KindGroup {
+			a.Value = slog.GroupValue(resolveAttributes(a.Value.Group())...)
+		}
+		resolved[i] = a
+	}
+	return resolved
+}
+
+func envelopeAttributes(attrs []slog.Attr) []slog.Attr {
+	filtered := make([]slog.Attr, 0, len(attrs))
+	for _, a := range attrs {
+		if reservedEnvelopeAttribute(a.Key) {
+			continue
+		}
+		// Empty group names are inlined by slog, so reserve their root fields too.
+		if a.Key == "" {
+			a.Value = a.Value.Resolve()
+			if a.Value.Kind() == slog.KindGroup {
+				a.Value = slog.GroupValue(envelopeAttributes(a.Value.Group())...)
+			}
+		}
+		filtered = append(filtered, a)
+	}
+	return filtered
 }
 
 func (w *jsonOutput) Write(data []byte) (int, error) {

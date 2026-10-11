@@ -16,6 +16,8 @@ import sys
 import tempfile
 import time
 
+from runtime_event_checks import validate_runtime_events
+
 
 PRIVATE_PATH = "startup_private_path_sentinel"
 PRIVATE_ARGUMENT = "startup_private_argument_sentinel"
@@ -25,7 +27,7 @@ GATEWAY_KEY = "startup_fake_gateway_key"
 PROVIDER_KEY = "startup_fake_provider_key"
 
 
-def check_events(stdout, stderr, root):
+def check_events(stdout, stderr, root, version):
     for marker in (str(root), PRIVATE_PATH, PRIVATE_ARGUMENT, PRIVATE_CONFIG,
                    PRIVATE_KEY, GATEWAY_KEY, PROVIDER_KEY):
         if marker in stdout or marker in stderr:
@@ -41,13 +43,15 @@ def check_events(stdout, stderr, root):
         if event["schema_version"] != 2:
             raise RuntimeError("unexpected runtime schema version")
         events.append(event)
+    if events:
+        validate_runtime_events(events, version)
     return events
 
 
-def check_failure(binary, args, env, root, stage, code):
+def check_failure(binary, args, env, root, stage, code, version):
     result = subprocess.run([str(binary), "serve", *args], env=env, cwd=root,
                             capture_output=True, text=True, timeout=20)
-    events = check_events(result.stdout, result.stderr, root)
+    events = check_events(result.stdout, result.stderr, root, version)
     failures = [event for event in events if event.get("event") == "gateway_start"
                 and event.get("outcome") == "error"]
     if result.returncode != 1 or len(failures) != 1:
@@ -74,6 +78,7 @@ def main():
     binary = args.binary.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise SystemExit("--binary must be an executable candidate")
+    version = subprocess.check_output([str(binary), "version"], text=True).strip()
     checks = {}
     failure_logs = []
     process = None
@@ -108,7 +113,7 @@ def main():
 
         def run_failure(name, options, stage, code, mode="ok"):
             metadata, logs = check_failure(binary, options, dict(env, TIDEMUX_TEST_SECURITY_MODE=mode),
-                                           root, stage, code)
+                                           root, stage, code, version)
             checks[name] = metadata
             failure_logs.append(logs)
 
@@ -153,7 +158,7 @@ def main():
         for flag in ("-h", "--help"):
             result = subprocess.run([str(binary), "serve", "--config", str(home / "missing"), flag],
                                     env=env, cwd=root, capture_output=True, text=True, timeout=10)
-            check_events(result.stdout, result.stderr, root)
+            check_events(result.stdout, result.stderr, root, version)
             if result.returncode != 0 or result.stderr or "usage: tidemux serve" not in result.stdout:
                 raise RuntimeError("serve help did not succeed solely on stdout")
         checks["help"] = {"exit_code": 0, "stdout_only": True, "no_config_or_keychain_read": True}
@@ -179,7 +184,7 @@ def main():
             run_failure("ledger_already_owned", ["--config", str(path)], "ledger", "ledger_initialization_failed")
             process.send_signal(signal.SIGTERM)
             stdout, stderr = process.communicate(timeout=15)
-            events = check_events(stdout, stderr, root)
+            events = check_events(stdout, stderr, root, version)
             if (process.returncode != 0 or "TideMux listening on http://127.0.0.1:" not in stdout
                     or sum(event.get("event") == "gateway_start" for event in events) != 1
                     or any(event.get("outcome") == "error" for event in events)
@@ -204,6 +209,10 @@ def main():
         checks["other_cli_preserved"] = {"exit_code": 1, "human_stderr_preserved": True}
     result = {"binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "checks": checks, "passed": True, "production_access": False}
+    failure_instances = [json.loads(logs.splitlines()[0])["service"]["instance"]["id"] for logs in failure_logs]
+    if len(set(failure_instances)) != len(failure_instances):
+        raise RuntimeError("process restart reused runtime instance identity")
+    checks["event_identity"] = {"binary_version_matches": True, "restart_namespaces_distinct": True}
     if args.evidence:
         args.evidence.mkdir(parents=True, exist_ok=True)
         (args.evidence / "package-result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
