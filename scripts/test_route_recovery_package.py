@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check bounded route recovery in a packaged binary with a real 30-second clock.
+"""Check bounded route recovery in a packaged binary with a real cooldown clock.
 
 Uses isolated profiles, fake Keychain credentials and loopback providers only.
 """
@@ -126,7 +126,7 @@ def main():
                     scenarios.append((gateway, protocol, mode, exhausted, failed_provider, healthy_provider))
         # Every scenario must pass its actual cooldown, without a config reload,
         # process restart or test-only clock supplied to the packaged gateway.
-        deadline = time.monotonic() + 30.2
+        deadline = time.monotonic() + 36.2
         while time.monotonic() < deadline:
             time.sleep(min(1, deadline - time.monotonic()))
         for gateway, protocol, mode, exhausted, failed_provider, healthy_provider in scenarios:
@@ -177,7 +177,7 @@ def main():
             logs = (gateway["root"] / "stderr").read_text() + json.dumps(rows)
             if any(marker in logs for marker in (GATEWAY_KEY, PROVIDER_KEY, BODY_MARKER, SESSION_MARKER, "private-recovery-error")):
                 raise RuntimeError("routing recovery persisted private data")
-    print(json.dumps({"binary": str(binary), "scenarios": len(scenarios), "real_cooldown_seconds": 30,
+    print(json.dumps({"binary": str(binary), "scenarios": len(scenarios), "real_cooldown_upper_bound_seconds": 36,
                       "exhausted_chain_and_shared_model_recover_without_reload": True,
                       "one_concurrent_recovery_probe": True, "healthy_bindings_retained": True,
                       "configured_auto_preference_and_anonymous_requests": True,

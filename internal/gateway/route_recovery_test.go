@@ -239,6 +239,8 @@ func TestGatewayRecoveryConcurrentDispatchAndHealthyBinding(t *testing.T) {
 					clock.Store(time.Now().UnixNano())
 					now := func() time.Time { return time.Unix(0, clock.Load()) }
 					h.autoChain.now, h.sharedAffinity.now = now, now
+					h.availability.now = now
+					h.availability.jitter = func(time.Duration) time.Duration { return 0 }
 					model := "one"
 					if mode == "auto" {
 						model = "auto"

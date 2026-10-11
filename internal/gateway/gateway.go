@@ -47,6 +47,7 @@ type handler struct {
 
 // Mutable admission/accounting state is shared by all immutable config views.
 type handlerRuntime struct {
+	availability           *availabilityState
 	usageLog               *observability.UsageLog
 	providerSessionMu      sync.Mutex
 	providerSessions       map[string]*limiter.SessionLimiter
@@ -361,6 +362,11 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		h.reject(w, r, protocol, 401, "invalid_api_key")
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Path == "/tidemux/availability-status" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(h.availabilityReport())
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/tidemux/session-status" {
 		h.sessionStatus(w)
 		return
@@ -628,7 +634,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			var callErr error
 			var handled bool
 			for preDispatch := 0; ; preDispatch++ {
-				if route.sessionKey != nil || route.autoChainIndex != nil {
+				if route.dynamic || route.sessionKey != nil || route.autoChainIndex != nil {
 					// Recheck after admission and on a proven pre-dispatch cooldown
 					// race. Once the adapter may have sent a request, do not rebind.
 					model, key := route.model, route.sessionKey
@@ -649,12 +655,18 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 				r = withRequestLogDetails(r, route.provider, route.model)
 				response, id, callErr, handled = h.callRouteWithRecovery(w, r, protocol, route, body, options, sink, &delivered)
 				var preDispatchErr *adapter.CallError
-				if route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || preDispatchErr.Code != "provider_keys_cooling_down" {
+				if !route.dynamic && route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || !isAvailabilityError(preDispatchErr.Code) {
 					break
 				}
 			}
 			if handled {
 				return nil, id, nil, true
+			}
+			var localStateError *adapter.CallError
+			if id == "" && errors.As(callErr, &localStateError) && localStateError.UpstreamNotAttempted && isAvailabilityError(localStateError.Code) {
+				setRetryAfterHeader(w, localStateError)
+				h.reject(w, r, protocol, localStateError.Status, localStateError.Code)
+				return nil, "", nil, true
 			}
 			lastID = id
 			if callErr == nil {

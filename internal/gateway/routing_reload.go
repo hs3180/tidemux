@@ -21,16 +21,13 @@ type routingReload struct {
 func (h *handler) prepareRouting(previous *handler, changedChain bool) {
 	preserve := make(map[AutoChainEntry]bool, len(h.config.AutoChain))
 	preserveFailures := make(map[AutoChainEntry]bool, len(h.config.AutoChain))
-	compatible := true
 	for _, entry := range h.config.AutoChain {
 		preserve[entry] = h.supportScopeAllows(entry.Provider, entry.Model) && h.providerRouteAvailable(entry.Provider)
 		preserveFailures[entry] = h.reusedConnections[entry.Provider] && h.supportScopeAllows(entry.Provider, entry.Model)
-		compatible = compatible && preserveFailures[entry] && preserve[entry]
 	}
-	if changedChain || !compatible {
-		h.preparedRouting = &routingReload{source: previous.autoChain, preserve: preserve, preserveFailures: preserveFailures, reset: changedChain}
-		h.autoChain = previous.autoChain.reconfiguredWithFailures(h.config.AutoChain, time.Duration(h.config.ActiveSessionIdleTimeoutSeconds)*time.Second, preserve, preserveFailures, changedChain)
-	}
+	// Each published view owns its chain; old completions cannot mutate it.
+	h.preparedRouting = &routingReload{source: previous.autoChain, preserve: preserve, preserveFailures: preserveFailures, reset: changedChain}
+	h.autoChain = previous.autoChain.reconfiguredWithFailures(h.config.AutoChain, time.Duration(h.config.ActiveSessionIdleTimeoutSeconds)*time.Second, preserve, preserveFailures, changedChain)
 }
 
 // activateRouting is called only after validation succeeds, immediately before
@@ -38,6 +35,7 @@ func (h *handler) prepareRouting(previous *handler, changedChain bool) {
 // so bindings created while preparation was in progress are included. Old
 // requests keep the old auto-chain state and cannot overwrite current affinity.
 func (h *handler) activateRouting() {
+	h.availability.activate(h.routingEpoch, h.providerGenerations, h.supportScopeAllows)
 	if prepared := h.preparedRouting; prepared != nil {
 		for _, entry := range h.config.AutoChain {
 			prepared.preserve[entry] = h.supportScopeAllows(entry.Provider, entry.Model) && h.providerRouteAvailable(entry.Provider)

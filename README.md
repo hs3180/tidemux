@@ -12,6 +12,8 @@ TideMux is a local macOS gateway for **OpenAI-compatible and Anthropic-compatibl
 - **Automatic reconciliation** — match locally supplied statement CSVs while the gateway runs; query statistics or download billing details with `tidemux billing`.
 - **Daily reports** — generate private HTML reports, schedule macOS notifications, or send concise plain-text webhook summaries to IM platforms.
 
+Provider/model state and recovery: [availability guide](docs/availability.md).
+
 ## Install
 
 Requires **macOS 15+ on Apple Silicon** and [Homebrew](https://brew.sh).
