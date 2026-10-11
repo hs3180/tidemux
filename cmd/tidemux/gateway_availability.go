@@ -81,6 +81,25 @@ func gatewayAvailability(args []string, stdout, stderr *os.File, lookup gateway.
 	fmt.Fprintf(stdout, "Recovery: %s; idle TTL: %ds; observed target limit: %d\n", report.RecoveryMode, report.IdleTTLSeconds, report.StateLimit)
 	for _, provider := range report.Providers {
 		printAvailability(stdout, provider.Ref, provider.Generation, provider.AvailabilityStatus)
+		if pool := provider.KeyPool; pool != nil {
+			fmt.Fprintf(stdout, "  keys: capacity=%d eligible=%d cooling=%d telemetry=%t epoch=%d\n", pool.Capacity, pool.Eligible, pool.Cooling, pool.TelemetryEnabled, pool.CounterEpoch)
+			for _, key := range pool.Keys {
+				fmt.Fprintf(stdout, "  %s state=%s", key.Label, key.State)
+				if key.LastFailureClass != "" {
+					fmt.Fprintf(stdout, " last-failure=%s", key.LastFailureClass)
+				}
+				if !key.CooldownUntil.IsZero() {
+					fmt.Fprintf(stdout, " cooldown-until=%s", key.CooldownUntil.Format(time.RFC3339))
+				}
+				if counts := key.Counters; counts != nil {
+					fmt.Fprintf(stdout, " requests=%d attempts=%d success=%d failure=%d canceled=%d timeout=%d in-flight=%d", counts.Requests, counts.HTTPAttempts, counts.Successes, counts.Failures, counts.Cancellations, counts.Timeouts, counts.InFlight)
+				}
+				fmt.Fprintln(stdout)
+			}
+			for _, decision := range pool.RecentFailovers {
+				fmt.Fprintf(stdout, "  failover %s -> %s reason=%s at=%s\n", decision.From, decision.To, decision.Reason, decision.Timestamp.Format(time.RFC3339))
+			}
+		}
 		for _, model := range provider.Models {
 			printAvailability(stdout, provider.Ref+"/"+model.Model, provider.Generation, model.AvailabilityStatus)
 		}
