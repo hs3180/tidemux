@@ -20,7 +20,7 @@ func loadCommandConfig(path string) (gateway.Config, string, []byte, error) {
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db")}, abs, nil, nil
+			return gateway.Config{ListenAddr: defaultListenAddr, LedgerPath: filepath.Join(filepath.Dir(abs), "ledger.db")}, abs, nil, nil
 		}
 		return gateway.Config{}, abs, nil, errors.New("cannot read config")
 	}

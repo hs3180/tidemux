@@ -19,7 +19,7 @@ func TestOpenClassifiesStartupStageWithoutChangingErrorText(t *testing.T) {
 		name, stage, code string
 		modify            func(*Config)
 	}{
-		{"invalid configuration", "config", "config_load_failed", func(c *Config) { c.MaxInFlight = 0 }},
+		{"invalid configuration", "config", "config_load_failed", func(c *Config) { c.MaxInFlight = -1 }},
 		{"unresolved credentials", "credentials", "credential_resolution_failed", func(c *Config) { c.AccessToken = "" }},
 		{"missing provider", "providers", "provider_initialization_failed", func(c *Config) {
 			c.Protocol, c.APIVersion, c.BaseURL, c.Model, c.UpstreamID, c.APIKey = "", "", "", "", "", ""

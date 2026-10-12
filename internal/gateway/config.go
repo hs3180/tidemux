@@ -290,8 +290,8 @@ func (c Config) Validate() error {
 			return errors.New("providers." + name + ".upstream_id must be a short non-secret label")
 		}
 	}
-	if c.MaxInFlight < 1 || c.MaxInFlight > 1024 {
-		return errors.New("max_in_flight must be 1..1024")
+	if c.MaxInFlight < 0 || c.MaxInFlight > 1024 {
+		return errors.New("max_in_flight must be 0..1024; zero disables the limit")
 	}
 	if c.MaxActiveSessions < 0 || c.MaxActiveSessions > 4096 {
 		return errors.New("max_active_sessions must be 0..4096")

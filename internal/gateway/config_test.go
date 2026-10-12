@@ -34,6 +34,40 @@ func TestProviderCapacityConfigBoundsAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGlobalConcurrencyConfigAllowsUnlimited(t *testing.T) {
+	c := testConfig("ledger.db", "https://provider.example/v1")
+	for _, limit := range []int{-1, 0, 1, 1024, 1025} {
+		c.MaxInFlight = limit
+		err := c.Validate()
+		valid := limit >= 0 && limit <= 1024
+		if valid != (err == nil) {
+			t.Fatalf("max_in_flight=%d err=%v", limit, err)
+		}
+		if valid {
+			data, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decodeValidatedConfig(data)
+			if err != nil || decoded.MaxInFlight != limit {
+				t.Fatalf("roundtrip limit=%d got=%d err=%v", limit, decoded.MaxInFlight, err)
+			}
+		}
+	}
+	c.MaxInFlight = 1
+	data, _ := json.Marshal(c)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	delete(fields, "max_in_flight")
+	data, _ = json.Marshal(fields)
+	decoded, err := decodeValidatedConfig(data)
+	if err != nil || decoded.MaxInFlight != 0 {
+		t.Fatalf("omitted limit=%d err=%v", decoded.MaxInFlight, err)
+	}
+}
+
 type testSecrets map[string]string
 
 func (s testSecrets) Lookup(_ context.Context, r KeychainReference) (string, error) {

@@ -104,7 +104,7 @@ func TestServeUnexpectedServerErrorIsStructuredAndRedacted(t *testing.T) {
 func TestServeStartupErrorIsStructuredAndHumanReadable(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	config := runtimeTestConfig(t.TempDir())
-	config.MaxInFlight = 0
+	config.MaxInFlight = -1
 	err := serveWithSignalsUsing(config, &stdout, &stderr, make(chan os.Signal), func(*http.Server, net.Listener) error {
 		t.Fatal("server should not start when the configuration is invalid")
 		return nil
