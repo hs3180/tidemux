@@ -63,7 +63,7 @@ func TestServeCommandLogsBeforeParsingAndLoading(t *testing.T) {
 					t.Fatalf("private startup input reached output: %q", marker)
 				}
 			}
-			if !strings.Contains(string(human), "docs/runtime-logging.md") {
+			if !strings.Contains(string(human), "docs/guide.md#troubleshooting") {
 				t.Fatalf("missing safe recovery guidance: %s", human)
 			}
 		})
