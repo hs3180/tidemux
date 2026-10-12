@@ -10,9 +10,9 @@ assignees: ""
 _One sentence: what's broken._
 
 ## Environment
-- TideMux version: _`tidemux --version` output_
+- TideMux version: _`tidemux version` output_
 - macOS version:
-- Install method: `brew tap hs3180/tidemux` / built from source / other
+- Install method: `brew install hs3180/tap/tidemux` / built from source / other
 
 ## Steps to reproduce
 1.
@@ -23,11 +23,15 @@ _One sentence: what's broken._
 _What should happen._
 
 ## Actual behavior
-_What actually happens. Include error output._
+_What actually happens. Include only a short, redacted error description._
 
-## Opt-in diagnostic export
-_If you exported a diagnostics package (local preview → explicit export),
-attach it here. Never paste API keys into issues._
+## Optional safe diagnostics
+- Time, with timezone:
+- Request ID and safe error code, if available:
+- Did the task complete?
+
+_Diagnostic export/upload packages are not implemented. Share only reviewed,
+redacted metadata; do not attach raw logs, databases, prompts, responses or keys._
 
 ## Anything else
-_Logs / related context. Remember: no full prompts or keys._
+_Related issues or redacted context. Do not include private paths or credentials._
