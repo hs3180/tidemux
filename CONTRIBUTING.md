@@ -70,6 +70,16 @@ read/edit/shell-test, recovery and continuation. Loopback scripted models verify
 client/gateway behavior, not reasoning or paid invoices; interactive TUIs and
 complete dsh/Codex workflows are outside acceptance.
 
+Also require all three installed clients under both shared-model strategies:
+
+```sh
+python3 scripts/test_shared_model_launch_package.py --binary /path/to/extracted/tidemux --installed-clients --evidence /path/to/private/shared-launch-evidence
+```
+
+The fixture supplies a stable session header; it does not certify that each
+client generates that header itself. Verify ambiguity, binding, recovery and
+actual upstream/key attempt counts.
+
 Run the unmodified official ccusage executable on the same package's session
 logs and verify known counts and exclusion of unknown usage. Run actual
 Filebeat/Logstash against isolated ES with fresh namespaces and registries;
