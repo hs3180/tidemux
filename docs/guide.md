@@ -14,9 +14,9 @@ Homebrew commands are in the [README](../README.md#install).
 For a standalone installation, download and inspect the version-pinned script:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.2/scripts/install.sh -o /tmp/tidemux-install.sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.3/scripts/install.sh -o /tmp/tidemux-install.sh
 less /tmp/tidemux-install.sh
-TIDEMUX_VERSION=0.3.2 sh /tmp/tidemux-install.sh
+TIDEMUX_VERSION=0.3.3 sh /tmp/tidemux-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
