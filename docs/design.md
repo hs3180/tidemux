@@ -51,7 +51,14 @@ inference or timer declaring health. Observations are capped at 4,096 targets,
 24-hour idle retention and 128-byte ASCII model labels; active probes are retained.
 
 Gateway/provider session ceilings count logical conversations separately from
-request concurrency. Within a provider, 429 retries remain on one key for at most
+request concurrency. The optional global request gate is disabled when
+`max_in_flight` is zero or omitted; new configurations default to zero. Positive
+values share a single gate across providers and queue until a slot is available
+or the caller cancels. Changing this process-wide setting requires a restart.
+Session admission, budgets, cancellation and terminal accounting still apply
+with the request gate disabled.
+
+Within a provider, 429 retries remain on one key for at most
 three total attempts; eligible auth and proven pre-write failures can try another.
 No key/provider replay follows downstream output. Safe mapped billing failover
 is opt-in and bounded; dispatched auto/shared-session calls retain their route.

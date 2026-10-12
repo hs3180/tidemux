@@ -409,6 +409,30 @@ func TestProviderCommandDoesNotRetainConfigureAlias(t *testing.T) {
 	}
 }
 
+func TestGatewayConfigureDisablesGlobalConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, MaxActiveSessions: 12, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"glm": {Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "glm"}, MaxActiveSessions: 5}}}
+	if err := writeCommandConfig(path, c, nil); err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.CreateTemp(dir, "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	if err := gatewayConfigure([]string{"--config", path, "--max-in-flight", "0"}, output, output); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := gateway.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.MaxInFlight != 0 || updated.MaxActiveSessions != c.MaxActiveSessions || updated.Providers["glm"].MaxActiveSessions != 5 || updated.Providers["glm"].BaseURL != c.Providers["glm"].BaseURL || updated.AccessTokenKeychain != c.AccessTokenKeychain {
+		t.Fatalf("disabling global request concurrency changed other settings: %+v", updated)
+	}
+}
+
 func TestLoadCommandConfigAllowsFirstProviderSetup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.json")
@@ -416,7 +440,7 @@ func TestLoadCommandConfigAllowsFirstProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ListenAddr != defaultListenAddr || c.MaxInFlight != 1 || before != nil || abs != path {
+	if c.ListenAddr != defaultListenAddr || c.MaxInFlight != 0 || before != nil || abs != path {
 		t.Fatalf("initial config=%+v abs=%s before=%v", c, abs, before)
 	}
 }

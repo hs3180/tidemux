@@ -114,7 +114,7 @@ func TestConfigWatcherAtomicViewsAndSharedRuntime(t *testing.T) {
 		t.Fatal("old view mutated")
 	}
 	// A process-wide limit cannot silently reset while old requests hold slots.
-	next.MaxInFlight++
+	next.MaxInFlight = 0
 	save(next)
 	wait(func() bool { return root.reload.applicationStatus()["error_code"] == "config_requires_restart" })
 	if len(root.reload.active.Load().providers) != 0 {

@@ -99,8 +99,14 @@ option under `routing set`: it needs an exact insufficient-balance mapping on
 the provider and a compatible target. It never replays an active shared-session
 or auto-chain request. Configure mappings with `provider error-map --help`.
 
-Session ceilings count conversations; `--max-in-flight` limits simultaneous
-upstream work. A full ceiling returns `active_session_limit` before dispatch.
+Global upstream request concurrency is unlimited in new configurations.
+Use `tidemux gateway configure --max-in-flight 0` to disable the limit in an
+existing configuration, then restart the gateway. Existing positive values
+still cap simultaneous upstream requests across all providers; this setting
+does not hot reload.
+
+Session ceilings count conversations independently of request concurrency.
+A full session ceiling returns `active_session_limit` before dispatch.
 Reducing a provider cap does not cancel admitted work. Listener mode defaults
 to authenticated loopback; `0.0.0.0` exposes plain HTTP on the LAN and needs
 network protection. Use `gateway configure --help` for global settings.

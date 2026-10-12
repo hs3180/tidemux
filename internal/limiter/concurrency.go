@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// ConcurrencyGate caps in-flight provider calls. It never retries, changes a
-// request, or silently drops work: callers receive cancellation from their
-// context while waiting and can expose QueueWait in their activity log.
+// ConcurrencyGate optionally caps in-flight provider calls. It never retries,
+// changes a request, or silently drops work: callers receive cancellation from
+// their context while waiting and can expose QueueWait in their activity log.
 type ConcurrencyGate struct{ slots chan struct{} }
 
 // Admission describes the observable effect of acquiring a gate slot.
@@ -18,10 +18,13 @@ type Admission struct {
 	QueueWait time.Duration
 }
 
-// NewConcurrencyGate creates a gate with a positive number of in-flight slots.
+// NewConcurrencyGate creates a gate; zero disables the in-flight limit.
 func NewConcurrencyGate(maxInFlight int) (*ConcurrencyGate, error) {
-	if maxInFlight < 1 {
-		return nil, errors.New("concurrency limit must be at least 1")
+	if maxInFlight < 0 {
+		return nil, errors.New("concurrency limit must not be negative")
+	}
+	if maxInFlight == 0 {
+		return &ConcurrencyGate{}, nil
 	}
 	return &ConcurrencyGate{slots: make(chan struct{}, maxInFlight)}, nil
 }
@@ -34,6 +37,9 @@ func (g *ConcurrencyGate) Acquire(ctx context.Context) (Admission, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return Admission{}, err
+	}
+	if g.slots == nil {
+		return Admission{}, nil
 	}
 	select {
 	case g.slots <- struct{}{}:
@@ -58,4 +64,8 @@ func (g *ConcurrencyGate) Acquire(ctx context.Context) (Admission, error) {
 }
 
 // Release returns one previously acquired slot.
-func (g *ConcurrencyGate) Release() { <-g.slots }
+func (g *ConcurrencyGate) Release() {
+	if g.slots != nil {
+		<-g.slots
+	}
+}

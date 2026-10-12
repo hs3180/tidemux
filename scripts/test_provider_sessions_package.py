@@ -117,7 +117,7 @@ def new_upstream(protocol="openai"):
     return upstream
 
 
-def run(binary, root, protocol, cap, global_cap, action, other_upstream=None, *, max_in_flight=32, idle_seconds=0, provider_budget=False, canceled_audits=0):
+def run(binary, root, protocol, cap, global_cap, action, other_upstream=None, *, max_in_flight=32, other_cap=0, idle_seconds=0, provider_budget=False, canceled_audits=0):
     upstream = new_upstream(other_upstream.protocol if other_upstream else "openai")
     env = dict(os.environ, PATH=str(root / "bin") + ":" + os.environ.get("PATH", ""))
     port = free_port()
@@ -125,7 +125,9 @@ def run(binary, root, protocol, cap, global_cap, action, other_upstream=None, *,
     endpoint = f"http://127.0.0.1:{upstream.server_port}/v1"
     config, ledger = root / "config.json", root / "ledger.db"
     provider = {"protocol": upstream.protocol, "base_url": endpoint, "upstream_keychain": {"service": "test.provider", "account": "local"}, "supported_models": ["custom-model", "other-model"]}
-    value = {"listen_addr": f"127.0.0.1:{port}", "max_in_flight": max_in_flight, "max_active_sessions": global_cap, "active_session_idle_timeout_seconds": idle_seconds, "ledger_path": str(ledger), "access_token_keychain": {"service": "test.gateway", "account": "local"}, "providers": {"glm": dict(provider, max_active_sessions=cap), "other": provider}}
+    value = {"listen_addr": f"127.0.0.1:{port}", "max_in_flight": max_in_flight, "max_active_sessions": global_cap, "active_session_idle_timeout_seconds": idle_seconds, "ledger_path": str(ledger), "access_token_keychain": {"service": "test.gateway", "account": "local"}, "providers": {"glm": dict(provider, max_active_sessions=cap), "other": dict(provider, max_active_sessions=other_cap)}}
+    if max_in_flight is None:
+        del value["max_in_flight"]
     if provider_budget:
         value["providers"]["glm"].update(
             prices={"custom-model": {"currency": "USD", "source": "synthetic", "version": "capacity-test", "input_cache_miss_per_million": 1, "input_cache_hit_per_million": .1, "output_per_million": 2}},
@@ -291,6 +293,49 @@ def anonymous_idle_action(protocol):
     return action
 
 
+def unlimited_concurrency_action(protocol):
+    def action(url, upstream, config, env):
+        responses = []
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [pool.submit(request, url, protocol, PRIVATE_SESSION + ref + str(i), ref + "/custom-model", True)
+                       for ref in ("glm", "other") for i in range(5)]
+            try:
+                responses.extend(future.result(timeout=5) for future in futures)
+                if any(response.status != 200 for response in responses) or upstream.calls != 10:
+                    raise RuntimeError("unlimited requests did not dispatch concurrently across providers")
+                state = status(url)
+                if any(state["providers"][ref]["current"] != 5 for ref in ("glm", "other")):
+                    raise RuntimeError("independent provider occupancy lost with the global request gate disabled")
+                for ref in ("glm", "other"):
+                    # A held conversation may make another request without
+                    # consuming a sixth logical-session slot.
+                    responses.append(request(url, protocol, PRIVATE_SESSION + ref + "0", ref + "/custom-model", True))
+                    reject(query(url, protocol, PRIVATE_SESSION + ref + "sixth", ref + "/custom-model"), "provider", 5)
+                if upstream.calls != 12 or any(response.status != 200 for response in responses):
+                    raise RuntimeError("same-session concurrency or provider ceilings changed")
+                state = status(url)
+                if any(state["providers"][ref]["current"] != 5 or state["providers"][ref]["rejected"] != 1
+                       for ref in ("glm", "other")):
+                    raise RuntimeError("sixth sessions changed provider occupancy or rejection counts")
+                upstream.release.set()
+                for response in responses:
+                    tail = response.read().decode()
+                    if ("[DONE]" if protocol == "openai" else "message_stop") not in tail:
+                        raise RuntimeError("concurrent stream did not complete")
+            finally:
+                upstream.release.set()
+                for response in responses:
+                    response.close()
+                for future in futures:
+                    if future.done() and not future.cancelled() and future.exception() is None:
+                        future.result().close()
+        with sqlite3.connect(config.parent / "ledger.db") as connection:
+            audits = [json.loads(row[0]) for row in connection.execute("SELECT record_json FROM request_audit")]
+        if len(audits) != 12 or any(record["status"] != "ok" or record["queue_ms"] != 0 or "queue_wait" in record["events"] for record in audits):
+            raise RuntimeError("unlimited requests lost audits or reported global queue waits")
+    return action
+
+
 def queued_cancel_action(protocol):
     def action(url, upstream, config, env):
         ledger = config.parent / "ledger.db"
@@ -368,7 +413,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="tidemux-provider-capacity.") as temporary:
         base = Path(temporary)
         for protocol in ("openai", "anthropic"):
-            for phase in ("caps", "reload", "failover_retained", "failover_new", "anonymous_idle", "queued_cancel"):
+            for phase in ("caps", "reload", "failover_retained", "failover_new", "anonymous_idle", "unlimited_concurrency", "default_concurrency", "queued_cancel"):
                 root = base / (protocol + "-" + phase)
                 (root / "bin").mkdir(parents=True)
                 security = root / "bin" / "security"
@@ -440,9 +485,12 @@ def main():
                         source.server_close()
                 elif phase == "anonymous_idle":
                     results.append(dict(run(binary, root, protocol, 1, 0, anonymous_idle_action(protocol), idle_seconds=1), phase=phase))
+                elif phase in ("unlimited_concurrency", "default_concurrency"):
+                    limit = 0 if phase == "unlimited_concurrency" else None
+                    results.append(dict(run(binary, root, protocol, 5, 0, unlimited_concurrency_action(protocol), max_in_flight=limit, other_cap=5), phase=phase))
                 else:
                     results.append(dict(run(binary, root, protocol, 2, 2, queued_cancel_action(protocol), max_in_flight=1, provider_budget=True, canceled_audits=1), phase=phase))
-    print(json.dumps({"binary": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "results": results, "glm_five": True, "provider_and_global_isolation": True, "first_admission_global_rollback": True, "balance_failover_full_target_zero_dispatch": True, "prior_audit_budget_and_held_stream_preserved": True, "anonymous_concurrent_last_slot_and_release": True, "stable_inflight_ttl_and_idle_release": True, "queued_cancel_leases_budget_and_unique_canceled_audit": True, "concurrent_reuse": True, "unlimited_to_limited": True, "remove_readd_held_sse": True, "privacy": True}))
+    print(json.dumps({"binary": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "results": results, "glm_five": True, "provider_and_global_isolation": True, "first_admission_global_rollback": True, "balance_failover_full_target_zero_dispatch": True, "prior_audit_budget_and_held_stream_preserved": True, "anonymous_concurrent_last_slot_and_release": True, "stable_inflight_ttl_and_idle_release": True, "queued_cancel_leases_budget_and_unique_canceled_audit": True, "unlimited_global_request_concurrency": True, "omitted_global_limit_unlimited": True, "concurrent_reuse": True, "unlimited_to_limited": True, "remove_readd_held_sse": True, "privacy": True}))
 
 
 if __name__ == "__main__":

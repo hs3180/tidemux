@@ -37,7 +37,7 @@ func gatewayConfigure(args []string, stdout, stderr *os.File) error {
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
 	listen := flags.String("listen", "", "listener mode: loopback or 0.0.0.0")
-	maxInFlight := flags.Int("max-in-flight", 0, "maximum simultaneous upstream requests")
+	maxInFlight := flags.Int("max-in-flight", 0, "maximum simultaneous upstream requests across providers; zero disables the limit (requires restart)")
 	maxSessions := flags.Int("max-active-sessions", -1, "maximum active logical sessions; zero disables the limit")
 	idleSeconds := flags.Int("active-session-idle-timeout-seconds", -1, "idle time before releasing a retained session; zero uses five minutes")
 	healthDiagnostics := flags.Bool("health-diagnostics", true, "enable optional per-key attempt counters and recent failovers")
@@ -92,7 +92,7 @@ func gatewayConfigure(args []string, stdout, stderr *os.File) error {
 			return errors.New("listener mode must be loopback or 0.0.0.0")
 		}
 		*listen = mode
-		if *maxInFlight, err = readPromptInt(tty, "Maximum simultaneous upstream requests", c.MaxInFlight); err != nil {
+		if *maxInFlight, err = readPromptInt(tty, "Maximum simultaneous upstream requests (0 disables; requires restart)", c.MaxInFlight); err != nil {
 			return err
 		}
 		if *maxSessions, err = readPromptInt(tty, "Maximum active sessions (0 disables)", c.MaxActiveSessions); err != nil {
