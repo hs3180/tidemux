@@ -60,7 +60,6 @@ class Tidemux < Formula
   desc "Local OpenAI and Anthropic compatible API gateway"
   homepage "https://github.com/hs3180/tidemux"
   url "https://github.com/hs3180/tidemux/releases/download/v{version}/{asset.name}"
-  version "{version}"
   sha256 "{sha}"
   license "Apache-2.0"
   depends_on arch: :arm64
