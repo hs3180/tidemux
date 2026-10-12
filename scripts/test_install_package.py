@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import tarfile
@@ -35,10 +36,19 @@ def main():
             raise RuntimeError("Release manifest mismatch")
     with tarfile.open(archive) as bundle:
         packaged = bundle.extractfile(f"tidemux-{args.version}/tidemux").read()
+        packaged_markdown = {Path(m.name).name for m in bundle.getmembers()
+                             if m.isfile() and len(Path(m.name).parts) == 2 and m.name.endswith(".md")}
     binary_hash = hashlib.sha256(packaged).hexdigest()
     formula = (assets / "tidemux.rb").read_text()
     if archive.name not in formula or digest(archive) not in formula or f"v{args.version}/" not in formula:
         raise RuntimeError("Formula and verified archive disagree")
+    install = re.search(r"^\s*pkgshare\.install\s+(.+?)(?=\n\s*end\b)", formula, re.MULTILINE | re.DOTALL)
+    if install is None:
+        raise RuntimeError("Formula has no package documentation installation")
+    selected = set(re.findall(r'"([^\"]+)"', install.group(1)))
+    missing = packaged_markdown - selected
+    if missing:
+        raise RuntimeError("Homebrew formula omits packaged Markdown: " + ", ".join(sorted(missing)))
     subprocess.run(["ruby", "-c", str(assets / "tidemux.rb")], check=True, capture_output=True)
     installer = Path(__file__).with_name("install.sh").resolve()
     with tempfile.TemporaryDirectory(prefix="tidemux-install-package.") as temporary:
@@ -108,7 +118,8 @@ cp "$TIDEMUX_LOCAL_ASSETS/${url##*/}" "$dest"
     print(json.dumps({"passed": True, "version": args.version, "archive_sha256": digest(archive),
                       "binary_sha256": binary_hash, "real_archive_installer": True, "reinstall": True,
                       "manual_uninstall_preserves_data": True, "installer_keychain_untouched": True, "doctor_uses_synthetic_keychain": True,
-                      "formula_matches_archive": True, "public_download_and_homebrew_install": "pending publication"}))
+                      "formula_matches_archive": True, "homebrew_retains_packaged_markdown": True,
+                      "public_download_and_homebrew_install": "pending publication"}))
 
 
 if __name__ == "__main__":

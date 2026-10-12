@@ -68,7 +68,8 @@ class Tidemux < Formula
 
   def install
     bin.install "tidemux"
-    pkgshare.install "docs", "licenses", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"
+    pkgshare.install "docs", "licenses", "sbom.spdx.json", "BUILD.txt", "LICENSE", "NOTICE",
+                     "README.md", "PRIVACY.md", "SECURITY.md", "CHANGELOG.md", "SBOM.md", "THIRD_PARTY_NOTICES.md"
   end
 
   test do
