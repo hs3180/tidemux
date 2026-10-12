@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.3 — Unreleased
+## 0.3.3 — 2026-10-12
 
 - Share bounded provider/model availability across explicit, shared-model and
   auto-chain selection and the post-queue dispatch boundary. Recover through
