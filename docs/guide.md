@@ -236,6 +236,11 @@ representable text, tools/results, usage and streaming. Provider-hosted Anthropi
 tools, thinking and context-management controls require an Anthropic upstream;
 unsupported request features fail before dispatch. Native blocks/history remain
 provider-owned. TideMux carries tool calls and never executes client tools.
+Provider-hosted tools run at the provider. The [Z.ai `webReader` report in
+issue #151](https://github.com/hs3180/tidemux/issues/151) describes rejection of
+percent-encoded URLs, including UTF-8 CJK URLs, with `-400`. TideMux only carries
+the call and result; it cannot change that provider-side validation. Check the
+provider for an update or use another supported retrieval path.
 Responses API, audio, embeddings and IDE integrations are outside the supported
 interface. Full interactive/dsh/Codex workflows are outside release acceptance.
 
