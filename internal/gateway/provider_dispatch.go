@@ -147,31 +147,21 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				}
 				return pool.CandidateReadyAt(candidates[candidateIndex].index, time.Now())
 			},
-			Failed: func(candidateIndex int, callErr *adapter.CallError) (bool, time.Duration) {
+			Failed: func(candidateIndex int, callErr *adapter.CallError) {
 				if candidateIndex < 0 || candidateIndex >= len(candidates) || callErr == nil || pool == nil {
-					return false, 0
+					return
 				}
 				if callErr.UpstreamNotAttempted && callErr.Code == "upstream_transport_error" {
-					return pool.hasMultipleKeys() && candidateIndex+1 < len(candidates), 0
+					return
+				}
+				// Only credential-scoped failures should cool a key. Model, request,
+				// balance, and generic upstream errors affect the route response or
+				// route health, but must not make this key unavailable for unrelated
+				// models on a future downstream request.
+				if callErr.Category != adapter.ProviderErrorAuthentication && callErr.Category != adapter.ProviderErrorRateLimited && callErr.UpstreamStatus != http.StatusUnauthorized {
+					return
 				}
 				pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown, adapter.SafeFailureClass(callErr))
-				if !pool.hasMultipleKeys() {
-					return false, 0
-				}
-				now := time.Now()
-				hasReadyCandidate := false
-				for index := candidateIndex + 1; index < len(candidates); index++ {
-					ready, _ := pool.CandidateReadyAt(candidates[index].index, now)
-					if ready {
-						hasReadyCandidate = true
-						continue
-					}
-					keys[index] = ""
-				}
-				if hasReadyCandidate {
-					return true, 0
-				}
-				return false, pool.CooldownWaitAt(now)
 			},
 		}
 		if h.config.HealthDiagnosticsEnabled() && pool != nil {
@@ -193,10 +183,6 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 	}
 	response, id, callErr := call()
 	keepProvider = callErr == nil
-	var classifiedErr *adapter.CallError
-	if h.config.EffectiveRouting().BillingExhaustionFailover && errors.As(callErr, &classifiedErr) && classifiedErr.Category == adapter.ProviderErrorInsufficientBalance {
-		pool.CooldownAll(billingExhaustionCooldown)
-	}
 	if reservationID != "" {
 		var settleErr error
 		var adapterErr *adapter.CallError

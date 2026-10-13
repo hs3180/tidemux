@@ -210,7 +210,7 @@ func TestProviderKeyPoolRoundRobinKeepsKeyForEachRequest(t *testing.T) {
 	}
 }
 
-func TestGatewayFailsOverWithinProviderKeyGroup(t *testing.T) {
+func TestGatewayReturnsProviderFailureWithoutKeyFailover(t *testing.T) {
 	var calls []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -243,16 +243,16 @@ func TestGatewayFailsOverWithinProviderKeyGroup(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
 	h.ServeHTTP(out, req)
-	if out.Code != http.StatusOK || len(calls) != 2 || calls[0] != "Bearer key-a" || calls[1] != "Bearer key-b" {
+	if out.Code != http.StatusBadGateway || len(calls) != 1 || calls[0] != "Bearer key-a" {
 		t.Fatalf("status=%d calls=%v body=%s", out.Code, calls, out.Body.String())
 	}
 	rows, err := h.(*handler).ledger.Recent(context.Background(), 10)
-	if err != nil || len(rows) != 1 || rows[0].Status != "ok" || !hasGatewayEvent(rows[0].Events, "key_failover") {
+	if err != nil || len(rows) != 1 || rows[0].Status != "error" || hasGatewayEvent(rows[0].Events, "key_failover") {
 		t.Fatalf("audits=%+v err=%v", rows, err)
 	}
 }
 
-func TestConcurrentFailoverSkipsKeyCooledAfterCandidateSnapshot(t *testing.T) {
+func TestConcurrentRequestsDoNotRetryAfterProviderFailures(t *testing.T) {
 	startedA := make(chan struct{}, 1)
 	startedB := make(chan struct{}, 1)
 	releaseA := make(chan struct{})
@@ -325,24 +325,22 @@ func TestConcurrentFailoverSkipsKeyCooledAfterCandidateSnapshot(t *testing.T) {
 		t.Fatal("second request did not reach its selected key")
 	}
 
-	// Let the second request cool key-b while the first request still holds
-	// its earlier candidate snapshot. Its fallback to key-a should succeed.
+	// Both requests have dispatched exactly one upstream call. A failure on one
+	// key must not cause either request to be replayed with the other key.
 	releaseBOnce.Do(func() { close(releaseB) })
 	select {
 	case second := <-secondDone:
-		if second.status != http.StatusOK {
+		if second.status != http.StatusBadGateway {
 			t.Fatalf("second request status=%d body=%s", second.status, second.body)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("second request did not finish after the healthy fallback")
 	}
-	// The first request's original candidate list still contains key-b, but it
-	// must recheck pool state and avoid retrying the now-cooled credential.
 	releaseAOnce.Do(func() { close(releaseA) })
 	select {
 	case first := <-firstDone:
-		if first.status != http.StatusServiceUnavailable || !strings.Contains(first.body, "provider_keys_cooling_down") {
-			t.Fatalf("first request should skip the cooling key and report an exhausted pool: status=%d body=%s", first.status, first.body)
+		if first.status != http.StatusBadGateway {
+			t.Fatalf("first request status=%d body=%s", first.status, first.body)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("first request did not finish after pool exhaustion")
@@ -352,8 +350,8 @@ func TestConcurrentFailoverSkipsKeyCooledAfterCandidateSnapshot(t *testing.T) {
 	for attempt := range attempts {
 		got = append(got, attempt)
 	}
-	if len(got) != 3 {
-		t.Fatalf("expected two initial attempts and one healthy fallback, got %v", got)
+	if len(got) != 2 {
+		t.Fatalf("expected exactly one attempt per downstream request, got %v", got)
 	}
 }
 
@@ -407,7 +405,7 @@ func TestGatewayRejectsRequestsWhileSingleKeyIsCoolingDown(t *testing.T) {
 	}
 }
 
-func TestGatewayReturnsCooldownWhenRemainingKeyIsAlreadyCoolingDown(t *testing.T) {
+func TestGatewaySelectsOneReadyKeyBeforeDispatch(t *testing.T) {
 	calls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -435,7 +433,7 @@ func TestGatewayReturnsCooldownWhenRemainingKeyIsAlreadyCoolingDown(t *testing.T
 	req.Header.Set("Authorization", "Bearer local-secret")
 	out := httptest.NewRecorder()
 	h.ServeHTTP(out, req)
-	if out.Code != http.StatusServiceUnavailable || !strings.Contains(out.Body.String(), "provider_keys_cooling_down") {
+	if out.Code != http.StatusBadGateway || strings.Contains(out.Body.String(), "provider_keys_cooling_down") {
 		t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
 	}
 	if out.Header().Get("Retry-After") == "" || calls != 1 {

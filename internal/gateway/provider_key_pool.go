@@ -37,10 +37,6 @@ func newProviderKeyPool(keys []string) *providerKeyPool {
 	return pool
 }
 
-func (p *providerKeyPool) hasMultipleKeys() bool {
-	return p != nil && len(p.keys) > 1
-}
-
 func (p *providerKeyPool) Next() string {
 	candidates, _ := p.Candidates()
 	if len(candidates) == 0 {
@@ -49,9 +45,9 @@ func (p *providerKeyPool) Next() string {
 	return candidates[0].key
 }
 
-// Candidates returns healthy keys in round-robin attempt order. The first key
-// is the normal selection; later keys are available only for safe pre-stream
-// failover within the same provider profile.
+// Candidates returns healthy keys in round-robin selection order. Each
+// downstream request uses one selected key; other candidates remain available
+// to subsequent downstream requests.
 func (p *providerKeyPool) Candidates() ([]providerKeyCandidate, time.Duration) {
 	return p.CandidatesAt(time.Now())
 }
@@ -131,9 +127,8 @@ func (p *providerKeyPool) CooldownAll(delay time.Duration) {
 	p.mu.Unlock()
 }
 
-// CandidateReadyAt rechecks a request's failover snapshot immediately before
-// trying a later key, so concurrent failures can take effect without waiting
-// for a new request to rebuild its candidate list.
+// CandidateReadyAt rechecks a selected key immediately before dispatch so a
+// concurrent cooldown can take effect after route selection and queueing.
 func (p *providerKeyPool) CandidateReadyAt(index int, now time.Time) (bool, time.Duration) {
 	if p == nil || index < 0 || index >= len(p.keys) {
 		return false, 0

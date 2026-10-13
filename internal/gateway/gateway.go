@@ -298,7 +298,16 @@ func (h *handler) failUpstream(w http.ResponseWriter, callErr *adapter.CallError
 
 func setRetryAfterHeader(w http.ResponseWriter, callErr *adapter.CallError) {
 	if callErr.RetryProvided {
+		if callErr.RetryAfterValue != "" {
+			w.Header().Set("Retry-After", callErr.RetryAfterValue)
+			return
+		}
 		w.Header().Set("Retry-After", strconv.FormatInt(callErr.RetryAfterSecs, 10))
+		return
+	}
+	if callErr.Category == adapter.ProviderErrorRateLimited {
+		// A provider's Retry-After is guidance for the downstream client. Do not
+		// invent a retry delay when the provider did not provide one.
 		return
 	}
 	if callErr.RetryAfterSecs > 0 {
@@ -616,78 +625,47 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	}
 
 	attemptRoutes := func(sink adapter.StreamSink) ([]byte, string, error, bool) {
-		var lastID string
-		var lastErr *adapter.CallError
-		var firstBalanceErr *adapter.CallError
-		var firstBalanceID string
-		for index, route := range routes {
-			if index > 0 && !routeCanAdvance(h.config.EffectiveRouting(), route, lastErr, r.Context().Err(), delivered) {
-				continue
-			}
-			if lastErr != nil && lastErr.Category == adapter.ProviderErrorInsufficientBalance {
-				if pool := h.keyPools[route.provider]; pool != nil && pool.CooldownWaitAt(time.Now()) > 0 {
-					continue
+		route := routes[0]
+		var response []byte
+		var id string
+		var callErr error
+		var handled bool
+		for preDispatch := 0; ; preDispatch++ {
+			if route.dynamic || route.sessionKey != nil || route.autoChainIndex != nil {
+				// Recheck after admission and on a proven pre-dispatch cooldown
+				// race. Once the adapter may have sent a request, do not rebind.
+				model, key := route.model, route.sessionKey
+				if route.autoChainIndex != nil {
+					model, key = "auto", sessionKey
 				}
-			}
-			var response []byte
-			var id string
-			var callErr error
-			var handled bool
-			for preDispatch := 0; ; preDispatch++ {
-				if route.dynamic || route.sessionKey != nil || route.autoChainIndex != nil {
-					// Recheck after admission and on a proven pre-dispatch cooldown
-					// race. Once the adapter may have sent a request, do not rebind.
-					model, key := route.model, route.sessionKey
-					if route.autoChainIndex != nil {
-						model, key = "auto", sessionKey
+				rebound, code, status := h.resolveRoutes(model, protocol, body, key)
+				if code != "" {
+					parameter := "model"
+					if code == "unsupported_request_feature" {
+						parameter = h.routeErrorParameter(route.model, protocol, body)
 					}
-					rebound, code, status := h.resolveRoutes(model, protocol, body, key)
-					if code != "" {
-						parameter := "model"
-						if code == "unsupported_request_feature" {
-							parameter = h.routeErrorParameter(route.model, protocol, body)
-						}
-						h.reject(w, r, protocol, status, code, parameter)
-						return nil, "", nil, true
-					}
-					route = rebound[0]
+					h.reject(w, r, protocol, status, code, parameter)
+					return nil, "", nil, true
 				}
-				r = withRequestLogDetails(r, route.provider, route.model)
-				response, id, callErr, handled = h.callRouteWithRecovery(w, r, protocol, route, body, options, sink, &delivered)
-				var preDispatchErr *adapter.CallError
-				if !route.dynamic && route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || !isAvailabilityError(preDispatchErr.Code) {
-					break
-				}
+				route = rebound[0]
 			}
-			if handled {
-				return nil, id, nil, true
-			}
-			var localStateError *adapter.CallError
-			if id == "" && errors.As(callErr, &localStateError) && localStateError.UpstreamNotAttempted && isAvailabilityError(localStateError.Code) {
-				setRetryAfterHeader(w, localStateError)
-				h.reject(w, r, protocol, localStateError.Status, localStateError.Code)
-				return nil, "", nil, true
-			}
-			lastID = id
-			if callErr == nil {
-				return response, id, nil, false
-			}
-			var adapterErr *adapter.CallError
-			if !errors.As(callErr, &adapterErr) {
-				return nil, id, callErr, false
-			}
-			lastErr = adapterErr
-			if firstBalanceErr == nil && adapterErr.Category == adapter.ProviderErrorInsufficientBalance {
-				firstBalanceErr, firstBalanceID = adapterErr, id
-			}
-			if delivered {
+			r = withRequestLogDetails(r, route.provider, route.model)
+			response, id, callErr, handled = h.callRouteWithRecovery(w, r, protocol, route, body, options, sink, &delivered)
+			var preDispatchErr *adapter.CallError
+			if !route.dynamic && route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || !isAvailabilityError(preDispatchErr.Code) {
 				break
 			}
 		}
-		if firstBalanceErr != nil && !delivered {
-			return nil, firstBalanceID, firstBalanceErr, false
+		if handled {
+			return nil, id, nil, true
 		}
-		return nil, lastID, lastErr, false
+		var localStateError *adapter.CallError
+		if id == "" && errors.As(callErr, &localStateError) && localStateError.UpstreamNotAttempted && isAvailabilityError(localStateError.Code) {
+			setRetryAfterHeader(w, localStateError)
+			h.reject(w, r, protocol, localStateError.Status, localStateError.Code)
+			return nil, "", nil, true
+		}
+		return response, id, callErr, false
 	}
 
 	if mode.Stream {

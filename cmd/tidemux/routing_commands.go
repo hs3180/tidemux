@@ -19,7 +19,7 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 	flags.SetOutput(stderr)
 	path := flags.String("config", defaultConfigPath(), "configuration path")
 	shared := flags.String("shared-model-strategy", "", "shared bare-model strategy: off, random (24h idle session affinity) or price_priority")
-	billing := flags.Bool("billing-exhaustion-failover", false, "allow explicitly mapped insufficient-balance errors to try another provider of the same client protocol")
+	billing := flags.Bool("billing-exhaustion-failover", false, "legacy setting; true is rejected because downstream clients own retries")
 	if err := flags.Parse(interspersedRoutingArgs(args[1:])); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -44,12 +44,22 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 			strategy = "off"
 		}
 		fmt.Fprintf(stdout, "Shared model strategy: %s\n", strategy)
-		fmt.Fprintf(stdout, "Billing exhaustion failover: %t\n", settings.BillingExhaustionFailover)
+		if settings.BillingExhaustionFailover {
+			fmt.Fprintln(stdout, "Billing exhaustion failover: disabled (legacy config value ignored)")
+		} else {
+			fmt.Fprintln(stdout, "Billing exhaustion failover: disabled (retries are client-owned)")
+		}
 		return nil
 	case "set":
 		if !flagWasSet(flags, "shared-model-strategy", "billing-exhaustion-failover") {
 			return errors.New("routing set requires --shared-model-strategy and/or --billing-exhaustion-failover")
 		}
+		if flagWasSet(flags, "billing-exhaustion-failover") && *billing {
+			return errors.New("billing exhaustion failover is disabled; downstream clients own retries")
+		}
+		// Clear the legacy field when changing current routing settings. Existing
+		// config files can still be read, but the field no longer has an effect.
+		settings.BillingExhaustionFailover = false
 		if flagWasSet(flags, "shared-model-strategy") {
 			switch *shared {
 			case "off", "none":
@@ -61,7 +71,7 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 			}
 		}
 		if flagWasSet(flags, "billing-exhaustion-failover") {
-			settings.BillingExhaustionFailover = *billing
+			settings.BillingExhaustionFailover = false
 		}
 		if settings == (gateway.RoutingConfig{}) {
 			c.Routing = nil

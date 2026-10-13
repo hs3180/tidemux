@@ -85,7 +85,6 @@ def main():
             config = {
                 "listen_addr": f"127.0.0.1:{port}", "max_in_flight": 2, "ledger_path": str(ledger),
                 "access_token_keychain": {"service": "test.gateway", "account": "local"},
-                "routing": {"billing_exhaustion_failover": True},
                 "providers": {
                     ref: {
                         "protocol": "openai", "base_url": f"http://127.0.0.1:{upstream.server_port}/{ref}/v1", "upstream_id": "same-vendor",

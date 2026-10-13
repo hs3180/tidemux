@@ -38,8 +38,11 @@ type Provider struct {
 }
 
 type RoutingConfig struct {
-	SharedModelStrategy       string `json:"shared_model_strategy,omitempty"`
-	BillingExhaustionFailover bool   `json:"billing_exhaustion_failover,omitempty"`
+	SharedModelStrategy string `json:"shared_model_strategy,omitempty"`
+	// BillingExhaustionFailover is retained only so older config files remain
+	// readable. TideMux no longer replays dispatched requests or fails over to
+	// another provider; downstream clients own retry decisions.
+	BillingExhaustionFailover bool `json:"billing_exhaustion_failover,omitempty"`
 }
 
 func (c Config) EffectiveRouting() RoutingConfig {

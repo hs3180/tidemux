@@ -96,7 +96,7 @@ func TestMappedProviderFailureCategoriesStayDistinctForClientProtocols(t *testin
 	}
 }
 
-func TestMapped429RetriesOnlySelectedProviderProfile(t *testing.T) {
+func TestMapped429ReturnsOnceWithoutRetryingOrFailingOver(t *testing.T) {
 	var callsA, callsB int
 	newUpstream := func(calls *int, rateLimited bool) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,21 +128,39 @@ func TestMapped429RetriesOnlySelectedProviderProfile(t *testing.T) {
 	providerB.APIKey = "provider-secret-b"
 	c.Providers["provider-a"] = providerA
 	c.Providers["provider-b"] = providerB
-	h, closeDB, err := NewHandler(c, nil)
-	if err != nil {
-		t.Fatal(err)
+	for _, clientProtocol := range []string{"openai", "anthropic"} {
+		t.Run(clientProtocol, func(t *testing.T) {
+			current := c
+			current.LedgerPath = filepath.Join(t.TempDir(), "ledger.db")
+			h, closeDB, err := NewHandler(current, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeDB()
+			path := "/v1/chat/completions"
+			if clientProtocol == "anthropic" {
+				path = "/v1/messages"
+			}
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(requestBodyFor(clientProtocol, "provider-a", "custom-model")))
+			if clientProtocol == "anthropic" {
+				req.Header.Set("x-api-key", "local-secret")
+				req.Header.Set("anthropic-version", "2023-06-01")
+			} else {
+				req.Header.Set("Authorization", "Bearer local-secret")
+			}
+			out := httptest.NewRecorder()
+			h.ServeHTTP(out, req)
+			var payload map[string]any
+			if err := json.Unmarshal(out.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			detail, _ := payload["error"].(map[string]any)
+			if out.Code != http.StatusTooManyRequests || detail["code"] != "upstream_rate_limited" || out.Header().Get("Retry-After") != "0" {
+				t.Fatalf("status=%d retry-after=%q body=%s", out.Code, out.Header().Get("Retry-After"), out.Body.String())
+			}
+		})
 	}
-	defer closeDB()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "provider-a", "custom-model")))
-	req.Header.Set("Authorization", "Bearer local-secret")
-	out := httptest.NewRecorder()
-	h.ServeHTTP(out, req)
-	var payload map[string]any
-	if err := json.Unmarshal(out.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	detail, _ := payload["error"].(map[string]any)
-	if out.Code != http.StatusTooManyRequests || detail["code"] != "upstream_rate_limited" || out.Header().Get("Retry-After") != "0" || callsA != 3 || callsB != 0 {
-		t.Fatalf("status=%d retry-after=%q callsA=%d callsB=%d body=%s", out.Code, out.Header().Get("Retry-After"), callsA, callsB, out.Body.String())
+	if callsA != 2 || callsB != 0 {
+		t.Fatalf("one upstream call per client protocol expected, got callsA=%d callsB=%d", callsA, callsB)
 	}
 }

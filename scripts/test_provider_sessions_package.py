@@ -133,7 +133,6 @@ def run(binary, root, protocol, cap, global_cap, action, other_upstream=None, *,
             prices={"custom-model": {"currency": "USD", "source": "synthetic", "version": "capacity-test", "input_cache_miss_per_million": 1, "input_cache_hit_per_million": .1, "output_per_million": 2}},
             budget={"currency": "USD", "five_hour_limit": 100, "weekly_limit": 100, "alert_threshold": .8, "mode": "hard"})
     if other_upstream is not None:
-        value["routing"] = {"billing_exhaustion_failover": True}
         value["providers"]["other"] = dict(provider, base_url=f"http://127.0.0.1:{other_upstream.server_port}/v1", max_active_sessions=1,
             error_code_mappings=[{"upstream_code": "insufficient_balance", "http_status": 402, "category": "insufficient_balance"}],
             prices={"custom-model": {"currency": "USD", "source": "synthetic", "version": "capacity-test", "input_cache_miss_per_million": 1, "input_cache_hit_per_million": .1, "output_per_million": 2}},
@@ -170,12 +169,12 @@ def run(binary, root, protocol, cap, global_cap, action, other_upstream=None, *,
         upstream.server_close()
 
 
-def failover_action(source, protocol, retain_source):
+def balance_error_action(source, protocol, retain_source):
     def action(url, target, config, env):
         retained = PRIVATE_SESSION + "-source-retained"
         occupied = PRIVATE_SESSION + "-target-occupied"
         if query(url, protocol, occupied)[0] != 200 or (retain_source and query(url, protocol, retained, "other/custom-model")[0] != 200):
-            raise RuntimeError("failover fixture did not retain both provider sessions")
+            raise RuntimeError("balance-error fixture did not retain both provider sessions")
         ledger = config.parent / "ledger.db"
         def snapshot():
             with sqlite3.connect(ledger) as connection:
@@ -186,7 +185,7 @@ def failover_action(source, protocol, retain_source):
             def finalized():
                 audits, charges = snapshot()
                 return len(audits) == want_audits and len(charges) == want_charges and all(row[0] == "settled" for row in charges.values())
-            wait_for(finalized, "exact finalized failover audit/budget rows")
+            wait_for(finalized, "exact finalized balance-error audit/budget rows")
             return snapshot()
         def counts():
             with source.lock, target.lock:
@@ -194,29 +193,31 @@ def failover_action(source, protocol, retain_source):
         def occupancy():
             state = status(url)
             if state["gateway"]["current"] != 1 + int(retain_source) or state["providers"]["glm"]["current"] != 1 or state["providers"]["other"]["current"] != int(retain_source):
-                raise RuntimeError("failover refusal lost retained/in-flight occupancy or leaked a new global lease")
+                raise RuntimeError("balance-error response changed retained/in-flight occupancy or leaked a lease")
         original_audits, original_charges = settled_snapshot(1 + int(retain_source), int(retain_source))
         if len(original_audits) != 1 + int(retain_source) or len(original_charges) != int(retain_source) or any(row[0] != "settled" for row in original_charges.values()):
-            raise RuntimeError("failover fixture accounting did not settle")
+            raise RuntimeError("balance-error fixture accounting did not settle")
         previous_audits, previous_charges = original_audits, original_charges
         with request(url, protocol, occupied, stream=True) as held:
             try:
                 if not target.started.wait(5):
-                    raise RuntimeError("failover target held SSE did not begin")
+                    raise RuntimeError("held target SSE did not begin")
                 occupancy()
                 with source.lock:
                     source.exhausted = True
                 before_source, before_target = counts()
-                reject(query(url, protocol, retained, "other/custom-model"), "provider", 1)
+                balance_status, balance_body = query(url, protocol, retained, "other/custom-model")
+                if balance_status != 402 or balance_body.get("error", {}).get("code") != "provider_insufficient_balance":
+                    raise RuntimeError("balance error was not returned to the downstream client")
                 if counts() != (before_source + 1, before_target):
-                    raise RuntimeError("balance failover refusal dispatched target or lost its prior source attempt")
+                    raise RuntimeError("balance failure was replayed at the target or source")
                 occupancy()
                 current_audits, current_charges = settled_snapshot(2 + int(retain_source), 1 + int(retain_source))
                 if not previous_audits.items() <= current_audits.items() or not previous_charges.items() <= current_charges.items():
-                    raise RuntimeError("capacity refusal rewrote an existing audit or budget settlement")
+                    raise RuntimeError("balance failure rewrote an existing audit or budget settlement")
                 added = current_audits.keys() - previous_audits.keys()
                 if len(current_audits) != 2 + int(retain_source) or len(added) != 1 or len(current_charges) != 1 + int(retain_source) or any(row[0] != "settled" for row in current_charges.values()):
-                    raise RuntimeError("failover attempt audit/settled/pending totals are incorrect")
+                    raise RuntimeError("balance-error audit/settled/pending totals are incorrect")
                 record = json.loads(current_audits[next(iter(added))])
                 if record.get("provider_ref") != "other" or record.get("error_code") != "provider_insufficient_balance" or record.get("status") != "error":
                     raise RuntimeError("prior balance failure audit was not retained with its provider/error")
@@ -224,7 +225,7 @@ def failover_action(source, protocol, retain_source):
                 target.release.set()
                 tail = held.read().decode()
                 if ("[DONE]" if protocol == "openai" else "message_stop") not in tail or "event: error" in tail:
-                    raise RuntimeError("target's old in-flight stream was canceled by another session's failover refusal")
+                    raise RuntimeError("target's old in-flight stream was canceled by another session's balance error")
             finally:
                 target.release.set()
         occupancy()
@@ -413,7 +414,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="tidemux-provider-capacity.") as temporary:
         base = Path(temporary)
         for protocol in ("openai", "anthropic"):
-            for phase in ("caps", "reload", "failover_retained", "failover_new", "anonymous_idle", "unlimited_concurrency", "default_concurrency", "queued_cancel"):
+            for phase in ("caps", "reload", "balance_error_retained", "balance_error_new", "anonymous_idle", "unlimited_concurrency", "default_concurrency", "queued_cancel"):
                 root = base / (protocol + "-" + phase)
                 (root / "bin").mkdir(parents=True)
                 security = root / "bin" / "security"
@@ -475,10 +476,10 @@ def main():
                         if query(url, protocol, PRIVATE_SESSION + "new", "other/custom-model")[0] != 200:
                             raise RuntimeError("GLM cap constrained another provider")
                     results.append(dict(run(binary, root, protocol, 0, 0, reload), phase=phase))
-                elif phase.startswith("failover"):
+                elif phase.startswith("balance_error"):
                     source = new_upstream(protocol)
                     try:
-                        results.append(dict(run(binary, root, protocol, 1, 3, failover_action(source, protocol, phase == "failover_retained"), source), phase=phase))
+                        results.append(dict(run(binary, root, protocol, 1, 3, balance_error_action(source, protocol, phase == "balance_error_retained"), source), phase=phase))
                     finally:
                         source.release.set()
                         source.shutdown()
@@ -490,7 +491,7 @@ def main():
                     results.append(dict(run(binary, root, protocol, 5, 0, unlimited_concurrency_action(protocol), max_in_flight=limit, other_cap=5), phase=phase))
                 else:
                     results.append(dict(run(binary, root, protocol, 2, 2, queued_cancel_action(protocol), max_in_flight=1, provider_budget=True, canceled_audits=1), phase=phase))
-    print(json.dumps({"binary": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "results": results, "glm_five": True, "provider_and_global_isolation": True, "first_admission_global_rollback": True, "balance_failover_full_target_zero_dispatch": True, "prior_audit_budget_and_held_stream_preserved": True, "anonymous_concurrent_last_slot_and_release": True, "stable_inflight_ttl_and_idle_release": True, "queued_cancel_leases_budget_and_unique_canceled_audit": True, "unlimited_global_request_concurrency": True, "omitted_global_limit_unlimited": True, "concurrent_reuse": True, "unlimited_to_limited": True, "remove_readd_held_sse": True, "privacy": True}))
+    print(json.dumps({"binary": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "results": results, "glm_five": True, "provider_and_global_isolation": True, "first_admission_global_rollback": True, "no_implicit_balance_failover": True, "prior_audit_budget_and_held_stream_preserved": True, "anonymous_concurrent_last_slot_and_release": True, "stable_inflight_ttl_and_idle_release": True, "queued_cancel_leases_budget_and_unique_canceled_audit": True, "unlimited_global_request_concurrency": True, "omitted_global_limit_unlimited": True, "concurrent_reuse": True, "unlimited_to_limited": True, "remove_readd_held_sse": True, "privacy": True}))
 
 
 if __name__ == "__main__":

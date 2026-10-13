@@ -59,7 +59,9 @@ func TestRoutingCommandConfiguresSharedModelStrategy(t *testing.T) {
 func TestRoutingCommandPreservesOtherSetting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	if err := writeCommandConfig(path, providerBudgetTestConfig(path), nil); err != nil {
+	config := providerBudgetTestConfig(path)
+	config.Routing = &gateway.RoutingConfig{BillingExhaustionFailover: true}
+	if err := writeCommandConfig(path, config, nil); err != nil {
 		t.Fatal(err)
 	}
 	output, err := os.CreateTemp(dir, "output")
@@ -67,17 +69,22 @@ func TestRoutingCommandPreservesOtherSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer output.Close()
+	if err := routingCommand([]string{"show", "--config", path}, output, output); err != nil {
+		t.Fatal(err)
+	}
+	show, err := os.ReadFile(output.Name())
+	if err != nil || !strings.Contains(string(show), "disabled (legacy config value ignored)") {
+		t.Fatalf("legacy routing value was not shown as ignored: output=%q err=%v", show, err)
+	}
 
 	steps := []struct {
 		name string
 		args []string
 		want gateway.RoutingConfig
 	}{
-		{"enable billing", []string{"--billing-exhaustion-failover=true"}, gateway.RoutingConfig{BillingExhaustionFailover: true}},
-		{"enable shared", []string{"--shared-model-strategy=random"}, gateway.RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true}},
-		{"disable shared", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{BillingExhaustionFailover: true}},
+		{"enable shared clears legacy", []string{"--shared-model-strategy=random"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
+		{"disable shared", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{}},
 		{"set both", []string{"--shared-model-strategy=random", "--billing-exhaustion-failover=false"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
-		{"reenable billing", []string{"--billing-exhaustion-failover=true"}, gateway.RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true}},
 		{"disable billing", []string{"--billing-exhaustion-failover=false"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
 		{"restore defaults", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{}},
 	}
@@ -98,5 +105,8 @@ func TestRoutingCommandPreservesOtherSetting(t *testing.T) {
 				t.Fatalf("disabled routing settings were not omitted: %+v", loaded.Routing)
 			}
 		})
+	}
+	if err := routingCommand([]string{"set", "--billing-exhaustion-failover=true", "--config", path}, output, output); err == nil {
+		t.Fatal("enabling gateway billing failover was accepted")
 	}
 }

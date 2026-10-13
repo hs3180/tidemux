@@ -6,7 +6,7 @@ import (
 )
 
 // HTTPAttemptResult describes one initiated Do call including response/stream
-// processing. It excludes audit persistence and retry/cooldown waiting.
+// processing. It excludes audit persistence and time spent before dispatch.
 type HTTPAttemptResult struct {
 	Outcome      string
 	FailureClass string

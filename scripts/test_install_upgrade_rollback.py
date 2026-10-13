@@ -100,7 +100,7 @@ def check_rollback_config(candidate_binary, baseline_binary, root):
     config_path = root / "config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     run_config_command(candidate_binary, "auto-chain", "set", "--entries", "provider-a/model-one,provider-a/model-two", "--config", str(config_path))
-    run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "random", "--billing-exhaustion-failover=true", "--config", str(config_path))
+    run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "random", "--config", str(config_path))
     run_config_command(candidate_binary, "provider", "error-map", "add", "provider-a", "--code", "upstream_busy", "--status", "503", "--category", "temporarily_unavailable", "--config", str(config_path))
     enabled = json.loads(config_path.read_text(encoding="utf-8"))
     if (enabled.get("auto_chain") != [{"provider": "provider-a", "model": "model-one"}, {"provider": "provider-a", "model": "model-two"}]

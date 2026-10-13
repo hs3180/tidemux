@@ -182,12 +182,12 @@ func TestPricePriorityRejectsIncomparablePrices(t *testing.T) {
 	}
 }
 
-func TestSharedRoutingExcludesCoolingProvidersAndBoundsBillingAttempts(t *testing.T) {
+func TestSharedRoutingExcludesCoolingProvidersAndSelectsOneRoute(t *testing.T) {
 	c := routingTestConfig(filepath.Join(t.TempDir(), "ledger.db"))
 	for _, ref := range []string{"a", "b", "c", "d", "e", "f", "g"} {
 		addRoutingProvider(&c, ref, "https://"+ref+".example", "openai", "shared-model")
 	}
-	configureRouting(&c, RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true})
+	configureRouting(&c, RoutingConfig{SharedModelStrategy: "random"})
 	clients := make(map[string]*adapter.Client)
 	pools := make(map[string]*providerKeyPool)
 	for ref, provider := range c.Providers {
@@ -198,53 +198,12 @@ func TestSharedRoutingExcludesCoolingProvidersAndBoundsBillingAttempts(t *testin
 	pools["a"].CooldownAt(0, time.Minute, now)
 	h := &handler{handlerRuntime: &handlerRuntime{}, config: c, providers: c.Providers, clients: clients, keyPools: pools, randomIndex: func(int) int { return 0 }}
 	routes, code, status := h.resolveRoutes("shared-model", "openai", []byte(`{"model":"shared-model"}`), nil)
-	if code != "" || status != 0 || len(routes) == 0 || routes[0].provider != "b" {
+	if code != "" || status != 0 || len(routes) != 1 || routes[0].provider != "b" {
 		t.Fatalf("cooldown selection routes=%+v code=%q status=%d", routes, code, status)
 	}
-	for _, route := range routes {
-		if route.provider == "a" {
-			t.Fatalf("cooling provider was selected: %+v", routes)
-		}
-	}
-	routes = h.appendBillingRoutes([]routeStep{{provider: "b", model: "shared-model", trigger: routeInitial}}, "b", "shared-model", "openai", nil)
-	if len(routes) != 1+maxBillingProviderAttempts {
-		t.Fatalf("billing route count=%d want at most %d", len(routes), 1+maxBillingProviderAttempts)
-	}
-	seen := make(map[string]bool)
-	for _, route := range routes {
-		if seen[route.provider] {
-			t.Fatalf("provider repeated in billing routes: %+v", routes)
-		}
-		seen[route.provider] = true
-	}
 }
 
-func TestRouteAdvanceUsesOnlySafeClassifications(t *testing.T) {
-	billing := routeStep{trigger: routeBillingProvider}
-	tests := []struct {
-		name      string
-		route     routeStep
-		callErr   *adapter.CallError
-		config    RoutingConfig
-		ctxErr    error
-		delivered bool
-		want      bool
-	}{
-		{name: "arbitrary 403", route: billing, callErr: &adapter.CallError{Status: 502, Code: "upstream_error", UpstreamStatus: 403}, config: RoutingConfig{BillingExhaustionFailover: true}, want: false},
-		{name: "429 never switches provider", route: billing, callErr: &adapter.CallError{FailoverSafe: true, Retryable: true, RateLimited: true, Category: adapter.ProviderErrorRateLimited}, config: RoutingConfig{BillingExhaustionFailover: true}, want: false},
-		{name: "mapped balance opted in", route: billing, callErr: &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorInsufficientBalance}, config: RoutingConfig{BillingExhaustionFailover: true}, want: true},
-		{name: "mapped balance opt out", route: billing, callErr: &adapter.CallError{FailoverSafe: true, Category: adapter.ProviderErrorInsufficientBalance}, want: false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := routeCanAdvance(test.config, test.route, test.callErr, test.ctxErr, test.delivered); got != test.want {
-				t.Fatalf("routeCanAdvance=%t want %t", got, test.want)
-			}
-		})
-	}
-}
-
-func TestBillingFailoverRequiresExactMappedSignalAndAuditsEachProvider(t *testing.T) {
+func TestProviderFailureReturnsWithoutBillingFailover(t *testing.T) {
 	for _, mapped := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unmapped", true: "mapped"}[mapped], func(t *testing.T) {
 			callsA, callsB := 0, 0
@@ -277,39 +236,26 @@ func TestBillingFailoverRequiresExactMappedSignalAndAuditsEachProvider(t *testin
 			providerA := c.Providers["provider-a"]
 			providerA.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "credits_empty", HTTPStatus: 403, Category: adapter.ProviderErrorInsufficientBalance}}
 			c.Providers["provider-a"] = providerA
-			configureRouting(&c, RoutingConfig{BillingExhaustionFailover: true})
+			configureRouting(&c, RoutingConfig{BillingExhaustionFailover: true}) // legacy config is ignored
 			h, closeDB, err := NewHandler(c, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer closeDB()
 			response := routingRequest(t, h, "openai", `{"model":"provider-a/shared-model","messages":[{"role":"user","content":"hello"}]}`)
+			wantStatus := http.StatusBadGateway
 			if mapped {
-				if response.Code != http.StatusOK || callsA != 1 || callsB != 1 {
-					t.Fatalf("status=%d calls=%d/%d body=%s", response.Code, callsA, callsB, response.Body.String())
-				}
-				rows, err := h.(*handler).ledger.Recent(context.Background(), 10)
-				if err != nil || len(rows) != 2 {
-					t.Fatalf("audits=%+v err=%v", rows, err)
-				}
-				byProvider := map[string]bool{}
-				for _, row := range rows {
-					byProvider[row.Upstream] = true
-					if row.Model != "shared-model" {
-						t.Fatalf("wrong model attribution: %+v", row)
-					}
-					if row.Upstream == "provider-b" && (row.Status != "ok" || row.InputTokens == nil || *row.InputTokens != 3) {
-						t.Fatalf("successful provider audit=%+v", row)
-					}
-				}
-				if !byProvider["provider-a"] || !byProvider["provider-b"] {
-					t.Fatalf("provider attempts missing from audit: %v", byProvider)
-				}
-				if h.(*handler).providerRouteAvailable("provider-a") {
-					t.Fatal("mapped billing exhaustion did not cool down that provider's keys")
-				}
-			} else if response.Code == http.StatusOK || callsA != 1 || callsB != 0 || strings.Contains(response.Body.String(), "private detail") {
-				t.Fatalf("unmapped 403 crossed provider: status=%d calls=%d/%d body=%s", response.Code, callsA, callsB, response.Body.String())
+				wantStatus = http.StatusForbidden
+			}
+			if response.Code != wantStatus || callsA != 1 || callsB != 0 || strings.Contains(response.Body.String(), "private detail") {
+				t.Fatalf("status=%d want=%d calls=%d/%d body=%s", response.Code, wantStatus, callsA, callsB, response.Body.String())
+			}
+			rows, err := h.(*handler).ledger.Recent(context.Background(), 10)
+			if err != nil || len(rows) != 1 || rows[0].Upstream != "provider-a" || rows[0].Status != "error" {
+				t.Fatalf("expected one failed provider audit, got rows=%+v err=%v", rows, err)
+			}
+			if mapped && h.(*handler).availability.available(h.(*handler).routingEpoch, "provider-a", "shared-model", h.(*handler).providerGenerations["provider-a"]) {
+				t.Fatal("mapped billing exhaustion did not mark the provider unavailable for later requests")
 			}
 		})
 	}
@@ -393,19 +339,6 @@ func TestAutoModelDoesNotReplayAfterStreamOutputAndRebindsNextRequest(t *testing
 	next := affinityGatewayRequest(h, "openai", "stream-session", `{"model":"auto","messages":[{"role":"user","content":"next"}]}`)
 	if next.Code != http.StatusOK || strings.Join(requested, ",") != "model-one,model-two" {
 		t.Fatalf("confirmed stream failure did not rebind the next request: status=%d requested=%v body=%s", next.Code, requested, next.Body.String())
-	}
-}
-
-func TestBillingRoutesExcludeTheOtherClientProtocol(t *testing.T) {
-	h := affinityUnitHandler(t)
-	h.clients["b"].Protocol = "anthropic"
-	routes := h.appendBillingRoutes([]routeStep{{provider: "a", model: "shared-model"}}, "a", "shared-model", "openai", nil)
-	if len(routes) != 1 {
-		t.Fatalf("OpenAI billing failover included an Anthropic provider: %+v", routes)
-	}
-	routes = h.appendBillingRoutes([]routeStep{{provider: "b", model: "shared-model"}}, "b", "shared-model", "anthropic", nil)
-	if len(routes) != 1 {
-		t.Fatalf("Anthropic billing failover included an OpenAI provider: %+v", routes)
 	}
 }
 
