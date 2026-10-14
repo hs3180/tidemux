@@ -217,7 +217,6 @@ def main():
                 baseline = args.baseline_binary.resolve()
                 if subprocess.check_output([str(baseline), "version"], text=True).strip() != "0.2.2":
                     raise RuntimeError("expected v0.2.2 for ledger rollback verification")
-                subprocess.run([str(binary), "routing", "set", "--billing-exhaustion-failover=false", "--config", str(config_path)], env=env, check=True, capture_output=True)
                 default_config = home / "Library" / "Application Support" / "TideMux" / "config.json"
                 default_config.parent.mkdir(parents=True)
                 default_config.write_bytes(config_path.read_bytes())

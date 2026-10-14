@@ -63,8 +63,7 @@ from explicitly qualified IDs before forwarding upstream. Configure an ordered
 instance auto-chain for model:auto. Existing auto sessions stay pinned; safe
 failures advance the preference only for new sessions. Shared-model routing is
 disabled by default. TideMux dispatches at most one upstream generation request
-per client request; downstream clients own retries. The legacy
-billing-exhaustion failover setting is ignored.
+per client request; downstream clients own retries.
 Random shared-model routing binds stable X-TideMux-Session-ID (or Anthropic
 metadata.user_id) sessions in memory for 24 hours of idle time.
 `

@@ -109,7 +109,7 @@ def check_rollback_config(candidate_binary, baseline_binary, root):
         raise RuntimeError("candidate did not persist the optional 0.3.0 routing settings")
 
     run_config_command(candidate_binary, "auto-chain", "clear", "--config", str(config_path))
-    run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "off", "--billing-exhaustion-failover=false", "--config", str(config_path))
+    run_config_command(candidate_binary, "routing", "set", "--shared-model-strategy", "off", "--config", str(config_path))
     run_config_command(candidate_binary, "provider", "error-map", "remove", "provider-a", "--code", "upstream_busy", "--status", "503", "--config", str(config_path))
     rolled_back = json.loads(config_path.read_text(encoding="utf-8"))
     if "routing" in rolled_back or "auto_chain" in rolled_back:
