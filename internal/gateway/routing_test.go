@@ -236,7 +236,6 @@ func TestProviderFailureReturnsWithoutBillingFailover(t *testing.T) {
 			providerA := c.Providers["provider-a"]
 			providerA.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "credits_empty", HTTPStatus: 403, Category: adapter.ProviderErrorInsufficientBalance}}
 			c.Providers["provider-a"] = providerA
-			configureRouting(&c, RoutingConfig{BillingExhaustionFailover: true}) // legacy config is ignored
 			h, closeDB, err := NewHandler(c, nil)
 			if err != nil {
 				t.Fatal(err)

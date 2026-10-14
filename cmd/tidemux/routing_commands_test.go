@@ -56,11 +56,11 @@ func TestRoutingCommandConfiguresSharedModelStrategy(t *testing.T) {
 	}
 }
 
-func TestRoutingCommandHidesAndClearsLegacyBillingSetting(t *testing.T) {
+func TestRoutingCommandRejectsRemovedBillingFlag(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	config := providerBudgetTestConfig(path)
-	config.Routing = &gateway.RoutingConfig{BillingExhaustionFailover: true}
+	config.Routing = &gateway.RoutingConfig{SharedModelStrategy: "price_priority"}
 	if err := writeCommandConfig(path, config, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -82,46 +82,5 @@ func TestRoutingCommandHidesAndClearsLegacyBillingSetting(t *testing.T) {
 	after, err := os.ReadFile(path)
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("rejected billing flag changed the config: err=%v", err)
-	}
-	if err := output.Truncate(0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := output.Seek(0, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := routingCommand([]string{"show", "--config", path}, output, output); err != nil {
-		t.Fatal(err)
-	}
-	show, err := os.ReadFile(output.Name())
-	if err != nil || string(show) != "Shared model strategy: off\n" {
-		t.Fatalf("unexpected routing output: output=%q err=%v", show, err)
-	}
-
-	steps := []struct {
-		name string
-		args []string
-		want gateway.RoutingConfig
-	}{
-		{"enable shared clears legacy", []string{"--shared-model-strategy=random"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
-		{"change shared", []string{"--shared-model-strategy=price_priority"}, gateway.RoutingConfig{SharedModelStrategy: "price_priority"}},
-		{"restore defaults", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{}},
-	}
-	for _, step := range steps {
-		t.Run(step.name, func(t *testing.T) {
-			args := append([]string{"set", "--config", path}, step.args...)
-			if err := routingCommand(args, output, output); err != nil {
-				t.Fatal(err)
-			}
-			loaded, err := gateway.LoadConfig(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := loaded.EffectiveRouting(); got != step.want {
-				t.Fatalf("routing settings=%+v, want %+v", got, step.want)
-			}
-			if step.want == (gateway.RoutingConfig{}) && loaded.Routing != nil {
-				t.Fatalf("disabled routing settings were not omitted: %+v", loaded.Routing)
-			}
-		})
 	}
 }

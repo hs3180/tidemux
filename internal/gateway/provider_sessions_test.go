@@ -361,7 +361,6 @@ func TestProviderBalanceFailureDoesNotFailOverOrDisturbBudget(t *testing.T) {
 				target := c.Providers["glm"]
 				target.Protocol = protocol
 				c.Providers["glm"] = target
-				c.Routing = &RoutingConfig{BillingExhaustionFailover: true}
 				view, err := h.prepareConfigView(context.Background(), c, h.config, h, nil)
 				if err != nil {
 					t.Fatal(err)

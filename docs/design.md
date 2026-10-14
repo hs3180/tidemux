@@ -64,7 +64,6 @@ switch keys, or fail over to another provider. It returns the mapped upstream
 result and preserves a valid `Retry-After` header; the downstream client owns
 retry timing and submits each retry as a new request. Key and route health can
 influence selection for later requests, but never replay the current request.
-The legacy `billing_exhaustion_failover` setting is ignored.
 
 ## Accounting and observability
 

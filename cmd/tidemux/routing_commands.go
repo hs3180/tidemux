@@ -48,9 +48,6 @@ func routingCommand(args []string, stdout, stderr *os.File) error {
 		if !flagWasSet(flags, "shared-model-strategy") {
 			return errors.New("routing set requires --shared-model-strategy")
 		}
-		// Clear the legacy field when changing current routing settings. Existing
-		// config files can still be read, but the field no longer has an effect.
-		settings.BillingExhaustionFailover = false
 		switch *shared {
 		case "off", "none":
 			settings.SharedModelStrategy = ""

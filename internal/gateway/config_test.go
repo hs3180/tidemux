@@ -473,10 +473,10 @@ func TestSharedModelStrategyIsOptInAndValidated(t *testing.T) {
 	if config.EffectiveRouting() != (RoutingConfig{}) {
 		t.Fatalf("shared-model routing should default off: %+v", config.Routing)
 	}
-	for _, billingFailover := range []bool{false, true} {
-		config.Routing = &RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: billingFailover}
+	for _, strategy := range []string{"random", "price_priority"} {
+		config.Routing = &RoutingConfig{SharedModelStrategy: strategy}
 		if err := config.Validate(); err != nil {
-			t.Fatalf("valid shared-model strategy rejected with billing failover %t: %v", billingFailover, err)
+			t.Fatalf("valid shared-model strategy %q rejected: %v", strategy, err)
 		}
 		data, err := json.Marshal(config)
 		if err != nil {
@@ -493,5 +493,46 @@ func TestSharedModelStrategyIsOptInAndValidated(t *testing.T) {
 		if err := config.Validate(); err == nil {
 			t.Fatal("unknown shared-model strategy accepted")
 		}
+	}
+}
+
+func TestConfigRejectsRemovedBillingExhaustionFailoverField(t *testing.T) {
+	config := namedProviderConfig(testConfig("l.db", "https://example.com/v1"), "main")
+	config.Routing = &RoutingConfig{SharedModelStrategy: "random"}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			fields["routing"] = json.RawMessage(`{"shared_model_strategy":"random","billing_exhaustion_failover":` + value + `}`)
+			data, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "invalid config") {
+				t.Fatalf("removed billing field %s was not rejected: %v", value, err)
+			}
+			fields["routing"] = json.RawMessage(`{"shared_model_strategy":"random"}`)
+			data, err = json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadConfig(path)
+			if err != nil || loaded.EffectiveRouting() != *config.Routing {
+				t.Fatalf("removing the billing field did not restore valid routing: routing=%+v err=%v", loaded.Routing, err)
+			}
+		})
 	}
 }

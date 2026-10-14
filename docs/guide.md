@@ -97,9 +97,12 @@ Auto-chain failures affect later eligible requests; the dispatched request is
 not replayed. After dispatch, TideMux does not wait for a retry, retry a 429,
 switch keys, fail over to another provider, or change the requested model. It
 returns the mapped result and a valid upstream `Retry-After` to the caller; the
-client owns retry timing and sends a new request. The legacy
-`billing_exhaustion_failover` setting is ignored. Configure error mappings with
+client owns retry timing and sends a new request. Configure error mappings with
 `provider error-map --help`.
+
+The `routing.billing_exhaustion_failover` field has been removed. Delete it from
+existing configuration files before upgrading; configuration validation rejects
+unknown fields.
 
 Global upstream request concurrency is unlimited in new configurations.
 Use `tidemux gateway configure --max-in-flight 0` to disable the limit in an
