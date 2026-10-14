@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"net/http/httptrace"
 	"strings"
@@ -37,7 +36,6 @@ type Client struct {
 	HTTP           *http.Client
 	Ledger         *ledger.Ledger
 	Gate           *limiter.ConcurrencyGate
-	waitRateLimit  func(context.Context, time.Duration) error
 }
 type CallError struct {
 	Status int
@@ -46,22 +44,20 @@ type CallError struct {
 	// request was dispatched to the provider. The gateway may then release a
 	// budget reservation instead of treating the missing usage as unknown.
 	UpstreamNotAttempted bool
-	// FailoverSafe marks only provider classifications that permit another
-	// provider attempt without changing the requested model.
+	// FailoverSafe marks provider failures that should affect route health for
+	// future client requests. It never triggers another upstream attempt here.
 	FailoverSafe bool
 	// BudgetCost preserves a known charge when the audit row itself cannot be
 	// written. It is internal accounting data and is never sent to clients.
-	BudgetCost     *float64
-	Param          string
-	ProviderCode   string
-	Category       ProviderErrorCategory
-	UpstreamStatus int
-	Retryable      bool
-	RateLimited    bool
-	Cooldown       time.Duration
-	RetryDelay     time.Duration
-	RetryAfterSecs int64
-	RetryProvided  bool
+	BudgetCost      *float64
+	Param           string
+	ProviderCode    string
+	Category        ProviderErrorCategory
+	UpstreamStatus  int
+	Cooldown        time.Duration
+	RetryAfterSecs  int64
+	RetryProvided   bool
+	RetryAfterValue string
 }
 
 // ErrServerShuttingDown identifies a gateway-initiated cancellation without
@@ -70,13 +66,14 @@ var ErrServerShuttingDown = errors.New("server shutting down")
 
 func (e *CallError) Error() string { return e.Code }
 
-// KeyCandidateCallbacks rechecks cooldown state before an attempt and records
-// retryable failures while preserving one audit record for the logical call.
+// KeyCandidateCallbacks selects one ready key before dispatch and records the
+// outcome. A failed upstream attempt is returned to the downstream client;
+// this adapter does not replay it with another key.
 type KeyCandidateCallbacks struct {
 	Attempt   func(index int) func(HTTPAttemptResult) // one actual HTTP initiation/result
 	Completed func(err error)                         // upstream result, before releasing the dispatch gate
 	Ready     func(index int) (bool, time.Duration)
-	Failed    func(index int, callErr *CallError) (hasNext bool, earliestCooldown time.Duration)
+	Failed    func(index int, callErr *CallError)
 }
 
 type observedReader struct {
@@ -119,9 +116,8 @@ func (c *Client) call(clientProtocol string, ctx context.Context, body []byte, m
 	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, []string{c.APIKey}, KeyCandidateCallbacks{})
 }
 
-// CallFromKeyCandidates runs bounded same-provider credential attempts under
-// one request ID and writes one terminal audit record. A retryable failure can
-// advance only while no stream frame has reached the caller.
+// CallFromKeyCandidates chooses one ready same-provider credential, performs a
+// single upstream attempt, and writes one terminal audit record.
 func (c *Client) CallFromKeyCandidates(clientProtocol string, ctx context.Context, body []byte, model string, sink StreamSink, options CallOptions, keys []string, callbacks KeyCandidateCallbacks) ([]byte, string, error) {
 	return c.callWithKeyCandidates(clientProtocol, ctx, body, model, sink, options, keys, callbacks)
 }
@@ -321,39 +317,22 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			}
 		}
 		attempted = true
-		handleRateLimit := func(callErr *CallError) {
-			a.Events = append(a.Events, "rate_limit")
-			if callbacks.Failed != nil {
-				callbacks.Failed(candidateIndex, callErr)
-			}
-		}
-		recordRateLimitRetry := func() { a.Events = append(a.Events, "rate_limit_retry") }
-		data, usage, err = c.doAttemptWithRateLimitRetries(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, handleRateLimit, recordRateLimitRetry, func() func(HTTPAttemptResult) {
+		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, func() func(HTTPAttemptResult) {
 			if callbacks.Attempt == nil {
 				return nil
 			}
 			return callbacks.Attempt(candidateIndex)
 		})
-		if err == nil {
-			break
-		}
 		var callErr *CallError
-		if !errors.As(err, &callErr) || !callErr.Retryable {
-			break
+		if err != nil && errors.As(err, &callErr) {
+			if callErr.Category == ProviderErrorRateLimited {
+				a.Events = append(a.Events, "rate_limit")
+			}
+			if callbacks.Failed != nil {
+				callbacks.Failed(candidateIndex, callErr)
+			}
 		}
-		hasNext := candidateIndex+1 < len(keys)
-		var coolingDelay time.Duration
-		if callbacks.Failed != nil {
-			hasNext, coolingDelay = callbacks.Failed(candidateIndex, callErr)
-		}
-		if !hasNext && coolingDelay > 0 {
-			err = &CallError{Status: 503, Code: "provider_keys_cooling_down", Cooldown: coolingDelay}
-			break
-		}
-		if !canFailover(callErr, hasNext, delivered, requestCtx) {
-			break
-		}
-		a.Events = append(a.Events, "key_failover")
+		break
 	}
 	if err != nil {
 		if observed.Len() > 0 {
@@ -386,77 +365,6 @@ func (c *Client) cacheSession(clientProtocol, session string) string {
 		return session
 	}
 	return c.CacheNamespace + "\x00" + clientProtocol + "\x00" + session
-}
-
-func (c *Client) doAttemptWithRateLimitRetries(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, onRateLimit func(*CallError), onRetry func(), observers ...HTTPAttemptObserver) ([]byte, TokenUsage, error) {
-	for attempt := 1; ; attempt++ {
-		data, usage, err := c.doAttempt(ctx, clientProtocol, providerBody, model, sink, options, limits, id, apiKey, observed, delivered, observers...)
-		if err == nil {
-			return data, usage, nil
-		}
-		var callErr *CallError
-		if !errors.As(err, &callErr) || !callErr.RateLimited {
-			return nil, TokenUsage{}, err
-		}
-		if onRateLimit != nil {
-			onRateLimit(callErr)
-		}
-		delay := callErr.RetryDelay
-		if !callErr.RetryProvided {
-			delay = rateLimitBackoff(attempt)
-			callErr.RetryAfterSecs = int64(math.Ceil(delay.Seconds()))
-		}
-		if attempt >= 3 || *delivered || !retryDelayFits(ctx, delay) {
-			callErr.Retryable = false
-			return nil, TokenUsage{}, callErr
-		}
-		if delay > 0 {
-			var waitErr error
-			if c.waitRateLimit != nil {
-				waitErr = c.waitRateLimit(ctx, delay)
-			} else {
-				waitErr = waitContext(ctx, delay)
-			}
-			if waitErr != nil {
-				return nil, TokenUsage{}, &CallError{Status: 408, Code: "request_canceled"}
-			}
-		}
-		if onRetry != nil {
-			onRetry()
-		}
-	}
-}
-
-func rateLimitBackoff(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	if attempt > 8 {
-		attempt = 8
-	}
-	return time.Second * time.Duration(1<<(attempt-1))
-}
-
-func retryDelayFits(ctx context.Context, delay time.Duration) bool {
-	if ctx.Err() != nil {
-		return false
-	}
-	deadline, ok := ctx.Deadline()
-	return !ok || delay < time.Until(deadline)
-}
-
-func waitContext(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return ctx.Err()
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func logConversionWarnings(logger *slog.Logger, clientProtocol, providerProtocol string, fields []string) {
@@ -495,10 +403,6 @@ func terminalHTTPStatus(clientProtocol string, delivered bool, err error) int {
 		return http.StatusInternalServerError
 	}
 	return status
-}
-
-func canFailover(callErr *CallError, hasNext, delivered bool, ctx context.Context) bool {
-	return callErr != nil && callErr.Retryable && hasNext && !delivered && ctx.Err() == nil
 }
 
 func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, observers ...HTTPAttemptObserver) (attemptResponse []byte, attemptUsage TokenUsage, attemptErr error) {
@@ -546,7 +450,6 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		timedOut = errors.As(err, &network) && network.Timeout()
 		callErr := &CallError{Status: 502, Code: "upstream_transport_error"}
 		if !headersWritten.Load() && ctx.Err() == nil {
-			callErr.Retryable = true
 			callErr.Cooldown = 5 * time.Second
 			callErr.UpstreamNotAttempted = true
 			callErr.FailoverSafe = true

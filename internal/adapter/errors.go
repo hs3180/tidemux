@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	defaultRateLimitRetry = time.Second
-	maximumKeyCooldown    = 24 * time.Hour
-	maximumRetryAfter     = 24 * time.Hour
-	maxProviderErrorBody  = 64 << 10
+	defaultRateLimitCooldown = time.Second
+	maximumKeyCooldown       = 24 * time.Hour
+	maximumRetryAfter        = 24 * time.Hour
+	maxProviderErrorBody     = 64 << 10
 )
 
 func boundedCooldown(delay time.Duration) time.Duration {
@@ -176,16 +176,15 @@ func mappedProviderError(resp *http.Response, category ProviderErrorCategory, pr
 		result.FailoverSafe = true
 	}
 	if category == ProviderErrorRateLimited {
-		result.RateLimited = true
-		result.Retryable = true
-		result.RetryDelay, result.RetryAfterSecs, result.RetryProvided = retryAfter(resp)
+		delay, seconds, provided := retryAfter(resp)
+		result.RetryAfterSecs, result.RetryProvided = seconds, provided
 		if result.RetryProvided {
-			result.Cooldown = boundedCooldown(result.RetryDelay)
+			result.Cooldown = boundedCooldown(delay)
+			result.RetryAfterValue = strings.TrimSpace(resp.Header.Get("Retry-After"))
 		} else {
-			result.Cooldown = defaultRateLimitRetry
+			result.Cooldown = defaultRateLimitCooldown
 		}
 	} else if category == ProviderErrorAuthentication {
-		result.Retryable = true
 		result.Cooldown = 30 * time.Second
 	}
 	return result
@@ -207,7 +206,7 @@ func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) *CallE
 		return result
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode, Retryable: true, Cooldown: 30 * time.Second}
+		return &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode, Cooldown: 30 * time.Second}
 	}
 	if resp.StatusCode != 400 && resp.StatusCode != 422 {
 		return &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode}

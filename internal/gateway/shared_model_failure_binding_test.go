@@ -59,7 +59,7 @@ func TestSharedModelFailureBindingReassignsLaterRequestsAndPreservesOtherRoutes(
 	p := c.Providers["a"]
 	p.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "fixture_missing_model", HTTPStatus: 404, Category: adapter.ProviderErrorModelNotFound}}
 	c.Providers["a"] = p
-	configureRouting(&c, RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true})
+	configureRouting(&c, RoutingConfig{SharedModelStrategy: "random"})
 	gateway, closeHandler, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify actual per-key attempts, failover, privacy and optional telemetry."""
+"""Verify one per-key attempt per request, privacy and optional telemetry."""
 import argparse
 from http.server import BaseHTTPRequestHandler
 import json
@@ -38,10 +38,9 @@ class Upstream(BaseHTTPRequestHandler):
         key = self.headers.get("x-api-key", self.headers.get("Authorization", "").removeprefix("Bearer "))
         with self.server.lock:
             self.server.posts += 1
-            n = self.server.posts
-        if self.server.mode == "429" and n < 3:
+        if self.server.mode == "429":
             if key != FIRST:
-                raise RuntimeError("Same-key retry switched credentials")
+                raise RuntimeError("One request changed credentials after a 429")
             self.reply(429, {"error": {"message": "private diagnostic upstream detail"}})
         elif self.server.mode == "auth" and key == FIRST:
             self.reply(401, {"error": {"message": "private diagnostic upstream detail"}})
@@ -80,8 +79,9 @@ def main():
                     path = "/v1/messages" if protocol == "anthropic" else "/v1/chat/completions"
                     body = {"model": "a/one", "max_tokens": 16, "messages": [{"role": "user", "content": BODY_MARKER}]}
                     status, _, _ = exchange(Request(gateway["url"] + path, json.dumps(body).encode(), headers))
-                    if status != 200 or gateway["upstream"].posts != (3 if mode == "429" else 2):
-                        raise RuntimeError("Unexpected upstream attempts or result")
+                    expected_status = 429 if mode == "429" else 502
+                    if status != expected_status or gateway["upstream"].posts != 1:
+                        raise RuntimeError("A downstream request initiated more than one upstream attempt")
                     query = Request(gateway["url"] + "/tidemux/availability-status", headers=headers)
                     status, report, _ = exchange(query)
                     pool = report["providers"][0]["key_pool"]
@@ -91,15 +91,13 @@ def main():
                     if len(set(labels)) != 2 or any(not label.startswith("key-") for label in labels):
                         raise RuntimeError("Missing assigned key labels")
                     if enabled:
-                        expected = dict(requests=1, http_attempts=3 if mode == "429" else 1, successes=1 if mode == "429" else 0,
-                                        failures=2 if mode == "429" else 1, cancellations=0, timeouts=0, in_flight=0)
+                        expected = dict(requests=1, http_attempts=1, successes=0,
+                                        failures=1, cancellations=0, timeouts=0, in_flight=0)
                         if pool["keys"][0]["counters"] != expected:
                             raise RuntimeError("Actual attempt counters disagree")
                         decisions = pool["recent_failovers"]
-                        if mode == "429" and decisions:
-                            raise RuntimeError("Same-key retries counted as failover")
-                        if mode == "auth" and (len(decisions) != 1 or decisions[0]["from"] != labels[0] or decisions[0]["to"] != labels[1] or decisions[0]["reason"] != "authentication"):
-                            raise RuntimeError("Actual failover diagnosis missing")
+                        if decisions:
+                            raise RuntimeError("A single upstream attempt recorded a key failover")
                     elif any("counters" in key for key in pool["keys"]) or pool["recent_failovers"]:
                         raise RuntimeError("Disabled telemetry retained optional observations")
                     cli = subprocess.run([str(binary), "gateway", "availability", "--json", "--config", str(gateway["config_file"])],
@@ -110,8 +108,8 @@ def main():
                         if private in cli.stdout:
                             raise RuntimeError("Private data in key diagnostics")
                     with sqlite3.connect(gateway["ledger"]) as db:
-                        if db.execute("SELECT count(*) FROM request_audit WHERE status='ok'").fetchone()[0] != 1:
-                            raise RuntimeError("Diagnostics changed authoritative audits")
+                        if db.execute("SELECT count(*) FROM request_audit WHERE status='error'").fetchone()[0] != 1:
+                            raise RuntimeError("The failed upstream attempt was not audited exactly once")
                     # CLI-only flag must apply without an interactive credential prompt.
                     toggle = subprocess.run([str(binary), "gateway", "configure", "--health-diagnostics=" + str(not enabled).lower(),
                                              "--config", str(gateway["config_file"])], env=gateway["env"], capture_output=True, text=True, timeout=10)

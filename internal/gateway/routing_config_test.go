@@ -21,7 +21,7 @@ func TestRoutingConfigurationIsOptInAndAutoChainIsValidated(t *testing.T) {
 
 	config.AutoChain = []AutoChainEntry{{Provider: "main", Model: "model-two"}, {Provider: "main", Model: "model-one"}}
 	config.Providers["main"] = provider
-	config.Routing = &RoutingConfig{SharedModelStrategy: "price_priority", BillingExhaustionFailover: true}
+	config.Routing = &RoutingConfig{SharedModelStrategy: "price_priority"}
 	if err := config.Validate(); err != nil {
 		t.Fatalf("valid routing config rejected: %v", err)
 	}

@@ -99,7 +99,7 @@ func endpoint(protocol string) string {
 }
 func TestBothProtocolsAndFailureAudit(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
-		for _, scenario := range []string{"success", "429", "500", "malformed", "missing-content", "missing-usage", "canceled", "transport", "read-failure"} {
+		for _, scenario := range []string{"success", "429", "429-no-retry-after", "500", "malformed", "missing-content", "missing-usage", "canceled", "transport", "read-failure"} {
 			t.Run(protocol+"/"+scenario, func(t *testing.T) {
 				calls := 0
 				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,8 +123,10 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 						t.Error("model lost")
 					}
 					switch scenario {
-					case "429":
-						w.Header().Set("Retry-After", "0")
+					case "429", "429-no-retry-after":
+						if scenario == "429" {
+							w.Header().Set("Retry-After", "0")
+						}
 						w.WriteHeader(429)
 						io.WriteString(w, `{"error":"provider-secret private detail"}`)
 					case "500":
@@ -171,13 +173,17 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 					want = 200
 					status = "ok"
 				}
-				if scenario == "429" {
+				if scenario == "429" || scenario == "429-no-retry-after" {
 					want = 429
-					if got := out.Header().Get("Retry-After"); got != "0" {
-						t.Errorf("Retry-After = %q, want explicit zero", got)
+					got := out.Header().Get("Retry-After")
+					if scenario == "429" && got != "0" {
+						t.Errorf("Retry-After = %q, want original upstream value 0", got)
 					}
-					if calls != 3 {
-						t.Errorf("same-key 429 attempts = %d, want 3", calls)
+					if scenario == "429-no-retry-after" && got != "" {
+						t.Errorf("Retry-After = %q, want absent when upstream omitted it", got)
+					}
+					if calls != 1 {
+						t.Errorf("429 upstream attempts = %d, want 1", calls)
 					}
 				}
 				if scenario == "canceled" {

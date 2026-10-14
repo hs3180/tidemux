@@ -56,10 +56,12 @@ func TestRoutingCommandConfiguresSharedModelStrategy(t *testing.T) {
 	}
 }
 
-func TestRoutingCommandPreservesOtherSetting(t *testing.T) {
+func TestRoutingCommandRejectsRemovedBillingFlag(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	if err := writeCommandConfig(path, providerBudgetTestConfig(path), nil); err != nil {
+	config := providerBudgetTestConfig(path)
+	config.Routing = &gateway.RoutingConfig{SharedModelStrategy: "price_priority"}
+	if err := writeCommandConfig(path, config, nil); err != nil {
 		t.Fatal(err)
 	}
 	output, err := os.CreateTemp(dir, "output")
@@ -67,36 +69,18 @@ func TestRoutingCommandPreservesOtherSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer output.Close()
-
-	steps := []struct {
-		name string
-		args []string
-		want gateway.RoutingConfig
-	}{
-		{"enable billing", []string{"--billing-exhaustion-failover=true"}, gateway.RoutingConfig{BillingExhaustionFailover: true}},
-		{"enable shared", []string{"--shared-model-strategy=random"}, gateway.RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true}},
-		{"disable shared", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{BillingExhaustionFailover: true}},
-		{"set both", []string{"--shared-model-strategy=random", "--billing-exhaustion-failover=false"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
-		{"reenable billing", []string{"--billing-exhaustion-failover=true"}, gateway.RoutingConfig{SharedModelStrategy: "random", BillingExhaustionFailover: true}},
-		{"disable billing", []string{"--billing-exhaustion-failover=false"}, gateway.RoutingConfig{SharedModelStrategy: "random"}},
-		{"restore defaults", []string{"--shared-model-strategy=off"}, gateway.RoutingConfig{}},
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, step := range steps {
-		t.Run(step.name, func(t *testing.T) {
-			args := append([]string{"set", "--config", path}, step.args...)
-			if err := routingCommand(args, output, output); err != nil {
-				t.Fatal(err)
-			}
-			loaded, err := gateway.LoadConfig(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := loaded.EffectiveRouting(); got != step.want {
-				t.Fatalf("routing settings=%+v, want %+v", got, step.want)
-			}
-			if step.want == (gateway.RoutingConfig{}) && loaded.Routing != nil {
-				t.Fatalf("disabled routing settings were not omitted: %+v", loaded.Routing)
-			}
-		})
+	for _, value := range []string{"false", "true"} {
+		args := []string{"set", "--shared-model-strategy=random", "--billing-exhaustion-failover=" + value, "--config", path}
+		if err := routingCommand(args, output, output); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("removed billing flag %s was not rejected as unknown: %v", value, err)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("rejected billing flag changed the config: err=%v", err)
 	}
 }

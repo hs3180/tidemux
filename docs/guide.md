@@ -94,10 +94,15 @@ the bare ID and omit any one candidate's context/output-limit declarations.
 Use `--shared-model-strategy off` to restore explicit ambiguity checks.
 
 Auto-chain failures affect later eligible requests; the dispatched request is
-not replayed. Cross-provider billing failover is a separate, disabled-by-default
-option under `routing set`: it needs an exact insufficient-balance mapping on
-the provider and a compatible target. It never replays an active shared-session
-or auto-chain request. Configure mappings with `provider error-map --help`.
+not replayed. After dispatch, TideMux does not wait for a retry, retry a 429,
+switch keys, fail over to another provider, or change the requested model. It
+returns the mapped result and a valid upstream `Retry-After` to the caller; the
+client owns retry timing and sends a new request. Configure error mappings with
+`provider error-map --help`.
+
+The `routing.billing_exhaustion_failover` field has been removed. Delete it from
+existing configuration files before upgrading; configuration validation rejects
+unknown fields.
 
 Global upstream request concurrency is unlimited in new configurations.
 Use `tidemux gateway configure --max-in-flight 0` to disable the limit in an
@@ -125,7 +130,8 @@ inference evidence; `available` records success; `cooling` remembers a failure;
 try again. Without traffic, recovery stays unconfirmed.
 
 Key labels are opaque. `requests` counts adapter calls using a key;
-`http_attempts` counts actual HTTP attempts, including same-key retries.
+`http_attempts` counts actual HTTP attempts. Each downstream generation request
+initiates at most one such attempt.
 Success, failure, cancellation, timeout and in-flight counts are separate.
 Skipped keys and local rejections add no attempts. These counters are not billing.
 Compatible reloads preserve them; credential/connection changes or restart reset

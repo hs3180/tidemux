@@ -31,7 +31,7 @@ commands:
   doctor      check the configuration, Keychain and local state directory
   provider    add, inspect, edit and reset budgets for upstream providers
   auto-chain  show, replace or clear the instance provider/model chain
-  routing     configure shared-model selection and billing failover
+  routing     configure shared-model selection
   gateway     configure settings or query the running gateway
   billing     inspect local usage and cost records (--details for requests)
   report      generate, schedule, deliver and retry reports; configure webhooks
@@ -61,8 +61,9 @@ scope matches, or use PROVIDER/MODEL to choose explicitly when scopes overlap.
 The client protocol does not choose the provider. TideMux strips PROVIDER/
 from explicitly qualified IDs before forwarding upstream. Configure an ordered
 instance auto-chain for model:auto. Existing auto sessions stay pinned; safe
-failures advance the preference only for new sessions. Shared-model routing and
-billing-exhaustion failover are disabled by default.
+failures advance the preference only for new sessions. Shared-model routing is
+disabled by default. TideMux dispatches at most one upstream generation request
+per client request; downstream clients own retries.
 Random shared-model routing binds stable X-TideMux-Session-ID (or Anthropic
 metadata.user_id) sessions in memory for 24 hours of idle time.
 `

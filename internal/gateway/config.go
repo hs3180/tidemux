@@ -38,8 +38,7 @@ type Provider struct {
 }
 
 type RoutingConfig struct {
-	SharedModelStrategy       string `json:"shared_model_strategy,omitempty"`
-	BillingExhaustionFailover bool   `json:"billing_exhaustion_failover,omitempty"`
+	SharedModelStrategy string `json:"shared_model_strategy,omitempty"`
 }
 
 func (c Config) EffectiveRouting() RoutingConfig {

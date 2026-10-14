@@ -198,7 +198,7 @@ func (s *autoChainState) selectRouteAvailable(key *sharedModelSessionKey, availa
 		return routeStep{}, false
 	}
 	index := selection.index
-	return routeStep{provider: selection.provider, model: selection.model, trigger: routeInitial, autoChainIndex: &index}, true
+	return routeStep{provider: selection.provider, model: selection.model, autoChainIndex: &index}, true
 }
 
 func (s *autoChainState) recordFailure(index, _ int, callErr *adapter.CallError, ctxErr error, delivered bool) {

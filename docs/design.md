@@ -58,15 +58,18 @@ or the caller cancels. Changing this process-wide setting requires a restart.
 Session admission, budgets, cancellation and terminal accounting still apply
 with the request gate disabled.
 
-Within a provider, 429 retries remain on one key for at most
-three total attempts; eligible auth and proven pre-write failures can try another.
-No key/provider replay follows downstream output. Safe mapped billing failover
-is opt-in and bounded; dispatched auto/shared-session calls retain their route.
+TideMux dispatches at most one upstream generation request for each downstream
+generation request. After dispatch, it does not wait for a retry, retry a 429,
+switch keys, or fail over to another provider. It returns the mapped upstream
+result and preserves a valid `Retry-After` header; the downstream client owns
+retry timing and submits each retry as a new request. Key and route health can
+influence selection for later requests, but never replay the current request.
 
 ## Accounting and observability
 
-Each adapter call has one terminal audit; cross-provider attempts have separate
-calls. Queued cancellation is recorded without upstream work. Request/events
+Each downstream generation request has one terminal adapter audit and at most
+one initiated upstream generation attempt. Queued cancellation is recorded
+without upstream work. Request/events
 commit together; final SSE completion waits for audit persistence. Budget pending
 attempts survive crashes as unknown charges, fail closed when unresolved and
 settle against the admitted provider/policy. Operational counts add no usage rows.
@@ -74,8 +77,9 @@ Prices/currencies stay with history; missing usage/cost is unknown, and local
 estimates or supplied statement CSVs are not automatically fetched invoices.
 
 Optional key counters observe initiated HTTP calls and complete outcomes; labels
-are assigned independently of secrets. One state slot exists per configured key,
-and each provider retains at most 32 failover decisions for one hour. Generation
+are assigned independently of secrets. One state slot exists per configured key;
+legacy failover history is bounded to 32 records per provider for one hour. The
+single-attempt policy does not create in-request key failover records. Generation
 or telemetry-epoch changes fence old completions; disabling counters preserves
 operational routing/cooldowns. Status queries are authenticated and read-only.
 

@@ -13,18 +13,17 @@ func TestSafeUpstreamParameterErrors(t *testing.T) {
 	for _, c := range []struct {
 		status     int
 		body, code string
-		retryable  bool
 		cooldown   time.Duration
 		retryAfter string
 	}{
 		{status: 400, body: `{"error":{"message":"response_format is not supported. SECRET prompt detail"}}`, code: "unsupported_parameter_response_format"},
 		{status: 422, body: `{"error":{"message":"Extra inputs are not permitted for output_config. SECRET"}}`, code: "unsupported_parameter_output_config"},
 		{status: 400, body: `{"error":{"message":"private account SECRET"}}`, code: "upstream_invalid_request"},
-		{status: 401, body: `{"error":{"message":"SECRET key rejected"}}`, code: "upstream_error", retryable: true, cooldown: 30 * time.Second},
-		{status: 403, body: `{"error":{"message":"SECRET forbidden"}}`, code: "upstream_error", retryable: true, cooldown: 30 * time.Second},
+		{status: 401, body: `{"error":{"message":"SECRET key rejected"}}`, code: "upstream_error", cooldown: 30 * time.Second},
+		{status: 403, body: `{"error":{"message":"SECRET forbidden"}}`, code: "upstream_error", cooldown: 30 * time.Second},
 		{status: 500, body: `{"error":{"message":"response_format unsupported SECRET"}}`, code: "upstream_error"},
-		{status: 429, body: `{"error":{"message":"SECRET"}}`, code: "upstream_rate_limited", retryable: true, cooldown: time.Second},
-		{status: 429, body: `{"error":{"message":"SECRET"}}`, code: "upstream_rate_limited", retryable: true, cooldown: 9 * time.Second, retryAfter: "9"},
+		{status: 429, body: `{"error":{"message":"SECRET"}}`, code: "upstream_rate_limited", cooldown: time.Second},
+		{status: 429, body: `{"error":{"message":"SECRET"}}`, code: "upstream_rate_limited", cooldown: 9 * time.Second, retryAfter: "9"},
 	} {
 		resp := &http.Response{StatusCode: c.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(c.body))}
 		if c.retryAfter != "" {
@@ -34,8 +33,11 @@ func TestSafeUpstreamParameterErrors(t *testing.T) {
 		if e.Code != c.code || strings.Contains(e.Error(), "SECRET") {
 			t.Fatal(e)
 		}
-		if e.Retryable != c.retryable || e.Cooldown != c.cooldown || e.UpstreamStatus != c.status {
+		if e.Cooldown != c.cooldown || e.UpstreamStatus != c.status {
 			t.Fatalf("status %d retry metadata = %+v", c.status, e)
+		}
+		if c.retryAfter != "" && (!e.RetryProvided || e.RetryAfterValue != c.retryAfter) {
+			t.Fatalf("Retry-After was not preserved for status %d: %+v", c.status, e)
 		}
 		if (c.status == 400 || c.status == 422) && e.Status != c.status {
 			t.Fatal("client cannot recover from parameter error")
@@ -95,27 +97,26 @@ func TestConfiguredProviderErrorsRequireExactCodeAndScope(t *testing.T) {
 		{UpstreamCode: "model_forbidden", HTTPStatus: 403, Category: ProviderErrorPermissionDenied},
 	}
 	tests := []struct {
-		name      string
-		status    int
-		body      string
-		want      ProviderErrorCategory
-		wantCode  string
-		wantHTTP  int
-		wantRetry bool
+		name     string
+		status   int
+		body     string
+		want     ProviderErrorCategory
+		wantCode string
+		wantHTTP int
 	}{
 		{name: "mapped billing code", status: 403, body: `{"error":{"code":"payment_required","message":"SECRET billing text"}}`, want: ProviderErrorInsufficientBalance, wantCode: "payment_required", wantHTTP: 403},
-		{name: "status-qualified rate limit", status: 429, body: `{"error":{"code":"key_limited"}}`, want: ProviderErrorRateLimited, wantCode: "key_limited", wantHTTP: 429, wantRetry: true},
-		{name: "mapped authentication retains key retry", status: 403, body: `{"error":{"code":"bad_key"}}`, want: ProviderErrorAuthentication, wantCode: "bad_key", wantHTTP: 403, wantRetry: true},
+		{name: "status-qualified rate limit", status: 429, body: `{"error":{"code":"key_limited"}}`, want: ProviderErrorRateLimited, wantCode: "key_limited", wantHTTP: 429},
+		{name: "mapped authentication error", status: 403, body: `{"error":{"code":"bad_key"}}`, want: ProviderErrorAuthentication, wantCode: "bad_key", wantHTTP: 403},
 		{name: "policy rejection is not balance exhaustion", status: 403, body: `{"error":{"code":"policy_blocked","message":"SECRET policy details"}}`, want: ProviderErrorPolicyDenied, wantCode: "policy_blocked", wantHTTP: 403},
 		{name: "model permission is not balance exhaustion", status: 403, body: `{"error":{"code":"model_forbidden"}}`, want: ProviderErrorPermissionDenied, wantCode: "model_forbidden", wantHTTP: 403},
-		{name: "same code at a different status remains generic", status: 403, body: `{"error":{"code":"key_limited"}}`, wantHTTP: 502, wantRetry: true},
-		{name: "unmapped message does not imply balance", status: 403, body: `{"error":{"message":"insufficient balance"}}`, wantHTTP: 502, wantRetry: true},
+		{name: "same code at a different status remains generic", status: 403, body: `{"error":{"code":"key_limited"}}`, wantHTTP: 502},
+		{name: "unmapped message does not imply balance", status: 403, body: `{"error":{"message":"insufficient balance"}}`, wantHTTP: 502},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			resp := &http.Response{StatusCode: test.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(test.body))}
 			e := upstreamError(resp, mappings...)
-			if e.Category != test.want || e.ProviderCode != test.wantCode || e.Status != test.wantHTTP || e.Retryable != test.wantRetry {
+			if e.Category != test.want || e.ProviderCode != test.wantCode || e.Status != test.wantHTTP {
 				t.Fatalf("error=%+v", e)
 			}
 			if strings.Contains(e.Error(), "SECRET") {

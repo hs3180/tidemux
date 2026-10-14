@@ -27,7 +27,7 @@ func keyDiagnosticConfig(t *testing.T, url, protocol string, enabled bool) Confi
 	return c
 }
 
-func TestKeyDiagnosticsActualFailoverAndSameKeyRetries(t *testing.T) {
+func TestKeyDiagnosticsRecordOneAttemptPerClientRequest(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		for _, rateLimit := range []bool{false, true} {
 			for _, enabled := range []bool{false, true} {
@@ -38,14 +38,14 @@ func TestKeyDiagnosticsActualFailoverAndSameKeyRetries(t *testing.T) {
 							io.WriteString(w, `{"object":"list","data":[{"id":"one"}]}`)
 							return
 						}
-						n := posts.Add(1)
+						posts.Add(1)
 						key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 						if protocol == "anthropic" {
 							key = r.Header.Get("x-api-key")
 						}
-						if rateLimit && n < 3 {
+						if rateLimit {
 							if key != "first-private-secret" {
-								t.Error("429 switched credentials during same-key retries")
+								t.Error("one client request changed credentials after a 429")
 							}
 							w.Header().Set("Retry-After", "0")
 							w.WriteHeader(429)
@@ -73,25 +73,22 @@ func TestKeyDiagnosticsActualFailoverAndSameKeyRetries(t *testing.T) {
 					root := h.(*handler)
 					body := `{"model":"a/one","max_tokens":16,"messages":[{"role":"user","content":"private request body"}]}`
 					response := affinityGatewayRequest(h, protocol, "private-session", body)
-					wantPosts := int32(2)
+					wantStatus := http.StatusBadGateway
 					if rateLimit {
-						wantPosts = 3
+						wantStatus = http.StatusTooManyRequests
 					}
-					if response.Code != 200 || posts.Load() != wantPosts {
+					if response.Code != wantStatus || posts.Load() != 1 {
 						t.Fatalf("status=%d attempts=%d", response.Code, posts.Load())
 					}
 					pool := root.keyPools["a"].diagnosticStatus(time.Now())
-					if pool.Capacity != 2 || pool.Cooling != 1 || pool.Eligible != 1 || pool.TelemetryEnabled != enabled {
+					wantCooling, wantEligible := 1, 1
+					if pool.Capacity != 2 || pool.Cooling != wantCooling || pool.Eligible != wantEligible || pool.TelemetryEnabled != enabled {
 						t.Fatalf("pool=%+v", pool)
 					}
 					if enabled {
 						first, second := *pool.Keys[0].Counters, *pool.Keys[1].Counters
-						if rateLimit {
-							if first != (KeyCounters{Requests: 1, HTTPAttempts: 3, Failures: 2, Successes: 1}) || second != (KeyCounters{}) || len(pool.RecentFailovers) != 0 {
-								t.Fatalf("same-key counters: %+v %+v", first, second)
-							}
-						} else if first != (KeyCounters{Requests: 1, HTTPAttempts: 1, Failures: 1}) || second != (KeyCounters{Requests: 1, HTTPAttempts: 1, Successes: 1}) || len(pool.RecentFailovers) != 1 || pool.RecentFailovers[0].Reason != "authentication" {
-							t.Fatalf("failover counters: %+v %+v decisions=%+v", first, second, pool.RecentFailovers)
+						if first != (KeyCounters{Requests: 1, HTTPAttempts: 1, Failures: 1}) || second != (KeyCounters{}) || len(pool.RecentFailovers) != 0 {
+							t.Fatalf("single-attempt counters: %+v %+v decisions=%+v", first, second, pool.RecentFailovers)
 						}
 					} else if pool.Keys[0].Counters != nil || pool.Keys[1].Counters != nil || len(pool.RecentFailovers) != 0 {
 						t.Fatal("disabled telemetry retained counters/history")
@@ -108,7 +105,11 @@ func TestKeyDiagnosticsActualFailoverAndSameKeyRetries(t *testing.T) {
 						t.Fatal("cooled candidates initiated HTTP")
 					}
 					rows, err := root.ledger.Recent(context.Background(), 10)
-					if err != nil || len(rows) != 1 || rows[0].Status != "ok" {
+					wantError := "upstream_error"
+					if rateLimit {
+						wantError = "upstream_rate_limited"
+					}
+					if err != nil || len(rows) != 1 || rows[0].Status != "error" || rows[0].ErrorCode != wantError {
 						t.Fatalf("authoritative audits=%d err=%v", len(rows), err)
 					}
 					encoded, _ := json.Marshal(root.availabilityReport())

@@ -327,7 +327,7 @@ func TestProviderCapacityTTLDoesNotExpireInFlightAndSameSessionConcurrent(t *tes
 	}
 }
 
-func TestProviderCapacityFailoverKeepsPriorAuditAndBudget(t *testing.T) {
+func TestProviderBalanceFailureDoesNotFailOverOrDisturbBudget(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		for _, retained := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/retained_%v", protocol, retained), func(t *testing.T) {
@@ -361,7 +361,6 @@ func TestProviderCapacityFailoverKeepsPriorAuditAndBudget(t *testing.T) {
 				target := c.Providers["glm"]
 				target.Protocol = protocol
 				c.Providers["glm"] = target
-				c.Routing = &RoutingConfig{BillingExhaustionFailover: true}
 				view, err := h.prepareConfigView(context.Background(), c, h.config, h, nil)
 				if err != nil {
 					t.Fatal(err)
@@ -378,7 +377,9 @@ func TestProviderCapacityFailoverKeepsPriorAuditAndBudget(t *testing.T) {
 				}
 				exhausted.Store(true)
 				out := providerCapacityRequest(view, protocol, "retained", "other", "custom-model")
-				requireCapacityRejection(t, out, "provider", 1)
+				if out.Code != http.StatusPaymentRequired || !strings.Contains(out.Body.String(), "provider_insufficient_balance") {
+					t.Fatalf("balance failure was not returned to the client: %d %s", out.Code, out.Body)
+				}
 				if upstreamCalls.Load() != int64(kept+1) || targetCalls.Load() != 1 {
 					t.Fatalf("actual source/target dispatch=%d/%d", upstreamCalls.Load(), targetCalls.Load())
 				}

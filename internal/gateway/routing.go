@@ -11,19 +11,9 @@ import (
 	"github.com/hs3180/tidemux/internal/adapter"
 )
 
-const maxBillingProviderAttempts = 4
-
-type routeTrigger uint8
-
-const (
-	routeInitial routeTrigger = iota
-	routeBillingProvider
-)
-
 type routeStep struct {
 	provider       string
 	model          string
-	trigger        routeTrigger
 	sessionKey     *sharedModelSessionKey
 	autoChainIndex *int
 	dynamic        bool
@@ -39,8 +29,7 @@ func (h *handler) resolveRoutes(modelID, clientProtocol string, body []byte, ses
 			if requiresNativeTools && !h.supportsNativeAnthropicTools(ref) {
 				return nil, "unsupported_request_feature", http.StatusBadRequest
 			}
-			routes := []routeStep{{provider: ref, model: model, trigger: routeInitial}}
-			return h.appendBillingRoutes(routes, ref, model, clientProtocol, body), "", 0
+			return []routeStep{{provider: ref, model: model}}, "", 0
 		}
 		allCandidates := h.bareModelCandidates(modelID, true)
 		candidates := h.routingCandidates(modelID, true, clientProtocol, body)
@@ -85,12 +74,11 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 		if !ok {
 			return nil, "provider_keys_cooling_down", http.StatusServiceUnavailable
 		}
-		// Session affinity never adds a provider retry to a dispatched request,
-		// including when the independent billing-failover option is enabled.
-		return []routeStep{{provider: selected, model: model, trigger: routeInitial, sessionKey: sessionKey, dynamic: true}}, "", 0
+		// Session affinity selects one provider for this downstream request.
+		return []routeStep{{provider: selected, model: model, sessionKey: sessionKey, dynamic: true}}, "", 0
 	}
 	if len(candidates) == 1 {
-		return h.appendBillingRoutes([]routeStep{{provider: candidates[0], model: model, trigger: routeInitial, dynamic: true}}, candidates[0], model, clientProtocol, body), "", 0
+		return []routeStep{{provider: candidates[0], model: model, dynamic: true}}, "", 0
 	}
 	if h.config.EffectiveRouting().SharedModelStrategy == "" {
 		return nil, "model_ambiguous", http.StatusBadRequest
@@ -112,37 +100,7 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 		return nil, "routing_price_unavailable", http.StatusServiceUnavailable
 	}
 	selected := ordered[0]
-	routes := []routeStep{{provider: selected, model: model, trigger: routeInitial, dynamic: true}}
-	return h.appendBillingRoutes(routes, selected, model, clientProtocol, body), "", 0
-}
-
-func (h *handler) appendBillingRoutes(routes []routeStep, selectedProvider, model, clientProtocol string, body []byte) []routeStep {
-	if !h.config.EffectiveRouting().BillingExhaustionFailover {
-		return routes
-	}
-	seen := make(map[string]struct{}, len(routes))
-	for _, route := range routes {
-		if route.model == model {
-			seen[route.provider] = struct{}{}
-		}
-	}
-	candidates := h.bareModelCandidates(model, true)
-	added := 0
-	for _, name := range candidates {
-		if _, exists := seen[name]; exists || name == selectedProvider || !h.modelRouteAvailable(name, model) {
-			continue
-		}
-		if clientProtocol != "" && h.clients[name].Protocol != clientProtocol {
-			continue
-		}
-		routes = append(routes, routeStep{provider: name, model: model, trigger: routeBillingProvider})
-		seen[name] = struct{}{}
-		added++
-		if added == maxBillingProviderAttempts {
-			break
-		}
-	}
-	return routes
+	return []routeStep{{provider: selected, model: model, dynamic: true}}, "", 0
 }
 
 func (h *handler) routingCandidates(model string, requireKnownScope bool, clientProtocol string, body []byte) []string {
@@ -241,18 +199,6 @@ func (h *handler) chooseRandomProvider(size int) int {
 		return h.randomIndex(size)
 	}
 	return rand.Intn(size)
-}
-
-func routeCanAdvance(config RoutingConfig, next routeStep, callErr *adapter.CallError, ctxErr error, delivered bool) bool {
-	if callErr == nil || !callErr.FailoverSafe || ctxErr != nil || delivered {
-		return false
-	}
-	switch next.trigger {
-	case routeBillingProvider:
-		return config.BillingExhaustionFailover && callErr.Category == adapter.ProviderErrorInsufficientBalance
-	default:
-		return false
-	}
 }
 
 func (h *handler) supportScopeAllows(providerName, model string) bool {

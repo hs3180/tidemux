@@ -152,7 +152,7 @@ def main():
                 "listen_addr": f"127.0.0.1:{port}", "max_in_flight": 4,
                 "ledger_path": str(ledger),
                 "access_token_keychain": {"service": "test.gateway", "account": "local"},
-                "routing": {"shared_model_strategy": "random", "billing_exhaustion_failover": True},
+                "routing": {"shared_model_strategy": "random"},
                 "auto_chain": [{"provider": "a", "model": "shared-model"}],
                 "providers": {
                     ref: {
