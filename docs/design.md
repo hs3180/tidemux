@@ -43,8 +43,12 @@ initial cooldown). Insufficient balance affects a provider (five minutes);
 proven pre-header connection failure also affects a provider (30 seconds).
 Authentication retains key scope. A 429 cools its key and leaves healthy peers
 eligible. Once all keys are cooling, the provider also becomes ineligible.
-Local rejection, cancellation and
-unclassified errors do not create upstream failure evidence.
+Local rejection, cancellation, terminal client errors and conversion failures
+do not create upstream failure evidence. Upstream 5xx, interrupted streams and
+upstream timeouts affect only the provider/model. An explicit unclassified SSE
+error also temporarily avoids that provider/model for 30 seconds plus jitter;
+its diagnostic category and retryability stay unknown, and repeated unknown
+errors do not lengthen this provisional wait. Other models remain eligible.
 
 After cooldown, at most one real request probes a target. Failed probes double
 backoff to 30 minutes plus 0–20% jitter; longer upstream waits win, bounded to
@@ -78,6 +82,10 @@ switch keys, or fail over to another provider. It returns the mapped upstream
 result and preserves a valid `Retry-After` header; the downstream client owns
 retry timing and submits each retry as a new request. Key and route health can
 influence selection for later requests, but never replay the current request.
+The next request on a failed shared-model or auto session selects an eligible
+alternative under the same model/capability and admission policies. A healthy
+binding remains stable. An explicitly qualified provider stays explicit; without
+an eligible alternative, cooldown is reported rather than bypassed.
 
 ## Accounting and observability
 

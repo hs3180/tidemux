@@ -42,14 +42,20 @@ func (h *handler) resolveRoutes(modelID, clientProtocol string, body []byte, ses
 		if len(h.config.AutoChain) == 0 {
 			return nil, "auto_chain_unconfigured", http.StatusBadRequest
 		}
+		if requiresNativeTools {
+			compatible := false
+			for _, entry := range h.config.AutoChain {
+				compatible = compatible || h.supportScopeAllows(entry.Provider, entry.Model) && h.supportsNativeAnthropicTools(entry.Provider)
+			}
+			if !compatible {
+				return nil, "unsupported_request_feature", http.StatusBadRequest
+			}
+		}
 		route, ok := h.autoChain.selectRouteAvailable(sessionKey, func(entry AutoChainEntry) bool {
-			return h.supportScopeAllows(entry.Provider, entry.Model) && h.modelRouteAvailable(entry.Provider, entry.Model)
+			return h.supportScopeAllows(entry.Provider, entry.Model) && (!requiresNativeTools || h.supportsNativeAnthropicTools(entry.Provider)) && h.modelRouteAvailable(entry.Provider, entry.Model)
 		})
 		if !ok {
 			return nil, "auto_chain_exhausted", http.StatusServiceUnavailable
-		}
-		if requiresNativeTools && !h.supportsNativeAnthropicTools(route.provider) {
-			return nil, "unsupported_request_feature", http.StatusBadRequest
 		}
 		return []routeStep{route}, "", 0
 	}

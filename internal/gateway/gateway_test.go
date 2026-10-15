@@ -1003,7 +1003,9 @@ func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if scenario == "failed" && calls == 1 {
-					w.WriteHeader(http.StatusBadGateway)
+					// Keep the capacity-release test independent of transient
+					// upstream health, which now intentionally cools a 5xx route.
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 				if scenario == "stream" {
@@ -1034,7 +1036,7 @@ func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
 				return out
 			}
 			first := request("session-a", scenario == "stream")
-			wantFirst := 502
+			wantFirst := 400
 			if scenario == "stream" {
 				wantFirst = 200
 			}
