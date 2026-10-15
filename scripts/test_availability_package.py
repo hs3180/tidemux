@@ -124,7 +124,8 @@ def main():
                                          env=gateway["env"], cwd=gateway["root"], capture_output=True, text=True, timeout=10)
                     def stable_states(snapshot):
                         def parse_time(value):
-                            return datetime.fromisoformat(re.sub(r"(\.\d{6})\d+", r"\1", value).replace("Z", "+00:00"))
+                            normalized = re.sub(r"\.(\d+)", lambda match: "." + match[1][:6].ljust(6, "0"), value)
+                            return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
                         observed = parse_time(snapshot["timestamp"])
                         for item in snapshot["providers"]:
                             for target in [item, *item["models"]]:
