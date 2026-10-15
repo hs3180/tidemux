@@ -322,11 +322,7 @@ func setRetryAfterHeader(w http.ResponseWriter, callErr *adapter.CallError) {
 		return
 	}
 	if callErr.RetryProvided {
-		if callErr.RetryAfterValue != "" {
-			w.Header().Set("Retry-After", callErr.RetryAfterValue)
-			return
-		}
-		w.Header().Set("Retry-After", strconv.FormatInt(callErr.RetryAfterSecs, 10))
+		w.Header().Set("Retry-After", "2")
 		return
 	}
 	if callErr.Category == adapter.ProviderErrorRateLimited {
@@ -335,11 +331,11 @@ func setRetryAfterHeader(w http.ResponseWriter, callErr *adapter.CallError) {
 		return
 	}
 	if callErr.RetryAfterSecs > 0 {
-		w.Header().Set("Retry-After", strconv.FormatInt(callErr.RetryAfterSecs, 10))
+		w.Header().Set("Retry-After", strconv.FormatInt(min(callErr.RetryAfterSecs, 30), 10))
 		return
 	}
 	if callErr.Cooldown > 0 {
-		seconds := int64((callErr.Cooldown + time.Second - 1) / time.Second)
+		seconds := min(retryDelaySeconds(callErr.Cooldown), 30)
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	}
 }

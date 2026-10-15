@@ -3,7 +3,6 @@ package adapter
 import (
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,7 +12,6 @@ import (
 const (
 	defaultRateLimitCooldown = time.Second
 	maximumKeyCooldown       = 24 * time.Hour
-	maximumRetryAfter        = 24 * time.Hour
 	maxProviderErrorBody     = 64 << 10
 )
 
@@ -28,32 +26,39 @@ func boundedCooldown(delay time.Duration) time.Duration {
 }
 
 func retryAfter(resp *http.Response) (time.Duration, int64, bool) {
+	now := time.Now()
+	until, seconds, valid := retryAfterDeadline(resp, now)
+	if !valid {
+		return 0, 0, false
+	}
+	return until.Sub(now), seconds, valid
+}
+
+// Keep the upstream deadline independent of a duration (which saturates after
+// about 292 years). An unrepresentable delta is held fail-closed at the latest
+// RFC3339 time; it must never turn into a short retry fallback.
+func retryAfterDeadline(resp *http.Response, now time.Time) (time.Time, int64, bool) {
 	value := strings.TrimSpace(resp.Header.Get("Retry-After"))
 	if decimalSeconds(value) {
 		seconds, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			// A syntactically valid but unrepresentably large delta must not be
-			// mistaken for a malformed header and retried with the short fallback.
-			return maximumRetryAfter, int64(maximumRetryAfter / time.Second), true
+		latest := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+		maximumSeconds := latest.Unix() - now.Unix() - 1
+		if err != nil || seconds > maximumSeconds {
+			return latest, maximumSeconds, true
 		}
-		delay := time.Duration(seconds) * time.Second
-		if seconds > int64(maximumRetryAfter/time.Second) {
-			delay = maximumRetryAfter
-		}
-		return delay, seconds, true
+		return time.Unix(now.Unix()+seconds, int64(now.Nanosecond())), seconds, true
 	}
 	if at, err := http.ParseTime(value); err == nil {
-		delay := time.Until(at)
-		if delay < 0 {
-			delay = 0
+		if !at.After(now) {
+			return now, 0, true
 		}
-		if delay > maximumRetryAfter {
-			delay = maximumRetryAfter
+		seconds := at.Unix() - now.Unix()
+		if at.Nanosecond() > now.Nanosecond() {
+			seconds++
 		}
-		seconds := int64(math.Ceil(delay.Seconds()))
-		return delay, seconds, true
+		return at, seconds, true
 	}
-	return 0, 0, false
+	return time.Time{}, 0, false
 }
 
 func decimalSeconds(value string) bool {
@@ -183,13 +188,14 @@ func mappedProviderError(resp *http.Response, category ProviderErrorCategory, pr
 	if category == ProviderErrorInsufficientBalance || category == ProviderErrorModelNotFound || category == ProviderErrorTemporarilyUnavailable {
 		result.FailoverSafe = true
 	}
-	if category == ProviderErrorRateLimited {
-		delay, seconds, provided := retryAfter(resp)
+	if category == ProviderErrorRateLimited || category == ProviderErrorTemporarilyUnavailable {
+		now := time.Now()
+		until, seconds, provided := retryAfterDeadline(resp, now)
 		result.RetryAfterSecs, result.RetryProvided = seconds, provided
 		if result.RetryProvided {
-			result.Cooldown = boundedCooldown(delay)
+			result.CooldownUntil, result.Cooldown = until, until.Sub(now)
 			result.RetryAfterValue = strings.TrimSpace(resp.Header.Get("Retry-After"))
-		} else {
+		} else if category == ProviderErrorRateLimited {
 			result.Cooldown = defaultRateLimitCooldown
 		}
 	} else if category == ProviderErrorAuthentication {
@@ -216,6 +222,16 @@ func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) (resul
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode, Cooldown: 30 * time.Second}
+	}
+	if resp.StatusCode >= 500 && resp.StatusCode <= 599 {
+		now := time.Now()
+		until, seconds, provided := retryAfterDeadline(resp, now)
+		result := &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode, RetryProvided: provided}
+		if provided {
+			result.CooldownUntil, result.Cooldown, result.RetryAfterSecs = until, until.Sub(now), seconds
+			result.RetryAfterValue = strings.TrimSpace(resp.Header.Get("Retry-After"))
+		}
+		return result
 	}
 	if resp.StatusCode != 400 && resp.StatusCode != 422 {
 		return &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode}

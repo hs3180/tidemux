@@ -155,7 +155,7 @@ func TestMapped429ReturnsOnceWithoutRetryingOrFailingOver(t *testing.T) {
 				t.Fatal(err)
 			}
 			detail, _ := payload["error"].(map[string]any)
-			if out.Code != http.StatusTooManyRequests || detail["code"] != "upstream_rate_limited" || out.Header().Get("Retry-After") != "0" {
+			if out.Code != http.StatusTooManyRequests || detail["code"] != "upstream_rate_limited" || out.Header().Get("Retry-After") != "2" {
 				t.Fatalf("status=%d retry-after=%q body=%s", out.Code, out.Header().Get("Retry-After"), out.Body.String())
 			}
 		})

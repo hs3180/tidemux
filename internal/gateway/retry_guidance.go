@@ -23,32 +23,34 @@ func withRecoveryRequest(r *http.Request, model, protocol string, body []byte) *
 }
 
 type retryAdvice struct {
-	Strategy                       string   `json:"strategy"`
-	AfterSeconds                   *int64   `json:"after_seconds,omitempty"`
-	InitialDelaySeconds            int      `json:"initial_delay_seconds,omitempty"`
-	MaxDelaySeconds                int      `json:"max_delay_seconds,omitempty"`
-	MaxAttempts                    int      `json:"max_attempts"`
-	NewRequestRequired             bool     `json:"new_request_required"`
-	ReselectProvider               bool     `json:"reselect_provider"`
-	Alternatives                   []string `json:"alternatives"`
-	AlternativesRequireModelChange bool     `json:"alternatives_require_model_change"`
-	AlternativesScope              string   `json:"alternatives_scope"`
-	WaitSource                     string   `json:"wait_source"`
-	AlternativeCount               int      `json:"alternative_count"`
+	Strategy                       string    `json:"strategy"`
+	AfterSeconds                   *int64    `json:"after_seconds,omitempty"`
+	EligibleAfterSeconds           *int64    `json:"eligible_after_seconds,omitempty"`
+	ProviderRetryAt                time.Time `json:"provider_retry_at,omitzero"`
+	InitialDelaySeconds            int       `json:"initial_delay_seconds,omitempty"`
+	MaxDelaySeconds                int       `json:"max_delay_seconds,omitempty"`
+	MaxAttempts                    int       `json:"max_attempts"`
+	NewRequestRequired             bool      `json:"new_request_required"`
+	ReselectProvider               bool      `json:"reselect_provider"`
+	Alternatives                   []string  `json:"alternatives"`
+	AlternativesRequireModelChange bool      `json:"alternatives_require_model_change"`
+	AlternativesScope              string    `json:"alternatives_scope"`
+	WaitSource                     string    `json:"wait_source"`
+	AlternativeCount               int       `json:"alternative_count"`
 	hasCooldown                    bool
 }
 
 type routeWait struct {
 	blocked, unknown bool
-	delay            time.Duration
+	retryAt          time.Time
 	temporary        bool
 }
 
-func (w *routeWait) add(delay time.Duration, unknown bool) {
+func (w *routeWait) add(until time.Time, unknown bool) {
 	w.blocked = true
 	w.unknown = w.unknown || unknown
-	if delay > w.delay {
-		w.delay = delay
+	if until.After(w.retryAt) {
+		w.retryAt = until
 	}
 }
 
@@ -58,27 +60,30 @@ func (w *routeWait) add(delay time.Duration, unknown bool) {
 func (h *handler) routeWaitLocked(route routeStep, now time.Time) routeWait {
 	var wait routeWait
 	if h.clients[route.provider] == nil {
-		wait.add(0, true)
+		wait.add(time.Time{}, true)
 		return wait
 	}
 	if _, unavailable := h.unavailableProviders[route.provider]; unavailable {
-		wait.add(0, true)
+		wait.add(time.Time{}, true)
 		return wait
 	}
 	if s := h.availability; s != nil {
 		for _, model := range []string{"", route.model} {
 			entry := s.entries[availabilityTarget{route.provider, model, h.providerGenerations[route.provider]}]
 			if entry != nil && !entry.eligible(now) {
-				wait.add(entry.retryAt.Sub(now), entry.probing)
+				wait.add(entry.retryAt, entry.probing)
 			}
 		}
 	}
 	if pool := h.keyPools[route.provider].diagnosticStatus(now); pool != nil {
 		if pool.RecoveryInProgress {
-			wait.add(0, true) // probe completion has no known deadline
+			wait.add(time.Time{}, true) // probe completion has no known deadline
 		}
 		if pool.RateLimitRetryAt.After(now) {
-			wait.add(pool.RateLimitRetryAt.Sub(now), false)
+			wait.add(pool.RateLimitRetryAt, false)
+		}
+		if pool.ProviderRetryAt.After(now) {
+			wait.add(pool.ProviderRetryAt, false)
 		}
 		if pool.Capacity > 0 && pool.Eligible == 0 {
 			var earliest time.Time
@@ -87,7 +92,7 @@ func (h *handler) routeWaitLocked(route routeStep, now time.Time) routeWait {
 					earliest = key.CooldownUntil
 				}
 			}
-			wait.add(earliest.Sub(now), earliest.IsZero())
+			wait.add(earliest, earliest.IsZero())
 		}
 	}
 	wait.temporary = wait.blocked
@@ -140,7 +145,7 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 		}
 		now = s.now()
 	}
-	var earliest time.Duration
+	var earliest time.Time
 	unknown := len(routes) == 0
 	ready := false
 	for _, route := range routes {
@@ -153,8 +158,8 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 			}
 		} else if wait.unknown {
 			unknown = true
-		} else if earliest == 0 || wait.delay < earliest {
-			earliest = wait.delay
+		} else if earliest.IsZero() || wait.retryAt.Before(earliest) {
+			earliest = wait.retryAt
 		}
 	}
 	for _, route := range manual {
@@ -169,17 +174,48 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 	}
 	if ready {
 		zero := int64(0)
+		advice.EligibleAfterSeconds = &zero
 		advice.Strategy, advice.AfterSeconds = "new_request", &zero
 		advice.WaitSource = "eligible_route"
-	} else if !unknown && earliest > 0 {
-		seconds := int64((earliest + time.Second - 1) / time.Second)
+	} else if !unknown && earliest.After(now) {
+		actual := retryDeadlineSeconds(earliest, now)
+		advice.EligibleAfterSeconds = &actual
+		seconds := min(actual, 30)
 		advice.Strategy, advice.AfterSeconds = "retry_after", &seconds
 		advice.WaitSource = "gateway_cooldown"
+	}
+	if !ready && len(advice.Alternatives) > 0 && advice.AfterSeconds != nil {
+		short := int64(2)
+		advice.AfterSeconds = &short
 	}
 	if advice.AfterSeconds != nil {
 		advice.InitialDelaySeconds, advice.MaxDelaySeconds = 0, 0
 	}
 	return advice
+}
+
+// Absolute deadlines keep accurate summaries even beyond time.Duration's range.
+func retryDeadlineSeconds(until, now time.Time) int64 {
+	if !until.After(now) {
+		return 0
+	}
+	seconds := until.Unix() - now.Unix()
+	if until.Nanosecond() > now.Nanosecond() {
+		seconds++
+	}
+	return seconds
+}
+
+// Avoid overflowing a duration while rounding very long provider waits.
+func retryDelaySeconds(delay time.Duration) int64 {
+	if delay <= 0 {
+		return 0
+	}
+	seconds := int64(delay / time.Second)
+	if delay%time.Second != 0 {
+		seconds++
+	}
+	return seconds
 }
 
 func retryMessage(advice *retryAdvice) string {
@@ -193,6 +229,9 @@ func retryMessage(advice *retryAdvice) string {
 		message += "; routing will reselect an eligible provider"
 	} else if advice.AlternativesRequireModelChange && len(advice.Alternatives) > 0 {
 		message += "; another listed provider requires an explicit model change"
+	}
+	if advice.EligibleAfterSeconds != nil && advice.AfterSeconds != nil && *advice.EligibleAfterSeconds > *advice.AfterSeconds {
+		message += fmt.Sprintf("; the selected routes remain paused for %d seconds, and this shorter retry only rechecks routing", *advice.EligibleAfterSeconds)
 	}
 	return message + ". Limit retries to 3 attempts; request features, capacity and budgets are rechecked."
 }
@@ -252,14 +291,19 @@ func (h *handler) upstreamErrorPayload(w http.ResponseWriter, r *http.Request, c
 	}
 	if mayRetry {
 		if callErr.RetryProvided {
-			seconds := callErr.RetryAfterSecs
-			advice.AfterSeconds, advice.Strategy = &seconds, "retry_after"
-			advice.WaitSource = "upstream_retry_after"
-			advice.InitialDelaySeconds, advice.MaxDelaySeconds = 0, 0
-			setRetryAfterHeader(w, callErr) // preserve the original valid upstream value
-		} else {
-			applyRetryHeader(w, advice)
+			advice.ProviderRetryAt = callErr.CooldownUntil
+			if advice.AfterSeconds != nil && *advice.AfterSeconds == 0 {
+				short := int64(2)
+				advice.AfterSeconds = &short
+			}
+			if advice.AfterSeconds == nil && advice.WaitSource == "unknown" {
+				seconds := min(max(retryDelaySeconds(callErr.Cooldown), 2), 30)
+				advice.AfterSeconds, advice.Strategy = &seconds, "retry_after"
+				advice.WaitSource = "provider_cooldown"
+				advice.InitialDelaySeconds, advice.MaxDelaySeconds = 0, 0
+			}
 		}
+		applyRetryHeader(w, advice)
 		addRetryAdvice(payload["error"].(map[string]any), advice)
 	}
 	return payload

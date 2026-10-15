@@ -45,26 +45,27 @@ func TestSafeUpstreamParameterErrors(t *testing.T) {
 	}
 }
 
-func TestRetryAfterIsBounded(t *testing.T) {
-	for _, test := range []struct {
-		value       string
-		want        time.Duration
-		wantSeconds int64
-		wantValid   bool
-	}{
-		{value: "999999", want: maximumRetryAfter, wantSeconds: 999999, wantValid: true},
-		{value: "999999999999999999999999", want: maximumRetryAfter, wantSeconds: int64(maximumRetryAfter / time.Second), wantValid: true},
-		{value: "-1"},
-		{value: "not-a-date"},
-	} {
-		t.Run(test.value, func(t *testing.T) {
-			response := httptest.NewRecorder()
-			response.Header().Set("Retry-After", test.value)
-			got, seconds, valid := retryAfter(&http.Response{Header: response.Header()})
-			if got != test.want || seconds != test.wantSeconds || valid != test.wantValid {
-				t.Fatalf("retryAfter(%q) = %s/%d/%t, want %s/%d/%t", test.value, got, seconds, valid, test.want, test.wantSeconds, test.wantValid)
-			}
-		})
+func TestRetryAfterDeadlinePreservesLongServerPause(t *testing.T) {
+	now := time.Date(2026, 10, 15, 1, 2, 3, 400000000, time.UTC)
+	for _, value := range []string{"259200", now.Add(72 * time.Hour).UTC().Format(http.TimeFormat)} {
+		response := httptest.NewRecorder()
+		response.Header().Set("Retry-After", value)
+		until, seconds, valid := retryAfterDeadline(&http.Response{Header: response.Header()}, now)
+		if !valid || seconds != 259200 || until.Before(now.Add(72*time.Hour-time.Second)) || until.After(now.Add(72*time.Hour)) {
+			t.Fatalf("server deadline was shortened: until=%s seconds=%d valid=%t", until, seconds, valid)
+		}
+	}
+	response := httptest.NewRecorder()
+	response.Header().Set("Retry-After", "999999999999999999999999")
+	until, _, valid := retryAfterDeadline(&http.Response{Header: response.Header()}, now)
+	if !valid || until.Year() != 9999 {
+		t.Fatal("unrepresentable server wait became an early retry")
+	}
+	for _, value := range []string{"-1", "not-a-date"} {
+		response.Header().Set("Retry-After", value)
+		if _, _, valid := retryAfterDeadline(&http.Response{Header: response.Header()}, now); valid {
+			t.Fatal("malformed wait was accepted")
+		}
 	}
 }
 

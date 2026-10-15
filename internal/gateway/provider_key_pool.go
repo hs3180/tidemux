@@ -12,25 +12,26 @@ import (
 // keeps each attempted key bound for that attempt and never switches after
 // downstream stream output begins.
 type providerKeyPool struct {
-	labels            []string
-	failureClasses    []string
-	failureTimes      []time.Time
-	counters          []*KeyCounters
-	telemetryEnabled  bool
-	counterEpoch      uint64
-	decisions         []KeyFailover
-	keys              []string
-	next              int
-	cooldowns         []time.Time
-	rateFailures      []uint16
-	rateVersions      []uint64
-	rateStreak        uint16
-	rateVersion       uint64
-	rateProviderUntil time.Time
-	lastRateLimit     time.Time
-	rateProbe         *rateRecoveryLease
-	jitter            func(time.Duration) time.Duration
-	mu                sync.Mutex
+	labels             []string
+	failureClasses     []string
+	failureTimes       []time.Time
+	counters           []*KeyCounters
+	telemetryEnabled   bool
+	counterEpoch       uint64
+	decisions          []KeyFailover
+	keys               []string
+	next               int
+	cooldowns          []time.Time
+	rateFailures       []uint16
+	rateVersions       []uint64
+	rateStreak         uint16
+	rateVersion        uint64
+	rateProviderUntil  time.Time
+	providerRetryUntil time.Time
+	lastRateLimit      time.Time
+	rateProbe          *rateRecoveryLease
+	jitter             func(time.Duration) time.Duration
+	mu                 sync.Mutex
 }
 
 type providerKeyCandidate struct {
@@ -69,6 +70,9 @@ func (p *providerKeyPool) CandidatesAt(now time.Time) ([]providerKeyCandidate, t
 
 	if len(p.keys) == 0 {
 		return nil, 0
+	}
+	if p.providerRetryUntil.After(now) {
+		return nil, p.providerRetryUntil.Sub(now)
 	}
 	start := p.next % len(p.keys)
 	p.next = (start + 1) % len(p.keys)
@@ -154,6 +158,9 @@ func (p *providerKeyPool) candidateStateAt(index int, now time.Time) (bool, time
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	until := p.cooldowns[index]
+	if p.providerRetryUntil.After(until) {
+		until = p.providerRetryUntil
+	}
 	observation := rateLimitObservation{p.rateVersions[index], p.rateVersion}
 	if until.After(now) {
 		return false, until.Sub(now), observation
@@ -173,10 +180,28 @@ func (p *providerKeyPool) CooldownWaitAt(now time.Time) time.Duration {
 	if p.rateProbe != nil {
 		return time.Second
 	}
-	if p.rateStreak > 0 && p.rateProviderUntil.After(now) {
-		return p.rateProviderUntil.Sub(now)
+	delay := p.cooldownWaitLocked(now)
+	for _, until := range []time.Time{p.rateProviderUntil, p.providerRetryUntil} {
+		if remaining := until.Sub(now); remaining > delay {
+			delay = remaining
+		}
 	}
-	return p.cooldownWaitLocked(now)
+	return delay
+}
+
+// A server-supplied wait applies to the provider, independent of which key or
+// model returned it. Version fencing prevents an older success from erasing it.
+func (p *providerKeyPool) holdProviderUntil(until time.Time) time.Time {
+	if p == nil || until.IsZero() {
+		return time.Time{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	increment(&p.rateVersion)
+	if until.After(p.providerRetryUntil) {
+		p.providerRetryUntil = until
+	}
+	return p.providerRetryUntil
 }
 
 func (p *providerKeyPool) cooldownWaitLocked(now time.Time) time.Duration {
@@ -260,6 +285,7 @@ func (p *providerKeyPool) rateSucceeded(index int, observation rateLimitObservat
 	}
 	p.rateStreak = 0
 	p.rateProviderUntil = time.Time{}
+	p.providerRetryUntil = time.Time{}
 	return true
 }
 
@@ -274,14 +300,22 @@ func (p *providerKeyPool) beginRateRecovery(now time.Time) (*rateRecoveryLease, 
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.rateStreak == 0 || p.rateProviderUntil.IsZero() {
+	if (p.rateStreak == 0 || p.rateProviderUntil.IsZero()) && p.providerRetryUntil.IsZero() {
 		return nil, nil
 	}
 	if p.rateProbe != nil {
 		return nil, &adapter.CallError{Status: 429, Code: "recovery_in_progress", UpstreamNotAttempted: true}
 	}
-	if p.rateProviderUntil.After(now) {
-		return nil, &adapter.CallError{Status: 429, Code: "provider_rate_limited_cooling_down", Cooldown: p.rateProviderUntil.Sub(now), UpstreamNotAttempted: true}
+	until := p.rateProviderUntil
+	if p.providerRetryUntil.After(until) {
+		until = p.providerRetryUntil
+	}
+	if until.After(now) {
+		code := "provider_rate_limited_cooling_down"
+		if p.providerRetryUntil.After(now) {
+			code = "provider_retry_after_cooling_down"
+		}
+		return nil, &adapter.CallError{Status: 429, Code: code, Cooldown: until.Sub(now), CooldownUntil: until, UpstreamNotAttempted: true}
 	}
 	lease := &rateRecoveryLease{}
 	p.rateProbe = lease

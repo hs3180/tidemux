@@ -167,9 +167,17 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 					return
 				}
 				h.availability.withCurrent(h.routingEpoch, route.provider, h.providerGenerations[route.provider], func() {
+					now := time.Now()
+					var serverUntil time.Time
+					if callErr.RetryProvided {
+						serverUntil = pool.holdProviderUntil(callErr.CooldownUntil)
+					}
 					if callErr.Category == adapter.ProviderErrorRateLimited {
-						now := time.Now()
-						delay, providerDelay, streak := pool.rateLimitedAt(candidates[candidateIndex].index, callErr.Cooldown, callErr.RetryProvided, now)
+						upstreamDelay := callErr.Cooldown
+						if callErr.RetryProvided {
+							upstreamDelay = max(callErr.CooldownUntil.Sub(now), 0)
+						}
+						delay, providerDelay, streak := pool.rateLimitedAt(candidates[candidateIndex].index, upstreamDelay, callErr.RetryProvided, now)
 						callErr.Cooldown = delay
 						callErr.RateLimitFailures = streak
 						if providerDelay > 0 {
@@ -177,16 +185,21 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 							callErr.Cooldown = providerDelay
 						}
 						callErr.CooldownUntil = now.Add(callErr.Cooldown)
-						if callErr.Failure != nil {
-							callErr.Failure = callErr.Failure.Normalize()
-							callErr.Failure.CooldownScope = "key"
-							if callErr.AllKeysCooling {
-								callErr.Failure.CooldownScope = "provider"
+						if serverUntil.After(now) {
+							callErr.AllKeysCooling = true
+							callErr.CooldownUntil = now.Add(providerDelay)
+							if serverUntil.After(callErr.CooldownUntil) {
+								callErr.CooldownUntil = serverUntil
 							}
-							callErr.Failure.CooldownSeconds = int64((callErr.Cooldown + time.Second - 1) / time.Second)
-							callErr.Failure.CooldownUntilMS = now.Add(callErr.Cooldown).UnixMilli()
-							callErr.Failure.ProviderRateLimitStreak = streak
+							callErr.Cooldown = callErr.CooldownUntil.Sub(now)
 						}
+						setCooldownFailure(callErr)
+						return
+					}
+					if !serverUntil.IsZero() {
+						callErr.AllKeysCooling, callErr.CooldownUntil = true, serverUntil
+						callErr.Cooldown = serverUntil.Sub(now)
+						setCooldownFailure(callErr)
 						return
 					}
 					// Only credential-scoped failures should cool a key. Model, request,
@@ -241,4 +254,18 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		}
 	}
 	return response, id, callErr, false
+}
+
+func setCooldownFailure(callErr *adapter.CallError) {
+	if callErr.Failure == nil {
+		return
+	}
+	callErr.Failure = callErr.Failure.Normalize()
+	callErr.Failure.CooldownScope = "key"
+	if callErr.AllKeysCooling {
+		callErr.Failure.CooldownScope = "provider"
+	}
+	callErr.Failure.CooldownSeconds = retryDeadlineSeconds(callErr.CooldownUntil, time.Now())
+	callErr.Failure.CooldownUntilMS = callErr.CooldownUntil.UnixMilli()
+	callErr.Failure.ProviderRateLimitStreak = callErr.RateLimitFailures
 }

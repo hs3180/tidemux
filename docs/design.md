@@ -41,8 +41,10 @@ restart. Price priority has no affinity. Capacity is an admission check.
 Model-not-found and temporary unavailability affect a provider/model (30-second
 initial cooldown). Insufficient balance affects a provider (five minutes);
 proven pre-header connection failure also affects a provider (30 seconds).
-Authentication retains key scope. A 429 cools its key and leaves healthy peers
-eligible. Once all keys are cooling, the provider also becomes ineligible.
+Authentication retains key scope. A 429 without a valid server wait cools its
+key and leaves healthy peers eligible. A valid upstream `Retry-After` on a
+retryable failure pauses the entire provider, across all keys and models.
+Once all keys are cooling, the provider also becomes ineligible.
 Local rejection, cancellation, terminal client errors and conversion failures
 do not create upstream failure evidence. Upstream 5xx, interrupted streams and
 upstream timeouts affect only the provider/model. An explicit unclassified SSE
@@ -51,15 +53,17 @@ its diagnostic category and retryability stay unknown, and repeated unknown
 errors do not lengthen this provisional wait. Other models remain eligible.
 
 After cooldown, at most one real request probes a target. Failed probes double
-backoff to 30 minutes plus 0–20% jitter; longer upstream waits win, bounded to
-24 hours. Success restores eligibility for later requests. There is no background
+backoff to 30 minutes plus 0–20% jitter. Explicit server deadlines are retained
+separately and are not shortened to the 24-hour local backoff bound.
+Success restores eligibility for later requests. There is no background
 inference or timer declaring health. Observations are capped at 4,096 targets,
 24-hour idle retention and 128-byte ASCII model labels; active probes are retained.
 
 Rate limits without a valid upstream wait start at 30 seconds and double to
-30 minutes plus 0–20% jitter. A valid upstream `Retry-After` supplies the actual
-key wait (bounded to one second–24 hours); the original valid header is returned
-unchanged. The 11th consecutive key rate limit silences that key for 24 hours.
+30 minutes plus 0–20% jitter. A valid upstream `Retry-After` supplies an absolute
+provider-wide pause, independent of key backoff and client retry cadence. An
+older in-flight success cannot erase that pause; a shorter concurrent wait
+cannot reduce it. The 11th consecutive key rate limit silences that key for 24 hours.
 The provider streak counts actual rate-limited attempts across keys; if it
 exceeds ten while every key is cooling, all keys enter a 24-hour silence.
 A successful request resets its key streak and, when no newer provider failure
@@ -79,7 +83,7 @@ with the request gate disabled.
 TideMux dispatches at most one upstream generation request for each downstream
 generation request. After dispatch, it does not wait for a retry, retry a 429,
 switch keys, or fail over to another provider. It returns the mapped upstream
-result and preserves a valid `Retry-After` header; the downstream client owns
+result with bounded gateway retry advice; the downstream client owns
 retry timing and submits each retry as a new request. Key and route health can
 influence selection for later requests, but never replay the current request.
 The next request on a failed shared-model or auto session selects an eligible
@@ -88,10 +92,12 @@ binding remains stable. An explicitly qualified provider stays explicit; without
 an eligible alternative, cooldown is reported rather than bypassed.
 
 Local temporary cooldowns use HTTP 429 and native rate-limit error types.
-The retry deadline is the maximum independent gate for each route, then the
-minimum across compatible routes. An active probe makes its completion time
-unknown; it never supplies a synthetic countdown. Preserve an upstream's valid
-Retry-After; otherwise a real local deadline can supply rounded-up seconds.
+Route eligibility is the maximum independent gate for each route, then the
+minimum across compatible routes. This is reported separately from client wait.
+An eligible alternative yields a two-second client wait; otherwise known client
+waits are capped at 30 seconds. The full server deadline remains in provider
+state and is rechecked after queueing, before any HTTP attempt. An active probe
+makes its completion time unknown and never supplies a synthetic countdown.
 Errors distinguish the wait source, bounded client retry advice and eligible
 model/protocol/health alternatives. A new request rechecks admission and budgets.
 After SSE headers are committed, guidance and request IDs belong in the terminal
