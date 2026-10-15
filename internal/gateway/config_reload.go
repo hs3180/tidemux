@@ -116,6 +116,9 @@ func WatchConfig(h http.Handler, path string, original Config, lookup SecretLook
 					view.reload = state
 					view.activateRouting()
 					state.active.Store(view)
+					for _, name := range view.capabilityWarnings {
+						view.warnModelCapabilities(name)
+					}
 				}
 				activeRaw = candidate
 				state.appliedRevision = revision
@@ -155,7 +158,7 @@ func runtimeSettings(c Config) Config {
 
 func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Config, previous *handler, client *http.Client) (*handler, error) {
 	view := &handler{config: c, ledger: root.ledger, handlerRuntime: root.handlerRuntime, sessions: root.sessions, logger: root.logger,
-		autoChain: previous.autoChain, providers: map[string]Provider{}, clients: map[string]*adapter.Client{}, keyPools: map[string]*providerKeyPool{}, models: map[string][]string{}, modelsKnown: map[string]bool{}, unavailableProviders: map[string]error{},
+		autoChain: previous.autoChain, providers: map[string]Provider{}, clients: map[string]*adapter.Client{}, keyPools: map[string]*providerKeyPool{}, models: map[string][]string{}, modelsKnown: map[string]bool{}, catalogs: map[string]providerCatalog{}, unavailableProviders: map[string]error{},
 		providerGenerations: map[string]uint64{}, reusedConnections: map[string]bool{}, routingEpoch: previous.routingEpoch + 1}
 	rawProviders := c.Providers
 	if len(rawProviders) == 0 && c.BaseURL != "" {
@@ -172,6 +175,7 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 			view.keyPools[name] = previous.keyPools[name]
 			view.models[name] = previous.models[name]
 			view.modelsKnown[name] = previous.modelsKnown[name]
+			view.catalogs[name] = previous.catalogs[name]
 			view.providerGenerations[name] = previous.providerGenerations[name]
 			view.reusedConnections[name] = true
 			continue
@@ -180,6 +184,7 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 		protocol := normalizeProviderProtocol(p.Protocol)
 		var models []string
 		var known bool
+		var catalog providerCatalog
 		var err error
 		before, existed := previousProviders[name]
 		prior := previous.providers[name]
@@ -188,10 +193,12 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 			protocol = prior.Protocol
 			p.APIVersion = prior.APIVersion
 			models, known = previous.models[name], previous.modelsKnown[name]
+			catalog = previous.catalogs[name]
 			view.providerGenerations[name] = previous.providerGenerations[name]
 			view.reusedConnections[name] = true
 		} else if protocol == "" || protocol == "auto" {
-			protocol, models, known, err = detectProviderEndpoint(ctx, p.BaseURL, p.APIKey, p.APIVersion, client)
+			protocol, catalog, err = detectProviderCatalog(ctx, p.BaseURL, p.APIKey, p.APIVersion, client)
+			models, known = catalog.models, catalog.known
 		} else {
 			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			response, probeErr := requestProviderModels(probeCtx, p.BaseURL, p.APIKey, p.APIVersion, protocol, client)
@@ -204,7 +211,8 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 			} else if response.status < 200 || response.status >= 300 {
 				err = errors.New("provider probe failed")
 			} else {
-				models, known = parseProviderModels(response.body, protocol)
+				catalog = parseProviderCatalog(response.body, protocol)
+				models, known = catalog.models, catalog.known
 			}
 		}
 		if err != nil || ctx.Err() != nil {
@@ -223,6 +231,7 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 			view.providerGenerations[name] = root.nextProviderGeneration
 		}
 		view.models[name], view.modelsKnown[name] = models, known
+		view.catalogs[name] = catalog
 		pool := newProviderKeyPool(p.ResolvedAPIKeys())
 		if sameConnection {
 			pool = previous.keyPools[name]
@@ -232,7 +241,8 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 			pool.providerRetry = previous.keyPools[name].providerRetry
 		}
 		view.keyPools[name] = pool
-		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, UsageLog: root.usageLog, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, PromptCache: root.cache, CacheNamespace: providerCacheNamespace(view.providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, HTTP: client, Ledger: root.ledger, Gate: root.gate}
+		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, UsageLog: root.usageLog, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, PromptCache: root.cache, CacheNamespace: providerCacheNamespace(view.providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, ModelOutputLimits: providerOutputLimits(p, catalog), HTTP: client, Ledger: root.ledger, Gate: root.gate}
+		view.capabilityWarnings = append(view.capabilityWarnings, name)
 	}
 	if len(c.Providers) > 0 {
 		view.config.Providers = view.providers

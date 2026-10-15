@@ -2,6 +2,10 @@
 
 ## 0.3.4 — 2026-10-15
 
+- Discover and cache per-model context/output limits from provider catalogs,
+  with explicit configuration priority and warnings for unknown or conflicting
+  metadata. Publish limits in both model APIs and use the running catalog in
+  client launchers without assigning one provider's limits to shared models.
 - Preserve safe upstream failure codes, statuses, phases and provider request
   IDs across client errors, JSONL and SQLite audit JSON. Unknown causes stay
   unknown; provider messages, credentials and raw sessions remain excluded.

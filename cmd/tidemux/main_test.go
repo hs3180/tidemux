@@ -23,7 +23,8 @@ func runtimeTestConfig(dir string) gateway.Config {
 	return gateway.Config{
 		ListenAddr: "127.0.0.1:0", Protocol: "openai", BaseURL: "http://127.0.0.1:1/v1",
 		Model: "test-model", UpstreamID: "test-provider", APIKey: "provider-secret",
-		AccessToken: "local-secret", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"),
+		ModelCapabilities: gateway.ModelCapabilities{ContextTokens: 65536, MaxOutputTokens: 8192},
+		AccessToken:       "local-secret", MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"),
 		UpstreamKeychain:    gateway.KeychainReference{Service: "test.provider", Account: "default"},
 		AccessTokenKeychain: gateway.KeychainReference{Service: "test.gateway", Account: "default"},
 	}

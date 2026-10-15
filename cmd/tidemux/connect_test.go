@@ -97,6 +97,51 @@ func TestConnectEnvironmentReplacesConflictingAuth(t *testing.T) {
 	}
 }
 
+func TestLaunchersUseRunningPerModelLimitsAndOmitSharedCandidateLimits(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer local" {
+			t.Error("catalog authentication missing")
+		}
+		fmt.Fprint(w, `{"data":[{"id":"p/small","context_length":16384,"max_output_tokens":1024},{"id":"p/large","context_length":262144,"max_output_tokens":8192},{"id":"p/invalid","context_length":-1}]}`)
+	}))
+	defer server.Close()
+	catalog, err := fetchGatewayCatalog(context.Background(), server.URL, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.models) != 3 || catalog.capabilitiesFor("p", "small") != (gateway.ModelCapabilities{ContextTokens: 16384, MaxOutputTokens: 1024}) || catalog.capabilitiesFor("", "large") != (gateway.ModelCapabilities{}) || catalog.capabilitiesFor("p", "invalid") != (gateway.ModelCapabilities{}) {
+		t.Fatal("lost per-model limits, accepted invalid metadata or advertised one shared candidate")
+	}
+	for _, client := range []string{"kilo", "hermes"} {
+		state := t.TempDir()
+		env, _, err := clientLaunch(client, server.URL, "p/large", state, "", catalog.capabilitiesFor("p", "p/large"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client == "kilo" {
+			var config struct {
+				Provider map[string]struct {
+					Models map[string]struct {
+						Limit struct{ Context, Output int64 }
+					}
+				}
+			}
+			if json.Unmarshal([]byte(env["KILO_CONFIG_CONTENT"]), &config) != nil {
+				t.Fatal("invalid Kilo config")
+			}
+			limit := config.Provider["tidemux-local"].Models["p/large"].Limit
+			if limit.Context != 262144 || limit.Output != 8192 {
+				t.Fatal("Kilo did not receive discovered per-model limits")
+			}
+		} else {
+			data, err := os.ReadFile(filepath.Join(state, "config.yaml"))
+			if err != nil || !strings.Contains(string(data), `"context_length": 262144`) {
+				t.Fatal("Hermes did not receive discovered context")
+			}
+		}
+	}
+}
+
 func TestValidateClientProtocol(t *testing.T) {
 	tests := []struct {
 		name     string

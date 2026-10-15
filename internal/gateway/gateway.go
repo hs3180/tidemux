@@ -36,6 +36,8 @@ type handler struct {
 	keyPools             map[string]*providerKeyPool
 	models               map[string][]string
 	modelsKnown          map[string]bool
+	catalogs             map[string]providerCatalog
+	capabilityWarnings   []string // changed providers; logged only after publication
 	unavailableProviders map[string]error
 	logger               *slog.Logger
 	randomIndex          func(int) int
@@ -415,6 +417,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	if r.Method == "GET" && (modelList || modelDetail) {
 		models := h.allQualifiedModels()
 		var detailID string
+		var detailProviderName, detailModelID string
 		var detailProvider Provider
 		if modelDetail {
 			detailID = strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1"), "/models/")
@@ -423,6 +426,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 				h.reject(w, r, protocol, 404, "model_not_found")
 				return
 			}
+			detailProviderName, detailModelID = providerName, modelID
 			var exists bool
 			detailProvider, exists = h.providers[providerName]
 			if exists {
@@ -441,15 +445,15 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		if protocol == "anthropic" {
 			if modelDetail {
 				model := map[string]any{"id": detailID, "type": "model", "display_name": detailID}
-				detailProvider.ModelCapabilities.addToModel(model)
+				h.capabilitiesForModel(detailProviderName, detailModelID).addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
 			data := make([]map[string]any, 0, len(models))
 			for _, id := range models {
 				model := map[string]any{"id": id, "type": "model", "display_name": id}
-				providerName, _, _ := parseQualifiedModelID(id)
-				h.providers[providerName].ModelCapabilities.addToModel(model)
+				providerName, modelID, _ := parseQualifiedModelID(id)
+				h.capabilitiesForModel(providerName, modelID).addToModel(model)
 				data = append(data, model)
 			}
 			result := map[string]any{"data": data, "has_more": false}
@@ -460,16 +464,16 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		} else {
 			if modelDetail {
 				model := map[string]any{"id": detailID, "object": "model", "created": 0, "owned_by": detailProvider.UpstreamID}
-				detailProvider.ModelCapabilities.addToModel(model)
+				h.capabilitiesForModel(detailProviderName, detailModelID).addToModel(model)
 				json.NewEncoder(w).Encode(model)
 				return
 			}
 			data := make([]map[string]any, 0, len(models))
 			for _, id := range models {
-				providerName, _, _ := parseQualifiedModelID(id)
+				providerName, modelID, _ := parseQualifiedModelID(id)
 				provider := h.providers[providerName]
 				model := map[string]any{"id": id, "object": "model", "created": 0, "owned_by": provider.UpstreamID}
-				provider.ModelCapabilities.addToModel(model)
+				h.capabilitiesForModel(providerName, modelID).addToModel(model)
 				data = append(data, model)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})

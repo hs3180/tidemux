@@ -88,9 +88,12 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
         assert len(calls) == 3
 
         # Exercise the installed candidate's launcher with the multi-provider
-        # bare-ID contract. All client protocols select the unique provider
-        # scope, and Kilo/Hermes receive that provider's declared capabilities.
-        server.models = [{'id': 'glm/glm-5.3'}, {'id': 'secondary/other-model'}]
+        # bare-ID contract. Running limits differ from the saved settings;
+        # launchers must use the gateway's applied view for that exact model.
+        server.models = [
+            {'id': 'glm/glm-5.3', 'context_length': 49152, 'max_output_tokens': 6144},
+            {'id': 'secondary/other-model', 'context_length': 32768, 'max_output_tokens': 4096},
+        ]
         providers = {
             'glm': {
                 'protocol': 'anthropic', 'base_url': 'https://glm.example/v1',
@@ -126,12 +129,29 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
                 data = json.loads(record['env']['KILO_CONFIG_CONTENT'])
                 selected = data['provider']['tidemux-local']['models']['glm-5.3']['limit']
                 assert data['model'] == 'tidemux-local/glm-5.3'
-                assert selected == {'context': 65536, 'output': 8192}
+                assert selected == {'context': 49152, 'output': 6144}
             else:
                 data = json.loads((Path(record['env']['HERMES_HOME']) / 'config.yaml').read_text())
                 assert data['model']['default'] == 'glm-5.3'
-                assert data['model']['context_length'] == 65536
+                assert data['model']['context_length'] == 49152
             print('Unique bare-model provider scope passed:', name)
+
+        # Missing runtime metadata stays unknown even if newer saved settings
+        # declare limits that the running gateway has not applied.
+        server.models = [{'id': 'glm/glm-5.3'}, {'id': 'secondary/other-model'}]
+        for name in ['kilo', 'hermes']:
+            config = root / (name + '-scoped.json')
+            result = subprocess.run([binary, name, '--config', str(config), '--model', 'glm-5.3',
+                                     '--executable', str(child)],
+                                    env=env, capture_output=True, text=True, timeout=15, check=True)
+            record = json.loads(result.stdout)
+            if name == 'kilo':
+                data = json.loads(record['env']['KILO_CONFIG_CONTENT'])
+                assert 'limit' not in data['provider']['tidemux-local']['models']['glm-5.3']
+            else:
+                data = json.loads((Path(record['env']['HERMES_HOME']) / 'config.yaml').read_text())
+                assert 'context_length' not in data['model']
+            print('Unknown runtime limits remain unset:', name)
 
         ambiguous = root / 'ambiguous.json'
         ambiguous_providers = json.loads(json.dumps(providers))
@@ -151,7 +171,10 @@ print(json.dumps({'args':sys.argv[1:],'env':{k:os.environ.get(k) for k in keys}}
 
         # An enabled shared-model strategy delegates selection to the gateway.
         # The clients keep the bare ID and receive neither candidate's limits.
-        server.models = [{'id': 'glm/glm-5.3'}, {'id': 'secondary/glm-5.3'}]
+        server.models = [
+            {'id': 'glm/glm-5.3', 'context_length': 49152, 'max_output_tokens': 6144},
+            {'id': 'secondary/glm-5.3', 'context_length': 98304, 'max_output_tokens': 12288},
+        ]
         for strategy in ['random', 'price_priority']:
             shared = json.loads(ambiguous.read_text())
             shared['routing'] = {'shared_model_strategy': strategy}

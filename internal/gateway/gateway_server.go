@@ -114,6 +114,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	keyPools := make(map[string]*providerKeyPool, len(providers))
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
+	catalogs := make(map[string]providerCatalog, len(providers))
 	runtime := &handlerRuntime{availability: newAvailabilityState(logger), usageLog: usageLog, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
 	providerGenerations := make(map[string]uint64, len(providers))
 	for name, provider := range providers {
@@ -124,12 +125,16 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		}
 		runtime.nextProviderGeneration++
 		providerGenerations[name] = runtime.nextProviderGeneration
-		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, UsageLog: usageLog, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, CacheNamespace: providerCacheNamespace(providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, HTTP: httpClient, Ledger: l, Gate: gate}
 		if !legacySingleProvider {
-			models[name], modelsKnown[name] = discoverProviderModels(provider.BaseURL, provider, provider.Protocol, httpClient)
+			catalogs[name] = discoverProviderCatalog(provider.BaseURL, provider, provider.Protocol, httpClient)
+			models[name], modelsKnown[name] = catalogs[name].models, catalogs[name].known
 		}
+		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, UsageLog: usageLog, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, CacheNamespace: providerCacheNamespace(providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, ModelOutputLimits: providerOutputLimits(provider, catalogs[name]), HTTP: httpClient, Ledger: l, Gate: gate}
 	}
-	h := &handler{config: c, ledger: l, handlerRuntime: runtime, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
+	h := &handler{config: c, ledger: l, handlerRuntime: runtime, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, catalogs: catalogs, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
+	for name := range clients {
+		h.warnModelCapabilities(name)
+	}
 	h.availability.activate(h.routingEpoch, h.providerGenerations, h.supportScopeAllows)
 	return h, func() error {
 		stopReconciliation()
