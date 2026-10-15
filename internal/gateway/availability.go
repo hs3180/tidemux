@@ -71,8 +71,29 @@ type availabilityState struct {
 
 func newAvailabilityState(logger *slog.Logger) *availabilityState {
 	return &availabilityState{entries: map[availabilityTarget]*availabilityEntry{},
-		now: time.Now, jitter: func(base time.Duration) time.Duration { return time.Duration(rand.Int63n(int64(base/5) + 1)) },
+		now: time.Now, jitter: recoveryJitter,
 		logger: observability.LoggerOrDiscard(logger)}
+}
+
+func recoveryJitter(base time.Duration) time.Duration {
+	return time.Duration(rand.Int63n(int64(base/5) + 1))
+}
+
+// Apply operational key health under the same publication fence as route
+// health. A compatible reload can reuse the pool, so a separate check followed
+// by an unlocked mutation would let an old view change the new view's state.
+func (s *availabilityState) withCurrent(epoch uint64, provider string, generation uint64, apply func()) bool {
+	if s == nil {
+		apply()
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch != epoch || s.generations[provider] != generation {
+		return false
+	}
+	apply()
+	return true
 }
 
 func (s *availabilityState) activate(epoch uint64, generations map[string]uint64, valid ...func(string, string) bool) {
@@ -232,6 +253,10 @@ func availabilityFailure(err error, ctxErr error, handled bool) (modelScope bool
 		return
 	}
 	switch callErr.Category {
+	case adapter.ProviderErrorRateLimited:
+		if callErr.AllKeysCooling {
+			return false, "rate_limited", callErr.Cooldown
+		}
 	case adapter.ProviderErrorModelNotFound:
 		return true, "model_not_found", callErr.Cooldown
 	case adapter.ProviderErrorTemporarilyUnavailable:
@@ -243,6 +268,13 @@ func availabilityFailure(err error, ctxErr error, handled bool) (modelScope bool
 }
 
 func (s *availabilityState) backoff(reason string, failures uint16, upstream time.Duration) time.Duration {
+	return boundedRecoveryBackoff(reason, failures, upstream, s.jitter)
+}
+
+func boundedRecoveryBackoff(reason string, failures uint16, upstream time.Duration, jitter func(time.Duration) time.Duration) time.Duration {
+	if reason == "rate_limited" && failures > 10 {
+		return 24 * time.Hour
+	}
 	base := routeRecoveryCooldown
 	if reason == "insufficient_balance" {
 		base = billingExhaustionCooldown
@@ -253,7 +285,7 @@ func (s *availabilityState) backoff(reason string, failures uint16, upstream tim
 	if base > availabilityMaxBackoff {
 		base = availabilityMaxBackoff
 	}
-	delay := base + s.jitter(base)
+	delay := base + jitter(base)
 	if upstream > delay {
 		delay = upstream
 	}
@@ -338,7 +370,18 @@ func (s *availabilityState) complete(lease *availabilityLease, handled bool, err
 				next.failures++
 			}
 			next.lastFailure = now
-			next.retryAt = now.Add(s.backoff(next.reason, next.failures, cooldown))
+			var failure *adapter.CallError
+			if reason == "rate_limited" && errors.As(err, &failure) && failure.AllKeysCooling {
+				// The key pool already computed the real earliest eligible key,
+				// including upstream Retry-After and its provider-wide silence.
+				next.failures = failure.RateLimitFailures
+				if next.failures == 0 {
+					next.failures = 1
+				}
+				next.retryAt = now.Add(cooldown)
+			} else {
+				next.retryAt = now.Add(s.backoff(next.reason, next.failures, cooldown))
+			}
 		}
 		if s.put(target, &next) && (previous.state() != next.state() || previous != nil && previous.reason != next.reason) {
 			transitions = append(transitions, availabilityTransition{target, previous.state(), next.state(), next.reason, next.retryAt})
@@ -416,6 +459,14 @@ func (h *handler) availabilityReport() AvailabilityReport {
 		provider := ProviderAvailability{Ref: ref, Generation: generation,
 			AvailabilityStatus: availabilityStatus(s.entries[availabilityTarget{ref, "", generation}], now), Models: []ModelAvailability{}}
 		provider.KeyPool = h.keyPools[ref].diagnosticStatus(now)
+		if pool := provider.KeyPool; pool != nil && pool.ConsecutiveRateLimits > 0 && !pool.RateLimitRetryAt.IsZero() && (provider.State == "unknown" || provider.State == "available" || provider.Reason == "rate_limited") {
+			provider.State, provider.Reason = "cooling", "rate_limited"
+			if pool.RecoveryInProgress {
+				provider.State = "probing"
+			}
+			provider.RetryAt, provider.LastFailure, provider.ConsecutiveFailures = pool.RateLimitRetryAt, pool.LastRateLimitAt, pool.ConsecutiveRateLimits
+			provider.ProbeDue = !now.Before(pool.RateLimitRetryAt) && !pool.RecoveryInProgress
+		}
 		if _, unavailable := h.unavailableProviders[ref]; unavailable {
 			provider.State, provider.Reason = "unavailable", "protocol_unresolved"
 		}

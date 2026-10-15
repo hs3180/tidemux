@@ -50,16 +50,18 @@ type CallError struct {
 	FailoverSafe bool
 	// BudgetCost preserves a known charge when the audit row itself cannot be
 	// written. It is internal accounting data and is never sent to clients.
-	BudgetCost      *float64
-	Param           string
-	ProviderCode    string
-	Category        ProviderErrorCategory
-	UpstreamStatus  int
-	Cooldown        time.Duration
-	RetryAfterSecs  int64
-	RetryProvided   bool
-	RetryAfterValue string
-	Failure         *diagnostics.Failure
+	BudgetCost        *float64
+	Param             string
+	ProviderCode      string
+	Category          ProviderErrorCategory
+	UpstreamStatus    int
+	Cooldown          time.Duration
+	RetryAfterSecs    int64
+	RetryProvided     bool
+	RetryAfterValue   string
+	Failure           *diagnostics.Failure
+	AllKeysCooling    bool
+	RateLimitFailures uint16
 }
 
 // ErrServerShuttingDown identifies a gateway-initiated cancellation without
@@ -73,7 +75,7 @@ func (e *CallError) Error() string { return e.Code }
 // this adapter does not replay it with another key.
 type KeyCandidateCallbacks struct {
 	Attempt   func(index int) func(HTTPAttemptResult) // one actual HTTP initiation/result
-	Completed func(err error)                         // upstream result, before releasing the dispatch gate
+	Completed func(index int, err error)              // upstream result, before releasing the dispatch gate
 	Ready     func(index int) (bool, time.Duration)
 	Failed    func(index int, callErr *CallError)
 }
@@ -153,6 +155,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}
 	var observed bytes.Buffer
 	attempted := false
+	selectedCandidate := -1
 	delivered := false
 	auditPersisted := false
 	localEstimate := func(response []byte) {
@@ -281,7 +284,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	defer c.Gate.Release()
 	defer func() {
 		if attempted && callbacks.Completed != nil {
-			callbacks.Completed(err)
+			callbacks.Completed(selectedCandidate, err)
 		}
 	}()
 	if e = ctx.Err(); e != nil {
@@ -341,6 +344,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			}
 		}
 		attempted = true
+		selectedCandidate = candidateIndex
 		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, func() func(HTTPAttemptResult) {
 			if callbacks.Attempt == nil {
 				return nil

@@ -43,12 +43,13 @@ func increment(counter *uint64) {
 }
 
 type KeyStatus struct {
-	Label            string       `json:"label"`
-	State            string       `json:"state"`
-	LastFailureClass string       `json:"last_failure_class,omitempty"`
-	LastFailureAt    time.Time    `json:"last_failure_at,omitzero"`
-	CooldownUntil    time.Time    `json:"cooldown_until,omitzero"`
-	Counters         *KeyCounters `json:"counters,omitempty"`
+	Label                 string       `json:"label"`
+	State                 string       `json:"state"`
+	LastFailureClass      string       `json:"last_failure_class,omitempty"`
+	LastFailureAt         time.Time    `json:"last_failure_at,omitzero"`
+	CooldownUntil         time.Time    `json:"cooldown_until,omitzero"`
+	ConsecutiveRateLimits uint16       `json:"consecutive_rate_limits"`
+	Counters              *KeyCounters `json:"counters,omitempty"`
 }
 
 type KeyFailover struct {
@@ -59,15 +60,19 @@ type KeyFailover struct {
 }
 
 type KeyPoolStatus struct {
-	Capacity         int           `json:"capacity"`
-	Eligible         int           `json:"eligible"`
-	Cooling          int           `json:"cooling"`
-	TelemetryEnabled bool          `json:"telemetry_enabled"`
-	CounterEpoch     uint64        `json:"counter_epoch"`
-	Keys             []KeyStatus   `json:"keys"`
-	RecentFailovers  []KeyFailover `json:"recent_failovers"`
-	RecentLimit      int           `json:"recent_limit"`
-	RecentTTLSeconds int           `json:"recent_ttl_seconds"`
+	Capacity              int           `json:"capacity"`
+	Eligible              int           `json:"eligible"`
+	Cooling               int           `json:"cooling"`
+	TelemetryEnabled      bool          `json:"telemetry_enabled"`
+	CounterEpoch          uint64        `json:"counter_epoch"`
+	Keys                  []KeyStatus   `json:"keys"`
+	RecentFailovers       []KeyFailover `json:"recent_failovers"`
+	RecentLimit           int           `json:"recent_limit"`
+	RecentTTLSeconds      int           `json:"recent_ttl_seconds"`
+	ConsecutiveRateLimits uint16        `json:"consecutive_rate_limits"`
+	RateLimitRetryAt      time.Time     `json:"rate_limit_retry_at,omitzero"`
+	LastRateLimitAt       time.Time     `json:"last_rate_limit_at,omitzero"`
+	RecoveryInProgress    bool          `json:"recovery_in_progress"`
 }
 
 func (c Config) HealthDiagnosticsEnabled() bool {
@@ -172,8 +177,11 @@ func (p *providerKeyPool) diagnosticStatus(now time.Time) *KeyPoolStatus {
 	p.pruneDecisions(now)
 	status := &KeyPoolStatus{Capacity: len(p.keys), TelemetryEnabled: p.telemetryEnabled, CounterEpoch: p.counterEpoch,
 		Keys: []KeyStatus{}, RecentFailovers: append([]KeyFailover{}, p.decisions...), RecentLimit: keyDecisionLimit, RecentTTLSeconds: int(keyDecisionTTL / time.Second)}
+	status.ConsecutiveRateLimits = p.rateStreak
+	status.RateLimitRetryAt, status.LastRateLimitAt, status.RecoveryInProgress = p.rateProviderUntil, p.lastRateLimit, p.rateProbe != nil
 	for i, label := range p.labels {
 		key := KeyStatus{Label: label, State: "eligible", LastFailureClass: p.failureClasses[i], LastFailureAt: p.failureTimes[i]}
+		key.ConsecutiveRateLimits = p.rateFailures[i]
 		if p.cooldowns[i].After(now) {
 			key.State, key.CooldownUntil = "cooling", p.cooldowns[i]
 			status.Cooling++

@@ -138,6 +138,17 @@ Compatible reloads preserve them; credential/connection changes or restart reset
 the pool. Toggling diagnostics clears counters/history while preserving routing
 and cooldowns. See [recovery bounds](design.md#routing-and-recovery).
 
+`consecutive_rate_limits` on each key and pool is operational health state and
+remains visible with diagnostics disabled. The pool also reports
+`rate_limit_retry_at`, `last_rate_limit_at` and `recovery_in_progress` when relevant.
+One limited key leaves other ready keys usable. If all keys are cooling, later
+requests wait for the earliest eligible key; only one request tests recovery.
+Without a valid upstream wait, consecutive 429s back off from 30 seconds to
+30 minutes with jitter. The 11th failure silences the affected key for 24 hours;
+if the provider streak exceeds ten with no ready keys, the provider is silenced
+for 24 hours. Success resets the applicable streaks. This is local failure
+recovery, not a measurement of remaining subscription quota.
+
 ## Billing and budgets
 
 ```sh

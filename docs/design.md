@@ -41,7 +41,9 @@ restart. Price priority has no affinity. Capacity is an admission check.
 Model-not-found and temporary unavailability affect a provider/model (30-second
 initial cooldown). Insufficient balance affects a provider (five minutes);
 proven pre-header connection failure also affects a provider (30 seconds).
-Authentication/429 retain key scope. Local rejection, cancellation and
+Authentication retains key scope. A 429 cools its key and leaves healthy peers
+eligible. Once all keys are cooling, the provider also becomes ineligible.
+Local rejection, cancellation and
 unclassified errors do not create upstream failure evidence.
 
 After cooldown, at most one real request probes a target. Failed probes double
@@ -49,6 +51,18 @@ backoff to 30 minutes plus 0–20% jitter; longer upstream waits win, bounded to
 24 hours. Success restores eligibility for later requests. There is no background
 inference or timer declaring health. Observations are capped at 4,096 targets,
 24-hour idle retention and 128-byte ASCII model labels; active probes are retained.
+
+Rate limits without a valid upstream wait start at 30 seconds and double to
+30 minutes plus 0–20% jitter. A valid upstream `Retry-After` supplies the actual
+key wait (bounded to one second–24 hours); the original valid header is returned
+unchanged. The 11th consecutive key rate limit silences that key for 24 hours.
+The provider streak counts actual rate-limited attempts across keys; if it
+exceeds ten while every key is cooling, all keys enter a 24-hour silence.
+A successful request resets its key streak and, when no newer provider failure
+has occurred, the provider streak. Older successes and old routing epochs cannot
+erase newer failures. Operational streaks do not depend on optional telemetry.
+Only one real request probes a rate-limited provider after silence, even if its
+idle availability observation has expired; cancellation releases that claim.
 
 Gateway/provider session ceilings count logical conversations separately from
 request concurrency. The optional global request gate is disabled when
