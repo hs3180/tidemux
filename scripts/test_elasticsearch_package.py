@@ -26,6 +26,25 @@ from test_runtime_logs_package import GATEWAY_KEY, PROVIDER_KEY, REQUEST_SENTINE
 ROOT=Path(__file__).resolve().parents[1]
 IMAGE='docker.elastic.co/logstash/logstash:8.19.5'
 
+def run_logged(command, log, timeout=90):
+    # Stream directly to evidence: TimeoutExpired must not discard output that
+    # would otherwise remain in subprocess.run's unfinished capture buffer.
+    with log.open('wb') as output:
+        result=subprocess.run(command,stdout=output,stderr=subprocess.STDOUT,timeout=timeout)
+    if result.returncode:
+        raise RuntimeError(log.name+' failed; inspect evidence')
+
+def cleanup_container(docker, name, log):
+    # A failed validation can leave a running --rm container after the Docker
+    # client is killed. Attempt every cleanup stage without masking its failure.
+    with log.open('wb') as output:
+        for args in (['logs',name],['stop','-t','15',name],['rm','-f',name]):
+            try:
+                subprocess.run([docker,*args],stdout=output,stderr=subprocess.STDOUT,timeout=25)
+            except (OSError,subprocess.TimeoutExpired):
+                output.write(('cleanup '+args[0]+' did not finish\n').encode())
+                output.flush()
+
 def event_time(value):
     # Older Python versions accept only three/six fraction digits, while Go's
     # RFC3339Nano output omits trailing zeroes. Compare at microsecond precision.
@@ -143,12 +162,14 @@ def main():
         return command
     docker=docker_run(env)
     def run(command,filename,timeout=90):
-        result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout);(root/filename).write_text(result.stdout)
-        if result.returncode:raise RuntimeError(filename+' failed; inspect evidence')
+        run_logged(command,root/filename,timeout)
+    # Image transport has its own bounded budget. Validation still fails after
+    # 90 seconds and never silently repeats; retain both stages' output.
+    run([a.docker,'pull',IMAGE],'image-pull.log',timeout=300)
     production=dict(env,TIDEMUX_ES_URL='https://es.example.invalid:9200',TIDEMUX_ES_API_KEY='synthetic-id:synthetic-key',TIDEMUX_ES_CA='/work/test-ca.pem')
-    run(docker_run(production)+['--rm',IMAGE,'bin/logstash','--path.settings','/work','-f','/work/production.conf','--config.test_and_exit'],'production-config-check.log')
-    run(docker+['--rm',IMAGE,'bin/logstash','--path.settings','/work','-f','/work/pipeline.conf','--config.test_and_exit'],'config-check.log')
     try:
+        run(docker_run(production)+['--rm',IMAGE,'bin/logstash','--path.settings','/work','-f','/work/production.conf','--config.test_and_exit'],'production-config-check.log')
+        run(docker+['--rm',IMAGE,'bin/logstash','--path.settings','/work','-f','/work/pipeline.conf','--config.test_and_exit'],'config-check.log')
         run(docker+['-d',IMAGE,'bin/logstash','--path.settings','/work','-f','/work/pipeline.conf'],'container-id.txt')
         deadline=time.monotonic()+90;documents=[]
         while time.monotonic()<deadline:
@@ -160,9 +181,7 @@ def main():
             time.sleep(.5)
         else:raise RuntimeError('Indexing or failure capture timed out')
     finally:
-        log=subprocess.run([a.docker,'logs',name],capture_output=True,text=True);(root/'collector.log').write_text(log.stdout+log.stderr)
-        subprocess.run([a.docker,'stop','-t','15',name],capture_output=True,timeout=25)
-        subprocess.run([a.docker,'rm',name],capture_output=True)
+        cleanup_container(a.docker,name,root/'collector.log')
     sources=[hit['_source'] for hit in documents]
     def find(request_id,event,outcome,status):
         matches=[s for s in sources if s.get('tidemux',{}).get('requestId')==request_id and s['tidemux'].get('event')==event and s['tidemux'].get('outcome')==outcome and s['tidemux'].get('http_status')==status]
@@ -202,8 +221,8 @@ def main():
     reader=docker_run(dict(env,TIDEMUX_LOGSTASH_DATA='/work/dlq-reader'),name+'-dlq')
     settings=collector/'reader-settings';settings.mkdir();shutil.copy(ROOT/'scripts/fixtures/elasticsearch/read-dlq.yml',settings/'logstash.yml')
     reader_args=[IMAGE,'bin/logstash','--path.settings','/work/reader-settings','-f','/work/read-dlq.conf']
-    run(reader+['--rm']+reader_args+['--config.test_and_exit'],'dlq-config-check.log')
     try:
+        run(reader+['--rm']+reader_args+['--config.test_and_exit'],'dlq-config-check.log')
         run(reader+['-d']+reader_args,'dlq-container-id.txt')
         deadline=time.monotonic()+60
         while time.monotonic()<deadline:
@@ -212,8 +231,7 @@ def main():
             time.sleep(.5)
         else:raise RuntimeError('DLQ reader did not expose mapping failure')
     finally:
-        logs=subprocess.run([a.docker,'logs',name+'-dlq'],capture_output=True,text=True);(root/'dlq-reader.log').write_text(logs.stdout+logs.stderr)
-        subprocess.run([a.docker,'stop','-t','10',name+'-dlq'],capture_output=True,timeout=20);subprocess.run([a.docker,'rm',name+'-dlq'],capture_output=True)
+        cleanup_container(a.docker,name+'-dlq',root/'dlq-reader.log')
     failures=[json.loads(line) for line in (collector/'mapping-failures.jsonl').read_text().splitlines()]
     if not any(f.get('tidemux',{}).get('requestId')=='mapping-smoke-id' and 'latency_ms' in f['collector'].get('reason','') for f in failures):raise RuntimeError('mapping failure has no retained event/reason')
     (root/'documents.json').write_text(json.dumps(documents,indent=2))

@@ -27,6 +27,8 @@
 - Allow max_in_flight=0 (or omitted) to disable the global request concurrency
   gate. Existing positive values and logical-session ceilings keep their meaning;
   changing the process-wide gate still needs a restart.
+- Separate collector CI image download from config-validation timeouts, retain
+  partial failure output and clean up containers when validation fails.
 
 Known limitations: [GLM native search/continuation #157](https://github.com/hs3180/tidemux/issues/157)
 retains provider-owned blocks and reported usage. [DeepSeek inference stalls #158](https://github.com/hs3180/tidemux/issues/158)

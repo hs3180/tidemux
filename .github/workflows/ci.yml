@@ -23,6 +23,7 @@ jobs:
           python3 scripts/test_provider_add_pty.py
           python3 -m py_compile scripts/test_elasticsearch_package.py scripts/test_filebeat_package.py
           python3 -m py_compile scripts/test_client_recovery_package.py
+          python3 scripts/test_collector_commands.py
           sh -n scripts/install.sh
           python3 scripts/test_install.py
           python3 scripts/test_client_commands.py

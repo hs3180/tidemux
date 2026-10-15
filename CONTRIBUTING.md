@@ -85,5 +85,8 @@ logs and verify known counts and exclusion of unknown usage. Run actual
 Filebeat/Logstash against isolated ES with fresh namespaces and registries;
 check types/time/usage, replay IDs, parse failures and mapping DLQ. Production
 ES tests require explicit authorization and a dedicated namespace.
+The Docker Logstash gate gives image download a separate five-minute bound;
+each config validation retains its 90-second bound. Partial command output and
+cleanup diagnostics remain in the supplied evidence directory on failures.
 Build and CI artifact upload do not publish a release. If public installation
 fails, resolve it in a new qualified version before announcing delivery.
