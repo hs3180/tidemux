@@ -153,6 +153,13 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				if candidateIndex < 0 || candidateIndex >= len(candidates) {
 					return false, 0
 				}
+				if claim, ok := r.Context().Value(rateRecoveryClaimContextKey{}).(*rateRecoveryClaim); ok && claim.lease == nil {
+					lease, blocked := pool.beginRateRecovery(time.Now())
+					if blocked != nil {
+						return false, max(blocked.Cooldown, time.Second)
+					}
+					claim.lease = lease
+				}
 				ready, delay, observation := pool.candidateStateAt(candidates[candidateIndex].index, time.Now())
 				if ready {
 					observations[candidateIndex] = observation
@@ -166,12 +173,17 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				if callErr.UpstreamNotAttempted && callErr.Code == "upstream_transport_error" {
 					return
 				}
+				var serverUntil time.Time
+				if callErr.RetryProvided {
+					serverUntil = pool.holdProviderUntil(callErr.CooldownUntil)
+					if !serverUntil.IsZero() {
+						callErr.AllKeysCooling, callErr.CooldownUntil = true, serverUntil
+						callErr.Cooldown = max(serverUntil.Sub(time.Now()), 0)
+						setCooldownFailure(callErr)
+					}
+				}
 				h.availability.withCurrent(h.routingEpoch, route.provider, h.providerGenerations[route.provider], func() {
 					now := time.Now()
-					var serverUntil time.Time
-					if callErr.RetryProvided {
-						serverUntil = pool.holdProviderUntil(callErr.CooldownUntil)
-					}
 					if callErr.Category == adapter.ProviderErrorRateLimited {
 						upstreamDelay := callErr.Cooldown
 						if callErr.RetryProvided {

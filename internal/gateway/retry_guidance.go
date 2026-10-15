@@ -126,6 +126,13 @@ func (h *handler) recoveryRoutes(request recoveryRequest) (routes, manual []rout
 }
 
 func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
+	// Recovery starts a new request and therefore uses the current routing view,
+	// while the original request retains its admitted endpoint and settlement.
+	if h.reload != nil {
+		if current := h.reload.active.Load(); current != nil && current != h {
+			return current.retryAdviceFor(r)
+		}
+	}
 	request, ok := r.Context().Value(recoveryRequestKey{}).(recoveryRequest)
 	advice := &retryAdvice{Strategy: "exponential_backoff_with_jitter", InitialDelaySeconds: 1, MaxDelaySeconds: 30,
 		MaxAttempts: 3, NewRequestRequired: true, Alternatives: []string{}, AlternativesScope: "model_protocol_health", WaitSource: "unknown"}
