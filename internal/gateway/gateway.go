@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/diagnostics"
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
@@ -211,6 +212,10 @@ func containsModel(models []string, model string) bool {
 }
 
 func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string, param ...string) {
+	h.failWithFailure(w, status, code, protocol, nil, param...)
+}
+
+func (h *handler) failWithFailure(w http.ResponseWriter, status int, code, protocol string, failure *diagnostics.Failure, param ...string) {
 	kind := "api_error"
 	switch status {
 	case 400, 413:
@@ -233,6 +238,7 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 		message = "unsupported_request_feature: " + field + " cannot be represented by the configured upstream protocol"
 	}
 	detail := map[string]any{"type": kind, "message": message, "code": code}
+	addFailureDetails(detail, failure)
 	switch code {
 	case "request_too_large":
 		limit := h.config.Limits.Effective().RequestBytes
@@ -269,6 +275,7 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 func mappedUpstreamErrorPayload(callErr *adapter.CallError, protocol string) map[string]any {
 	_, code, message, kind := callErr.Category.ClientError(protocol)
 	detail := map[string]any{"type": kind, "message": message, "code": code}
+	addFailureDetails(detail, callErr.Failure)
 	if callErr.ProviderCode != "" {
 		detail["provider_code"] = callErr.ProviderCode
 	}
@@ -284,7 +291,7 @@ func mappedUpstreamErrorPayload(callErr *adapter.CallError, protocol string) map
 
 func (h *handler) failUpstream(w http.ResponseWriter, callErr *adapter.CallError, protocol string) {
 	if callErr.Category == "" {
-		h.fail(w, callErr.Status, callErr.Code, protocol, callErr.Param)
+		h.failWithFailure(w, callErr.Status, callErr.Code, protocol, callErr.Failure, callErr.Param)
 		return
 	}
 	status := callErr.Status
@@ -294,6 +301,12 @@ func (h *handler) failUpstream(w http.ResponseWriter, callErr *adapter.CallError
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(mappedUpstreamErrorPayload(callErr, protocol))
+}
+
+func addFailureDetails(detail map[string]any, failure *diagnostics.Failure) {
+	if failure = failure.Normalize(); failure != nil {
+		detail["failure"] = failure
+	}
 }
 
 func setRetryAfterHeader(w http.ResponseWriter, callErr *adapter.CallError) {
@@ -694,6 +707,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		payload := mappedUpstreamErrorPayload(upstreamErr, protocol)
 		if upstreamErr.Category == "" {
 			detail := map[string]any{"type": "api_error", "message": upstreamErr.Code, "code": upstreamErr.Code}
+			addFailureDetails(detail, upstreamErr.Failure)
 			if upstreamErr.Param != "" {
 				detail["param"] = upstreamErr.Param
 			}

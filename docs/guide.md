@@ -177,8 +177,16 @@ Runtime stderr and terminal-request files use the same schema-2 JSONL records.
 Session files live at `logs/projects/tidemux/*.jsonl` beside the ledger.
 Each event has `timestamp`, `event`, `service` (name/version/process instance)
 and a unique persisted `event_id`. Requests also have `requestId`, outcome,
-model and known usage. Bodies, credentials, raw sessions and provider errors
+model and known usage. Bodies, credentials, raw sessions and provider error messages
 are omitted; [privacy](../PRIVACY.md) covers retained metadata.
+
+For a failed call, compare the request ID in the response header or terminal SSE
+error with `requestId` in the log. `failure` records upstream HTTP/embedded error
+status, source/phase, a safe provider code or its redaction state, provider request
+ID when valid, category and retryability. An HTTP 200 stream can end with an error;
+use `outcome` and the terminal error. `unknown` means the cause was not established,
+not a confirmed quota, policy or context-limit failure. Preserve the provider
+request ID when asking that provider to investigate; review metadata before sharing.
 
 Point an independently installed [ccusage](https://github.com/ccusage/ccusage)
 at the `logs/` directory:

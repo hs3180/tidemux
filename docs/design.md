@@ -89,4 +89,10 @@ a colliding fallback. Terminal events are encoded once and copied unchanged to
 stderr/session files. Known usage uses the Claude-compatible assistant envelope;
 other events add no assistant usage. `event_id` deduplicates copies/replay;
 `requestId` correlates events. SQLite is authoritative for accounting. Logs and
-queries omit credentials, bodies, raw session IDs and provider errors.
+queries omit credentials, bodies, raw session IDs and provider error messages.
+Failed calls carry the same normalized `failure` metadata in the audit JSON,
+terminal event and client error. Upstream HTTP status and embedded SSE error
+status are separate from downstream status: a failed open stream can still have
+downstream HTTP 200. HTTP trace phases use bounded names and never retain host,
+address or validation text. Unknown classifications remain unknown. Safe code
+retention and provider request IDs follow the [privacy contract](../PRIVACY.md).
