@@ -93,6 +93,8 @@ func completeRecovery(probe *routeFailure, now time.Time, handled bool, callErr,
 type availabilityLeaseContextKey struct{}
 type availabilityResultContextKey struct{}
 type availabilityResult struct{ finish func(error, bool) }
+type rateRecoveryClaimContextKey struct{}
+type rateRecoveryClaim struct{ lease *rateRecoveryLease }
 
 func (h *handler) callRouteWithRecovery(w http.ResponseWriter, r *http.Request, protocol string, route routeStep, body []byte, options adapter.CallOptions, sink adapter.StreamSink, delivered *bool) (response []byte, id string, callErr error, handled bool) {
 	pool := h.keyPools[route.provider]
@@ -100,7 +102,9 @@ func (h *handler) callRouteWithRecovery(w http.ResponseWriter, r *http.Request, 
 	if rateBlocked != nil {
 		return nil, "", rateBlocked, false
 	}
-	defer pool.finishRateRecovery(rateLease)
+	claim := &rateRecoveryClaim{lease: rateLease}
+	r = r.WithContext(context.WithValue(r.Context(), rateRecoveryClaimContextKey{}, claim))
+	defer func() { pool.finishRateRecovery(claim.lease) }()
 	if h.availability == nil {
 		return h.callRouteWithLegacyRecovery(w, r, protocol, route, body, options, sink, delivered)
 	}

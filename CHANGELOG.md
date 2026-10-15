@@ -9,6 +9,9 @@
   models and waits longer than 24 hours. Separate it from client retry cadence:
   an eligible alternative yields a two-second wait, while other known client
   waits are capped at 30 seconds with actual eligibility exposed separately.
+- Preserve late upstream Retry-After across policy reload and same-endpoint key
+  rotation, including admitted queued views and a shared single recovery probe.
+  New-request retry advice uses the current routes without replaying the reply.
 - Return native HTTP 429 cooldown errors with bounded retry guidance.
   Put mid-stream recovery guidance and correlation in
   terminal SSE events. Expose standard SDK request-ID headers and the running
