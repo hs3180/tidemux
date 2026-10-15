@@ -127,10 +127,17 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		for i, candidate := range candidates {
 			keys[i] = candidate.key
 		}
+		observations := make([]rateLimitObservation, len(candidates))
 		callbacks := adapter.KeyCandidateCallbacks{
-			Completed: func(err error) {
+			Completed: func(candidateIndex int, err error) {
+				staleRate := false
+				current := h.availability.withCurrent(h.routingEpoch, route.provider, h.providerGenerations[route.provider], func() {
+					if err == nil && pool != nil && candidateIndex >= 0 && candidateIndex < len(candidates) {
+						staleRate = !pool.rateSucceeded(candidates[candidateIndex].index, observations[candidateIndex])
+					}
+				})
 				if result, ok := r.Context().Value(availabilityResultContextKey{}).(*availabilityResult); ok {
-					result.finish(err)
+					result.finish(err, !current || staleRate)
 				}
 			},
 			Ready: func(candidateIndex int) (bool, time.Duration) {
@@ -145,7 +152,11 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				if candidateIndex < 0 || candidateIndex >= len(candidates) {
 					return false, 0
 				}
-				return pool.CandidateReadyAt(candidates[candidateIndex].index, time.Now())
+				ready, delay, observation := pool.candidateStateAt(candidates[candidateIndex].index, time.Now())
+				if ready {
+					observations[candidateIndex] = observation
+				}
+				return ready, delay
 			},
 			Failed: func(candidateIndex int, callErr *adapter.CallError) {
 				if candidateIndex < 0 || candidateIndex >= len(candidates) || callErr == nil || pool == nil {
@@ -154,14 +165,37 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				if callErr.UpstreamNotAttempted && callErr.Code == "upstream_transport_error" {
 					return
 				}
-				// Only credential-scoped failures should cool a key. Model, request,
-				// balance, and generic upstream errors affect the route response or
-				// route health, but must not make this key unavailable for unrelated
-				// models on a future downstream request.
-				if callErr.Category != adapter.ProviderErrorAuthentication && callErr.Category != adapter.ProviderErrorRateLimited && callErr.UpstreamStatus != http.StatusUnauthorized {
-					return
-				}
-				pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown, adapter.SafeFailureClass(callErr))
+				h.availability.withCurrent(h.routingEpoch, route.provider, h.providerGenerations[route.provider], func() {
+					if callErr.Category == adapter.ProviderErrorRateLimited {
+						now := time.Now()
+						delay, providerDelay, streak := pool.rateLimitedAt(candidates[candidateIndex].index, callErr.Cooldown, callErr.RetryProvided, now)
+						callErr.Cooldown = delay
+						callErr.RateLimitFailures = streak
+						if providerDelay > 0 {
+							callErr.AllKeysCooling = true
+							callErr.Cooldown = providerDelay
+						}
+						if callErr.Failure != nil {
+							callErr.Failure = callErr.Failure.Normalize()
+							callErr.Failure.CooldownScope = "key"
+							if callErr.AllKeysCooling {
+								callErr.Failure.CooldownScope = "provider"
+							}
+							callErr.Failure.CooldownSeconds = int64((callErr.Cooldown + time.Second - 1) / time.Second)
+							callErr.Failure.CooldownUntilMS = now.Add(callErr.Cooldown).UnixMilli()
+							callErr.Failure.ProviderRateLimitStreak = streak
+						}
+						return
+					}
+					// Only credential-scoped failures should cool a key. Model, request,
+					// balance, and generic upstream errors affect the route response or
+					// route health, but must not make this key unavailable for unrelated
+					// models on a future downstream request.
+					if callErr.Category != adapter.ProviderErrorAuthentication && callErr.Category != adapter.ProviderErrorRateLimited && callErr.UpstreamStatus != http.StatusUnauthorized {
+						return
+					}
+					pool.Cooldown(candidates[candidateIndex].index, callErr.Cooldown, adapter.SafeFailureClass(callErr))
+				})
 			},
 		}
 		if h.config.HealthDiagnosticsEnabled() && pool != nil {

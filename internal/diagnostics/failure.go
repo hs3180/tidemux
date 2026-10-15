@@ -16,16 +16,20 @@ var (
 // HTTPStatus is the actual upstream HTTP status; ErrorStatus is a status inside
 // an SSE error. Neither is the downstream status of an already-open stream.
 type Failure struct {
-	Source            string `json:"source"`
-	Phase             string `json:"phase"`
-	HTTPStatus        int    `json:"http_status,omitempty"`
-	ErrorStatus       int    `json:"error_status,omitempty"`
-	ProviderCode      string `json:"provider_code,omitempty"`
-	CodeState         string `json:"provider_code_state"`
-	ConfiguredCode    bool   `json:"provider_code_configured,omitempty"`
-	ProviderRequestID string `json:"provider_request_id,omitempty"`
-	Category          string `json:"category"`
-	Retryability      string `json:"retryability"`
+	Source                  string `json:"source"`
+	Phase                   string `json:"phase"`
+	HTTPStatus              int    `json:"http_status,omitempty"`
+	ErrorStatus             int    `json:"error_status,omitempty"`
+	ProviderCode            string `json:"provider_code,omitempty"`
+	CodeState               string `json:"provider_code_state"`
+	ConfiguredCode          bool   `json:"provider_code_configured,omitempty"`
+	ProviderRequestID       string `json:"provider_request_id,omitempty"`
+	Category                string `json:"category"`
+	Retryability            string `json:"retryability"`
+	CooldownScope           string `json:"cooldown_scope,omitempty"`
+	CooldownSeconds         int64  `json:"cooldown_seconds,omitempty"`
+	CooldownUntilMS         int64  `json:"cooldown_until_ms,omitempty"`
+	ProviderRateLimitStreak uint16 `json:"provider_rate_limit_streak,omitempty"`
 }
 
 // Normalize accepts numeric provider codes, standard protocol error types, and
@@ -62,6 +66,15 @@ func (f *Failure) Normalize() *Failure {
 	}
 	n.Category = enum(n.Category, "insufficient_balance", "rate_limited", "authentication", "permission_denied", "policy_denied", "invalid_request", "model_not_found", "temporarily_unavailable", "transport_error", "invalid_response", "downstream_error", "timeout", "canceled", "upstream_error")
 	n.Retryability = enum(n.Retryability, "retryable", "terminal")
+	if n.CooldownScope != "" {
+		n.CooldownScope = enum(n.CooldownScope, "key", "provider")
+	}
+	if n.CooldownSeconds < 0 || n.CooldownSeconds > 86400 {
+		n.CooldownSeconds = 0
+	}
+	if n.CooldownUntilMS < 0 || n.CooldownUntilMS > 253402300799999 {
+		n.CooldownUntilMS = 0
+	}
 	return &n
 }
 
