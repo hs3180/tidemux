@@ -28,6 +28,7 @@ type Client struct {
 	Logger                                          *slog.Logger
 	UsageLog                                        *observability.UsageLog
 	MaxOutputTokens                                 int64
+	ModelOutputLimits                               map[string]int64 // immutable per-model catalog snapshot
 	Prices                                          map[string]Price
 	ErrorCodeMappings                               []ProviderErrorMapping
 	PromptCache                                     *PromptCache
@@ -38,6 +39,19 @@ type Client struct {
 	Ledger         *ledger.Ledger
 	Gate           *limiter.ConcurrencyGate
 }
+
+// An operator's configured default retains its meaning. Discovery can reduce
+// the generic conversion default to fit a model, but never increases it.
+func (c *Client) OutputTokenDefault(model string) int64 {
+	if c.MaxOutputTokens > 0 {
+		return c.MaxOutputTokens
+	}
+	if limit := c.ModelOutputLimits[model]; limit > 0 && limit < defaultAnthropicMaxTokens {
+		return limit
+	}
+	return 0
+}
+
 type CallError struct {
 	Status int
 	Code   string
@@ -148,7 +162,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}
 	id = hex.EncodeToString(nonce)
 	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, ProviderRef: c.ProviderRef, Model: model, Status: "error", Events: []string{}}
-	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.MaxOutputTokens)
+	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.OutputTokenDefault(model))
 	if e != nil {
 		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e), UpstreamNotAttempted: true}
 	}

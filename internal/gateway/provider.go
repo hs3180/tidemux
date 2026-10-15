@@ -134,13 +134,18 @@ func resolveProvidersPartial(c Config, httpClient *http.Client) (map[string]Prov
 // A false second result means the endpoint does not expose a complete,
 // recognizable model list, so callers must not claim model availability.
 func discoverProviderModels(baseURL string, provider Provider, protocol string, httpClient *http.Client) ([]string, bool) {
+	catalog := discoverProviderCatalog(baseURL, provider, protocol, httpClient)
+	return catalog.models, catalog.known
+}
+
+func discoverProviderCatalog(baseURL string, provider Provider, protocol string, httpClient *http.Client) providerCatalog {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	body, err := fetchProviderModels(ctx, baseURL, provider.APIKey, provider.APIVersion, protocol, httpClient)
 	if err != nil || len(body) == 0 {
-		return nil, false
+		return providerCatalog{}
 	}
-	return parseProviderModels(body, protocol)
+	return parseProviderCatalog(body, protocol)
 }
 
 // ProviderEndpointInfo contains non-secret details inferred from an upstream
@@ -292,6 +297,11 @@ func detectProviderProtocol(ctx context.Context, baseURL, apiKey, apiVersion str
 }
 
 func detectProviderEndpoint(ctx context.Context, baseURL, apiKey, apiVersion string, httpClient *http.Client) (string, []string, bool, error) {
+	protocol, catalog, err := detectProviderCatalog(ctx, baseURL, apiKey, apiVersion, httpClient)
+	return protocol, catalog.models, catalog.known, err
+}
+
+func detectProviderCatalog(ctx context.Context, baseURL, apiKey, apiVersion string, httpClient *http.Client) (string, providerCatalog, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -299,8 +309,7 @@ func detectProviderEndpoint(ctx context.Context, baseURL, apiKey, apiVersion str
 	defer cancel()
 	type evidence struct {
 		protocol string
-		models   []string
-		known    bool
+		catalog  providerCatalog
 	}
 	confirmed := make(map[string]evidence)
 	for _, auth := range []string{"openai", "anthropic"} {
@@ -314,16 +323,15 @@ func detectProviderEndpoint(ctx context.Context, baseURL, apiKey, apiVersion str
 			if openAI {
 				protocol = "openai"
 			}
-			models, known := parseProviderModels(response.body, protocol)
-			confirmed[protocol] = evidence{protocol: protocol, models: models, known: known}
+			confirmed[protocol] = evidence{protocol: protocol, catalog: parseProviderCatalog(response.body, protocol)}
 		}
 	}
 	if len(confirmed) == 1 {
 		for _, result := range confirmed {
-			return result.protocol, result.models, result.known, nil
+			return result.protocol, result.catalog, nil
 		}
 	}
-	return "", nil, false, errors.New("cannot determine one provider API protocol from authenticated GET /models probes; set --protocol openai or --protocol anthropic")
+	return "", providerCatalog{}, errors.New("cannot determine one provider API protocol from authenticated GET /models probes; set --protocol openai or --protocol anthropic")
 }
 
 func isJSONMediaType(value string) bool {

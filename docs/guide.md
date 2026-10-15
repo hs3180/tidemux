@@ -97,6 +97,22 @@ in one currency. It has no session affinity. Shared-model launchers preserve
 the bare ID and omit any one candidate's context/output-limit declarations.
 Use `--shared-model-strategy off` to restore explicit ambiguity checks.
 
+`/v1/models`, `/models` and model-detail responses expose each qualified model's
+known `context_length` and `max_output_tokens`. Named providers discover these
+from their model catalog. The cache lasts for the connection: endpoint, protocol,
+API-version or credential changes fetch it again; restart to refresh an unchanged
+upstream catalog. This performs no generation requests. Kilo/Hermes launchers
+use the running gateway's per-model limits; shared bare models keep limits unset.
+
+If the catalog omits limits, or supplies invalid/conflicting values, those values
+remain unknown and startup logs warn with `model_capabilities_unknown` or
+`model_capabilities_invalid`. Nonzero `providers.REF.model_capabilities` settings
+(`context_tokens`, `max_output_tokens`) override discovered fields; a disagreement
+produces `model_capabilities_conflict`. Verify values with the provider before
+configuring them. The override applies to the entire provider, so use a dedicated
+scope for models with the same limits. Model names and overflow error text are
+not used to guess a window. A missing field still means unknown.
+
 Auto-chain failures affect later eligible requests; the dispatched request is
 not replayed. After dispatch, TideMux does not wait for a retry, retry a 429,
 switch keys, fail over to another provider, or change the requested model. It

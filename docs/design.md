@@ -29,6 +29,24 @@ probe keeps its claim until the old request ends; its old result only releases
 ownership. Local prompt-prefix estimates use the admitted generation, are bounded
 to 256 entries/16 MiB with five-minute idle expiry, and reset on restart.
 
+Named providers cache per-model token limits from their bounded, redirect-free
+`GET /models` catalog at startup. Connection changes fetch a new catalog;
+policy-only reloads reuse it, while admitted requests keep their original view.
+There is no periodic refresh or inference probe; restart to refresh an unchanged
+connection. Incomplete/unrecognized catalogs supply no limits. Accept integer
+`context_length`/`max_model_len` and `max_output_tokens`, plus Anthropic catalog
+`max_input_tokens`/`max_tokens`. Invalid or contradictory values remain unknown.
+Nonzero operator `model_capabilities` fields take priority per field; omit a
+discovered field that contradicts the configured field. Startup/applied reload
+warnings identify unknown contexts, invalid metadata and configuration conflicts
+without retaining response bodies. No limits are inferred from names or 4xx text.
+
+Both discovery protocols publish effective limits for each qualified model.
+Launchers use that running catalog for a selected provider/model and omit any
+single candidate's limits for shared bare models. A discovered output limit can
+reduce the generic 4,096-token OpenAI-to-Anthropic default, never increase it;
+explicit configured defaults and caller-supplied output budgets retain priority.
+
 ## Routing and recovery
 
 Explicit routes, ordered auto chains and shared random/price selection use the

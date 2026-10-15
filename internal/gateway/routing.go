@@ -116,7 +116,7 @@ func (h *handler) routingCandidates(model string, requireKnownScope bool, client
 		}
 		if h.config.EffectiveRouting().SharedModelStrategy != "" && len(body) > 0 && h.clients[name] != nil {
 			client := h.clients[name]
-			if _, _, _, err := adapter.PrepareRequestWithWarnings(clientProtocol, client.Protocol, body, model, client.MaxOutputTokens); err != nil {
+			if _, _, _, err := adapter.PrepareRequestWithWarnings(clientProtocol, client.Protocol, body, model, client.OutputTokenDefault(model)); err != nil {
 				continue
 			}
 		}
@@ -137,7 +137,7 @@ func (h *handler) routeErrorParameter(model, protocol string, body []byte) strin
 	}
 	for _, ref := range candidates {
 		if client := h.clients[ref]; client != nil {
-			if _, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.MaxOutputTokens); err != nil {
+			if _, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.OutputTokenDefault(model)); err != nil {
 				if field := adapter.ValidationParameter(err); field != "" {
 					return field
 				}
@@ -155,7 +155,7 @@ func (h *handler) routeRequestCompatible(provider, model, protocol string, body 
 	if len(body) == 0 {
 		return true
 	}
-	_, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.MaxOutputTokens)
+	_, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.OutputTokenDefault(model))
 	return err == nil
 }
 

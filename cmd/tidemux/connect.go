@@ -117,18 +117,18 @@ func launch(args []string, stdout, stderr *os.File) error {
 		return errors.New("invalid local gateway credential")
 	}
 	url := "http://" + c.ListenAddr
-	availableModels, err := fetchGatewayModels(ctx, url, token)
+	catalog, err := fetchGatewayCatalog(ctx, url, token)
 	if err != nil {
 		return err
 	}
-	providerRef, err := resolveClientProvider(c, *model, availableModels)
+	providerRef, err := resolveClientProvider(c, *model, catalog.models)
 	if err != nil {
 		return err
 	}
-	if len(c.Providers) > 0 {
-		c.ModelCapabilities = c.Providers[providerRef].ModelCapabilities
-	}
-	overrides, clientArgs, err := clientLaunch(name, url, *model, state, os.Getenv("KILO_CONFIG_CONTENT"), c.ModelCapabilities)
+	// Use the running view's per-model limits, including catalog discovery.
+	// A shared bare model must not inherit one candidate's exclusive limits.
+	capabilities := catalog.capabilitiesFor(providerRef, *model)
+	overrides, clientArgs, err := clientLaunch(name, url, *model, state, os.Getenv("KILO_CONFIG_CONTENT"), capabilities)
 	if err != nil {
 		return err
 	}
@@ -251,38 +251,64 @@ func checkClientEndpoint(ctx context.Context, url, token string) error {
 }
 
 func fetchGatewayModels(ctx context.Context, url, token string) ([]string, error) {
+	catalog, err := fetchGatewayCatalog(ctx, url, token)
+	return catalog.models, err
+}
+
+type gatewayModelCatalog struct {
+	models       []string
+	capabilities map[string]gateway.ModelCapabilities
+}
+
+func (c gatewayModelCatalog) capabilitiesFor(provider, model string) gateway.ModelCapabilities {
+	if provider == "" {
+		return gateway.ModelCapabilities{}
+	}
+	if !strings.HasPrefix(model, provider+"/") {
+		model = provider + "/" + model
+	}
+	return c.capabilities[model]
+}
+
+func fetchGatewayCatalog(ctx context.Context, url, token string) (gatewayModelCatalog, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url+"/v1/models", nil)
 	if err != nil {
-		return nil, errors.New("invalid gateway address")
+		return gatewayModelCatalog{}, errors.New("invalid gateway address")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	client := http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	r, err := client.Do(req)
 	if err != nil {
-		return nil, errors.New("gateway is not reachable; run tidemux serve --config with the same profile first")
+		return gatewayModelCatalog{}, errors.New("gateway is not reachable; run tidemux serve --config with the same profile first")
 	}
 	defer r.Body.Close()
 	if r.StatusCode == 401 {
-		return nil, errors.New("gateway rejected this profile's local credential; check the running serve profile")
+		return gatewayModelCatalog{}, errors.New("gateway rejected this profile's local credential; check the running serve profile")
 	}
 	if r.StatusCode != 200 {
-		return nil, errors.New("gateway model discovery unavailable; check the running TideMux build and profile")
+		return gatewayModelCatalog{}, errors.New("gateway model discovery unavailable; check the running TideMux build and profile")
 	}
 	var body struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID              string `json:"id"`
+			ContextLength   int64  `json:"context_length"`
+			MaxOutputTokens int64  `json:"max_output_tokens"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		return nil, errors.New("invalid gateway model list")
+		return gatewayModelCatalog{}, errors.New("invalid gateway model list")
 	}
-	models := make([]string, 0, len(body.Data))
+	catalog := gatewayModelCatalog{models: make([]string, 0, len(body.Data)), capabilities: map[string]gateway.ModelCapabilities{}}
 	for _, model := range body.Data {
 		if model.ID != "" {
-			models = append(models, model.ID)
+			catalog.models = append(catalog.models, model.ID)
+			caps := gateway.ModelCapabilities{ContextTokens: model.ContextLength, MaxOutputTokens: model.MaxOutputTokens}
+			if caps.Validate() == nil {
+				catalog.capabilities[model.ID] = caps
+			}
 		}
 	}
-	return models, nil
+	return catalog, nil
 }
 func overrideEnvironment(env []string, overrides map[string]string) []string {
 	result := make([]string, 0, len(env)+len(overrides))
