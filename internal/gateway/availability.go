@@ -490,7 +490,7 @@ func availabilityStatus(entry *availabilityEntry, now time.Time) AvailabilitySta
 		if entry.failures > 0 && !entry.probing {
 			seconds := int64(0)
 			if entry.retryAt.After(now) {
-				seconds = int64((entry.retryAt.Sub(now) + time.Second - 1) / time.Second)
+				seconds = retryDeadlineSeconds(entry.retryAt, now)
 			}
 			status.RetryAfterSeconds = &seconds
 		}
@@ -520,7 +520,7 @@ func (h *handler) availabilityReport() AvailabilityReport {
 			}
 			if earliest.After(provider.RetryAt) {
 				provider.State, provider.Reason, provider.RetryAt = "cooling", "keys_cooling_down", earliest
-				seconds := int64((earliest.Sub(now) + time.Second - 1) / time.Second)
+				seconds := retryDeadlineSeconds(earliest, now)
 				provider.RetryAfterSeconds = &seconds
 			}
 		}
@@ -535,8 +535,19 @@ func (h *handler) availabilityReport() AvailabilityReport {
 			if !pool.RecoveryInProgress {
 				seconds := int64(0)
 				if pool.RateLimitRetryAt.After(now) {
-					seconds = int64((pool.RateLimitRetryAt.Sub(now) + time.Second - 1) / time.Second)
+					seconds = retryDeadlineSeconds(pool.RateLimitRetryAt, now)
 				}
+				provider.RetryAfterSeconds = &seconds
+			}
+		}
+		if pool := provider.KeyPool; pool != nil && !pool.ProviderRetryAt.IsZero() && (!pool.ProviderRetryAt.Before(provider.RetryAt) || provider.State == "unknown" || provider.State == "available" || pool.RecoveryInProgress) {
+			provider.State, provider.Reason, provider.RetryAt = "cooling", "upstream_retry_after", pool.ProviderRetryAt
+			provider.ProbeDue = !now.Before(pool.ProviderRetryAt) && !pool.RecoveryInProgress
+			provider.RetryAfterSeconds = nil
+			if pool.RecoveryInProgress {
+				provider.State = "probing"
+			} else {
+				seconds := retryDeadlineSeconds(pool.ProviderRetryAt, now)
 				provider.RetryAfterSeconds = &seconds
 			}
 		}

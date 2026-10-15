@@ -176,13 +176,13 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 				if scenario == "429" || scenario == "429-no-retry-after" {
 					want = 429
 					got := out.Header().Get("Retry-After")
-					if scenario == "429" && got != "0" {
-						t.Errorf("Retry-After = %q, want original upstream value 0", got)
+					if scenario == "429" && got != "1" {
+						t.Errorf("Retry-After = %q, want the gateway key cooldown, not the upstream zero", got)
 					}
 					if scenario == "429-no-retry-after" {
 						wait, err := time.ParseDuration(got + "s")
-						if err != nil || wait < 30*time.Second || wait > 36*time.Second {
-							t.Errorf("Retry-After = %q, want the real gateway cooldown", got)
+						if err != nil || wait != 30*time.Second {
+							t.Errorf("Retry-After = %q, want the bounded client wait", got)
 						}
 					}
 					if calls != 1 {

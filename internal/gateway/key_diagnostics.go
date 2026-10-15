@@ -71,6 +71,7 @@ type KeyPoolStatus struct {
 	RecentTTLSeconds      int           `json:"recent_ttl_seconds"`
 	ConsecutiveRateLimits uint16        `json:"consecutive_rate_limits"`
 	RateLimitRetryAt      time.Time     `json:"rate_limit_retry_at,omitzero"`
+	ProviderRetryAt       time.Time     `json:"provider_retry_at,omitzero"`
 	LastRateLimitAt       time.Time     `json:"last_rate_limit_at,omitzero"`
 	RecoveryInProgress    bool          `json:"recovery_in_progress"`
 }
@@ -179,11 +180,16 @@ func (p *providerKeyPool) diagnosticStatus(now time.Time) *KeyPoolStatus {
 		Keys: []KeyStatus{}, RecentFailovers: append([]KeyFailover{}, p.decisions...), RecentLimit: keyDecisionLimit, RecentTTLSeconds: int(keyDecisionTTL / time.Second)}
 	status.ConsecutiveRateLimits = p.rateStreak
 	status.RateLimitRetryAt, status.LastRateLimitAt, status.RecoveryInProgress = p.rateProviderUntil, p.lastRateLimit, p.rateProbe != nil
+	status.ProviderRetryAt = p.providerRetryUntil
 	for i, label := range p.labels {
 		key := KeyStatus{Label: label, State: "eligible", LastFailureClass: p.failureClasses[i], LastFailureAt: p.failureTimes[i]}
 		key.ConsecutiveRateLimits = p.rateFailures[i]
-		if p.cooldowns[i].After(now) {
-			key.State, key.CooldownUntil = "cooling", p.cooldowns[i]
+		until := p.cooldowns[i]
+		if p.providerRetryUntil.After(until) {
+			until = p.providerRetryUntil
+		}
+		if until.After(now) {
+			key.State, key.CooldownUntil = "cooling", until
 			status.Cooling++
 		} else {
 			status.Eligible++

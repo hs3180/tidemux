@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -226,6 +227,12 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 		pool := newProviderKeyPool(p.ResolvedAPIKeys())
 		if sameConnection {
 			pool = previous.keyPools[name]
+		} else if before, exists := previous.providers[name]; exists && before.Protocol == p.Protocol && strings.TrimRight(before.BaseURL, "/") == strings.TrimRight(p.BaseURL, "/") {
+			// New credentials must not bypass an already observed server pause
+			// for the same provider endpoint. Other key state starts afresh.
+			if status := previous.keyPools[name].diagnosticStatus(time.Now()); status != nil {
+				pool.holdProviderUntil(status.ProviderRetryAt)
+			}
 		}
 		view.keyPools[name] = pool
 		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, UsageLog: root.usageLog, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, PromptCache: root.cache, CacheNamespace: providerCacheNamespace(view.providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, HTTP: client, Ledger: root.ledger, Gate: root.gate}

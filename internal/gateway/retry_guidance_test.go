@@ -131,51 +131,61 @@ func TestCooldownGuidanceKeepsUnknownProbeTimeAndExplicitChoice(t *testing.T) {
 }
 
 func TestUndispatchedCooldownRebindHasOneAudit(t *testing.T) {
-	f := newRoutingAvailabilityFixture(t, false, func(c *Config) {
-		provider := c.Providers["a"]
-		provider.APIKeys = []string{provider.APIKey, provider.APIKey + "-second"}
-		c.Providers["a"] = provider
-	})
-	h := f.h
-	if _, err := h.gate.Acquire(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var once sync.Once
-	release := func() { once.Do(h.gate.Release) }
-	defer release()
-	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		done <- affinityGatewayRequest(h, "openai", "session", `{"model":"shared-model","messages":[{"role":"user","content":"fixture"}]}`)
-	}()
-	pool := h.keyPools["a"]
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		pool.mu.Lock()
-		selected := pool.next == 1
-		pool.mu.Unlock()
-		if selected {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("request did not select a before the held dispatch gate")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	// Selection happened while the gate was held. Cool both selected keys
-	// before allowing the adapter's post-queue readiness check to run.
-	pool.CooldownAll(time.Minute)
-	release()
-	select {
-	case w := <-done:
-		if w.Code != 200 {
-			t.Fatalf("undispatched request did not reselect: %d", w.Code)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("re-selection did not finish")
-	}
-	posts := f.posted()
-	rows, err := h.ledger.Recent(context.Background(), 10)
-	if len(posts) != 1 || posts[0].provider != "b" || err != nil || len(rows) != 1 || rows[0].ProviderRef != "b" || rows[0].Status != "ok" {
-		t.Fatalf("undispatched route added work or a duplicate audit: posts=%+v rows=%+v err=%v", posts, rows, err)
+	for _, pause := range []string{"key_cooldowns", "upstream_retry_after"} {
+		t.Run(pause, func(t *testing.T) {
+
+			f := newRoutingAvailabilityFixture(t, false, func(c *Config) {
+				provider := c.Providers["a"]
+				provider.APIKeys = []string{provider.APIKey, provider.APIKey + "-second"}
+				c.Providers["a"] = provider
+			})
+			h := f.h
+			if _, err := h.gate.Acquire(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var once sync.Once
+			release := func() { once.Do(h.gate.Release) }
+			defer release()
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				done <- affinityGatewayRequest(h, "openai", "session", `{"model":"shared-model","messages":[{"role":"user","content":"fixture"}]}`)
+			}()
+			pool := h.keyPools["a"]
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				pool.mu.Lock()
+				selected := pool.next == 1
+				pool.mu.Unlock()
+				if selected {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("request did not select a before the held dispatch gate")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			// Selection happened while the gate was held. Cool both selected keys
+			// before allowing the adapter's post-queue readiness check to run.
+			if pause == "upstream_retry_after" {
+				pool.holdProviderUntil(time.Now().Add(time.Hour))
+			} else {
+				pool.CooldownAll(time.Minute)
+			}
+			release()
+			select {
+			case w := <-done:
+				if w.Code != 200 {
+					t.Fatalf("undispatched request did not reselect: %d", w.Code)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("re-selection did not finish")
+			}
+			posts := f.posted()
+			rows, err := h.ledger.Recent(context.Background(), 10)
+			if len(posts) != 1 || posts[0].provider != "b" || err != nil || len(rows) != 1 || rows[0].ProviderRef != "b" || rows[0].Status != "ok" {
+				t.Fatalf("undispatched route added work or a duplicate audit: posts=%+v rows=%+v err=%v", posts, rows, err)
+			}
+
+		})
 	}
 }

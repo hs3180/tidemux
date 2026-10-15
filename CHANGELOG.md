@@ -5,8 +5,12 @@
 - Preserve safe upstream failure codes, statuses, phases and provider request
   IDs across client errors, JSONL and SQLite audit JSON. Unknown causes stay
   unknown; provider messages, credentials and raw sessions remain excluded.
-- Return native HTTP 429 cooldown errors with real Retry-After deadlines or
-  bounded backoff advice. Put mid-stream recovery guidance and correlation in
+- Honor upstream Retry-After as a provider-wide pause, including all keys and
+  models and waits longer than 24 hours. Separate it from client retry cadence:
+  an eligible alternative yields a two-second wait, while other known client
+  waits are capped at 30 seconds with actual eligibility exposed separately.
+- Return native HTTP 429 cooldown errors with bounded retry guidance.
+  Put mid-stream recovery guidance and correlation in
   terminal SSE events. Expose standard SDK request-ID headers and the running
   TideMux version, plus health scope, waits and alternatives in availability.
 - Route new client retry requests away from failed streams, upstream 5xx and
