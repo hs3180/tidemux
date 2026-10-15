@@ -9,6 +9,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 import json
 import math
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -97,6 +98,8 @@ def main():
                         raise RuntimeError("Explicit target did not explain cooldown")
                     detail = error["error"]
                     advice = detail.get("retry", {})
+                    if headers.get("request-id") != error.get("request_id") or headers.get("x-request-id") != error.get("request_id"):
+                        raise RuntimeError("SDK-standard correlation headers missing")
                     if (detail["type"] != "rate_limit_error" or advice.get("after_seconds") != int(headers["Retry-After"])
                             or advice.get("alternatives") != ["b/one"] or advice.get("reselect_provider")
                             or not advice.get("alternatives_require_model_change") or advice.get("max_attempts") != 3
@@ -120,12 +123,14 @@ def main():
                     cli = subprocess.run([str(binary), "gateway", "availability", "--json", "--config", str(gateway["config_file"])],
                                          env=gateway["env"], cwd=gateway["root"], capture_output=True, text=True, timeout=10)
                     def stable_states(snapshot):
-                        observed = datetime.fromisoformat(snapshot["timestamp"].replace("Z", "+00:00"))
+                        def parse_time(value):
+                            return datetime.fromisoformat(re.sub(r"(\.\d{6})\d+", r"\1", value).replace("Z", "+00:00"))
+                        observed = parse_time(snapshot["timestamp"])
                         for item in snapshot["providers"]:
                             for target in [item, *item["models"]]:
                                 remaining = target.pop("retry_after_seconds", None)
                                 if remaining is not None:
-                                    deadline = datetime.fromisoformat(target["retry_at"].replace("Z", "+00:00"))
+                                    deadline = parse_time(target["retry_at"])
                                     expected = math.ceil(max(0, (deadline-observed).total_seconds()))
                                     if abs(remaining-expected) > 1:
                                         raise RuntimeError("Availability countdown does not match its snapshot")

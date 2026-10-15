@@ -29,6 +29,9 @@ func decodeRetryError(t *testing.T, w *httptest.ResponseRecorder) retryErrorEnve
 		t.Fatal(err)
 	}
 	id := w.Header().Get("X-TideMux-Request-ID")
+	if w.Header().Get("request-id") != id || w.Header().Get("x-request-id") != id {
+		t.Fatal("standard SDK request ID headers disagree with the gateway ID")
+	}
 	if w.Code != 429 || payload.Error.Type != "rate_limit_error" || id == "" || payload.RequestID != id || payload.Error.RequestID != id || !strings.Contains(payload.Error.Message, id) || payload.Error.Retry.MaxAttempts != 3 {
 		t.Fatalf("cooldown lost native type, bounded guidance or visible correlation: status=%d", w.Code)
 	}

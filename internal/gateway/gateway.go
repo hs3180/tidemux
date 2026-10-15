@@ -638,7 +638,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	var delivered bool
 	send := func(id string, frame []byte) error {
 		if !delivered {
-			w.Header().Set("X-TideMux-Request-ID", id)
+			setRequestIDHeaders(w, id)
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.WriteHeader(http.StatusOK)
@@ -719,7 +719,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		setRetryAfterHeader(w, upstreamErr)
 		if !delivered {
 			if id != "" {
-				w.Header().Set("X-TideMux-Request-ID", id)
+				setRequestIDHeaders(w, id)
 			}
 			h.failUpstream(w, r, upstreamErr, protocol)
 			return
@@ -737,7 +737,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		return
 	}
 	if id != "" {
-		w.Header().Set("X-TideMux-Request-ID", id)
+		setRequestIDHeaders(w, id)
 	}
 	if callErr != nil {
 		var upstreamErr *adapter.CallError
@@ -790,7 +790,7 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		return
 	}
 	id := hex.EncodeToString(nonce)
-	w.Header().Set("X-TideMux-Request-ID", id)
+	setRequestIDHeaders(w, id)
 	details, _ := r.Context().Value(requestLogContextKey{}).(requestLogContext)
 	method := r.Method
 	if method != "GET" && method != "POST" {

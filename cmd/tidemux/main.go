@@ -217,12 +217,12 @@ func serveWithSignalsUsingConfig(config gateway.Config, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
-	config.ServiceVersion = version
 	listener, server, closeGateway, err := gateway.OpenWithLogger(config, nil, logger)
 	if err != nil {
 		stage, code := gateway.StartupFailure(err)
 		return logStartupFailure(logger, stdout, stage, code, err)
 	}
+	gateway.SetServiceVersion(server.Handler, version)
 	if path != "" {
 		stopReload := gateway.WatchConfig(server.Handler, path, config, gateway.MacOSKeychain{}, nil)
 		previousClose := closeGateway

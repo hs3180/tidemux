@@ -210,6 +210,12 @@ func addRequestID(payload map[string]any, id string) {
 	}
 }
 
+func setRequestIDHeaders(w http.ResponseWriter, id string) {
+	w.Header().Set("X-TideMux-Request-ID", id)
+	w.Header().Set("request-id", id)
+	w.Header().Set("x-request-id", id)
+}
+
 func addRetryAdvice(detail map[string]any, advice *retryAdvice) {
 	detail["retry"] = advice
 	detail["message"] = fmt.Sprintf("%s. %s", detail["message"], retryMessage(advice))

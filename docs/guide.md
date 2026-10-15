@@ -149,7 +149,9 @@ error message for retry guidance, the response header and the corresponding
 audit/log. Use the new request to recover; the partial reply can be incomplete.
 [SDK HTTP retries and mid-stream errors have different handling](https://platform.claude.com/docs/en/api/errors),
 so a client may need an explicit retry even when a compatible provider is ready.
-Responses include `X-TideMux-Version` for the running binary's version.
+SDK-standard `request-id` and `x-request-id` headers carry the same gateway ID
+as `X-TideMux-Request-ID`. Responses include `X-TideMux-Version` for the running
+binary's version.
 
 Availability JSON includes failure `scope`, optional `retry_after_seconds` and
 up to 16 alternatives for an observed model. Omitted wait means no exact time
