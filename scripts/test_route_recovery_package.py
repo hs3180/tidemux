@@ -121,7 +121,7 @@ def main():
                     if exhausted:
                         status, result, _ = request(gateway, protocol, mode, "-exhausted")
                         code = "auto_chain_exhausted" if mode == "auto" else "provider_keys_cooling_down"
-                        if status != 503 or code not in json.dumps(result) or upstream.posts != before:
+                        if status != 429 or code not in json.dumps(result) or upstream.posts != before:
                             raise RuntimeError("exhausted routing sent unnecessary upstream requests")
                     scenarios.append((gateway, protocol, mode, exhausted, failed_provider, healthy_provider))
         # Every scenario must pass its actual cooldown, without a config reload,

@@ -179,8 +179,11 @@ func TestBothProtocolsAndFailureAudit(t *testing.T) {
 					if scenario == "429" && got != "0" {
 						t.Errorf("Retry-After = %q, want original upstream value 0", got)
 					}
-					if scenario == "429-no-retry-after" && got != "" {
-						t.Errorf("Retry-After = %q, want absent when upstream omitted it", got)
+					if scenario == "429-no-retry-after" {
+						wait, err := time.ParseDuration(got + "s")
+						if err != nil || wait < 30*time.Second || wait > 36*time.Second {
+							t.Errorf("Retry-After = %q, want the real gateway cooldown", got)
+						}
 					}
 					if calls != 1 {
 						t.Errorf("429 upstream attempts = %d, want 1", calls)

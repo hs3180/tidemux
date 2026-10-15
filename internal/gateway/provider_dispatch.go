@@ -129,6 +129,7 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		}
 		observations := make([]rateLimitObservation, len(candidates))
 		callbacks := adapter.KeyCandidateCallbacks{
+			YieldUnavailable: route.dynamic || route.sessionKey != nil || route.autoChainIndex != nil,
 			Completed: func(candidateIndex int, err error) {
 				staleRate := false
 				current := h.availability.withCurrent(h.routingEpoch, route.provider, h.providerGenerations[route.provider], func() {
@@ -175,6 +176,7 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 							callErr.AllKeysCooling = true
 							callErr.Cooldown = providerDelay
 						}
+						callErr.CooldownUntil = now.Add(callErr.Cooldown)
 						if callErr.Failure != nil {
 							callErr.Failure = callErr.Failure.Normalize()
 							callErr.Failure.CooldownScope = "key"

@@ -149,7 +149,7 @@ def main():
                 if status != 400:
                     raise RuntimeError("provider-qualified auto was accepted")
                 status, result = post(url, SESSION, model="a/model-one")
-                if status != 503 or "model_not_found_cooling_down" not in result:
+                if status != 429 or "model_not_found_cooling_down" not in result:
                     raise RuntimeError("explicit failed target did not retain its cooldown scope")
                 with upstream.lock:
                     first_run = list(upstream.posts)

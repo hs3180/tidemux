@@ -87,6 +87,28 @@ alternative under the same model/capability and admission policies. A healthy
 binding remains stable. An explicitly qualified provider stays explicit; without
 an eligible alternative, cooldown is reported rather than bypassed.
 
+Local temporary cooldowns use HTTP 429 and native rate-limit error types.
+The retry deadline is the maximum independent gate for each route, then the
+minimum across compatible routes. An active probe makes its completion time
+unknown; it never supplies a synthetic countdown. Preserve an upstream's valid
+Retry-After; otherwise a real local deadline can supply rounded-up seconds.
+Errors distinguish the wait source, bounded client retry advice and eligible
+model/protocol/health alternatives. A new request rechecks admission and budgets.
+After SSE headers are committed, guidance and request IDs belong in the terminal
+error event. Client SDKs may ignore custom retry fields or replace the message.
+
+If a route becomes unavailable while queued, the adapter can yield before
+initiating HTTP. The gateway releases that route's resources and reselects within
+the configured-provider bound. This internal step emits no separate audit or ID;
+the final attempt keeps the original start and accumulated queue time. An
+exhausted request has one local diagnostic; queue cancellation keeps its terminal
+adapter audit. A request that may have dispatched upstream never takes this path.
+
+Availability shows provider/model scope, remaining known wait and model-health
+alternatives; request-specific features and admission remain request checks.
+The embedding binary supplies X-TideMux-Version independently of saved config;
+compatible reloads retain that process version.
+
 ## Accounting and observability
 
 Each downstream generation request has one terminal adapter audit and at most

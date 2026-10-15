@@ -25,7 +25,7 @@ type routingAvailabilityFixture struct {
 	calls    []routingAvailabilityDispatch
 }
 
-func newRoutingAvailabilityFixture(t *testing.T, auto bool) *routingAvailabilityFixture {
+func newRoutingAvailabilityFixture(t *testing.T, auto bool, configure ...func(*Config)) *routingAvailabilityFixture {
 	t.Helper()
 	f := &routingAvailabilityFixture{}
 	f.upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +60,9 @@ func newRoutingAvailabilityFixture(t *testing.T, auto bool) *routingAvailability
 		f.config.AutoChain = []AutoChainEntry{{Provider: "a", Model: "one"}, {Provider: "b", Model: "two"}}
 	} else {
 		configureRouting(&f.config, RoutingConfig{SharedModelStrategy: "random"})
+	}
+	for _, apply := range configure {
+		apply(&f.config)
 	}
 	h, closeHandler, err := NewHandler(f.config, f.upstream.Client())
 	if err != nil {
@@ -118,8 +121,12 @@ func TestAutoChainRebindsActiveSessionBeforeDispatch(t *testing.T) {
 			for _, id := range []string{session, "no-available-route-session"} {
 				started := time.Now()
 				w := affinityGatewayRequest(f.h, "openai", id, `{"model":"auto","messages":[{"role":"user","content":"no available route fixture"}]}`)
-				if w.Code != http.StatusServiceUnavailable {
-					t.Errorf("no available candidate: status=%d, want 503", w.Code)
+				wantStatus := http.StatusServiceUnavailable
+				if reason == "all_keys_cooling_down" {
+					wantStatus = http.StatusTooManyRequests
+				}
+				if w.Code != wantStatus {
+					t.Errorf("no available candidate: status=%d, want %d", w.Code, wantStatus)
 				}
 				if elapsed := time.Since(started); elapsed > 2*time.Second {
 					t.Errorf("no available candidate was not rejected promptly: %s", elapsed)

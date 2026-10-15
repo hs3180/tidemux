@@ -20,7 +20,7 @@ func TestGatewayAvailabilityAuthenticatedReadOnly(t *testing.T) {
 		if r.URL.Path != "/tidemux/availability-status" || r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer "+secret {
 			t.Error("unexpected availability request")
 		}
-		io.WriteString(w, `{"timestamp":"2026-10-10T00:00:00Z","recovery_mode":"request_driven","state_limit":4096,"idle_ttl_seconds":86400,"providers":[{"ref":"a","generation":2,"state":"unknown","models":[{"model":"one","state":"cooling","reason":"model_not_found","retry_at":"2026-10-10T00:00:36Z","probe_due":true}]}]}`)
+		io.WriteString(w, `{"timestamp":"2026-10-10T00:00:00Z","recovery_mode":"request_driven","state_limit":4096,"idle_ttl_seconds":86400,"alternatives_scope":"model_health","providers":[{"ref":"a","generation":2,"state":"probing","scope":"provider","models":[{"model":"one","state":"cooling","scope":"model","reason":"model_not_found","retry_at":"2026-10-10T00:00:36Z","retry_after_seconds":0,"alternatives":["b/one"],"probe_due":true}]}]}`)
 	}))
 	defer server.Close()
 	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
@@ -43,6 +43,13 @@ func TestGatewayAvailabilityAuthenticatedReadOnly(t *testing.T) {
 		output, _ := os.ReadFile(out.Name())
 		if !strings.Contains(string(output), "model_not_found") || strings.Contains(string(output), secret) || strings.Contains(string(output), path) {
 			t.Fatal("unsafe or incomplete output", string(output))
+		}
+		if len(mode) == 0 {
+			for _, want := range []string{"scope=model", "wait=0s", "wait=unknown", "alternatives: b/one"} {
+				if !strings.Contains(string(output), want) {
+					t.Fatalf("missing %s in availability output", want)
+				}
+			}
 		}
 	}
 	after, _ := os.ReadFile(path)
