@@ -299,7 +299,9 @@ Same-event replay deduplicates within the same index. Earlier records without
 IDs need a separate policy. Deployment and retention follow the official
 [Filebeat](https://www.elastic.co/docs/reference/beats/filebeat/filebeat-input-filestream)
 and [Logstash](https://www.elastic.co/docs/reference/logstash/plugins/plugins-outputs-elasticsearch)
-references. TideMux does not ship logs itself.
+references. These examples are deployment guidance; TideMux CI does not certify
+specific collector/Elasticsearch version combinations. TideMux does not ship
+logs itself.
 
 ## Compatibility
 
