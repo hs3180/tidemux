@@ -539,7 +539,7 @@ def main():
     parser.add_argument("--client", action="append", choices=["claude", "kilo", "hermes"])
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--capacity-scope", choices=["gateway", "provider", "both"], default="both",
-                        help="both is the 0.3.3 release gate; gateway checks the older baseline")
+                        help="both capacity scopes are required for release acceptance")
     args = parser.parse_args()
     binary = args.binary.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):

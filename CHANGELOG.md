@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.4 — 2026-10-15
+
+- Preserve safe upstream failure codes, statuses, phases and provider request
+  IDs across client errors, JSONL and SQLite audit JSON. Unknown causes stay
+  unknown; provider messages, credentials and raw sessions remain excluded.
+- Return native HTTP 429 cooldown errors with real Retry-After deadlines or
+  bounded backoff advice. Put mid-stream recovery guidance and correlation in
+  terminal SSE events. Expose standard SDK request-ID headers and the running
+  TideMux version, plus health scope, waits and alternatives in availability.
+- Route new client retry requests away from failed streams, upstream 5xx and
+  timeouts while keeping healthy bindings and explicit provider choices. An
+  undispatched queued route can reselect without duplicate audits or lost timing.
+- Back off rate limits without an upstream wait from 30 seconds to 30 minutes
+  with jitter. The 11th consecutive failure silences the affected key for 24
+  hours; apply provider silence when no key remains ready, then allow one real
+  recovery probe. Operational state works with telemetry disabled.
+- Make clients own retries: one upstream generation dispatch per downstream
+  request, with no gateway replay after dispatch. Remove the old
+  routing.billing_exhaustion_failover setting; delete it before upgrading,
+  including when its value is false.
+- Allow max_in_flight=0 (or omitted) to disable the global request concurrency
+  gate. Existing positive values and logical-session ceilings keep their meaning;
+  changing the process-wide gate still needs a restart.
+
+Known limitations: [GLM native search/continuation #157](https://github.com/hs3180/tidemux/issues/157)
+retains provider-owned blocks and reported usage. [DeepSeek inference stalls #158](https://github.com/hs3180/tidemux/issues/158)
+remain under investigation; new phase diagnostics and later-request avoidance
+provide evidence and recovery without increasing the timeout.
+
 ## 0.3.3 — 2026-10-12
 
 - Share bounded provider/model availability across explicit, shared-model and
