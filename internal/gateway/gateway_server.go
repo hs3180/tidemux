@@ -16,6 +16,12 @@ import (
 	"github.com/hs3180/tidemux/internal/observability"
 )
 
+// SetServiceVersion sets process metadata before serving or watching config.
+// The value belongs to the shared runtime, outside persisted/reloadable settings.
+func SetServiceVersion(h http.Handler, version string) {
+	h.(*handler).serviceVersion = version
+}
+
 // NewHandler resolves providers and initializes the gateway's shared resources.
 func NewHandler(c Config, httpClient *http.Client) (http.Handler, func() error, error) {
 	return NewHandlerWithLogger(c, httpClient, nil)

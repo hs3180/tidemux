@@ -350,6 +350,12 @@ func TestSharedRoutingFiltersProtocolFeaturesBeyondServerTools(t *testing.T) {
 	if route.provider != "b" {
 		t.Fatalf("unrepresentable document selected the OpenAI provider: %+v", route)
 	}
+	h.config.AutoChain = []AutoChainEntry{{Provider: "a", Model: "shared-model"}, {Provider: "b", Model: "shared-model"}}
+	h.autoChain = newAutoChainState(h.config.AutoChain, 0)
+	autoBody := []byte(strings.Replace(string(body), `"model":"shared-model"`, `"model":"auto"`, 1))
+	if routes, code, _ := h.resolveRoutes("auto", "anthropic", autoBody, h.callerSessionKey("auto", "anthropic", "session")); code != "" || len(routes) != 1 || routes[0].provider != "b" {
+		t.Fatal("auto recovery selected a provider that cannot represent the document")
+	}
 	delete(h.providers, "b")
 	if _, code, status := h.resolveRoutes("shared-model", "anthropic", body, h.sharedSessionKey("shared-model", "anthropic", "session")); code != "unsupported_request_feature" || status != http.StatusBadRequest {
 		t.Fatalf("no compatible route returned code=%s status=%d", code, status)

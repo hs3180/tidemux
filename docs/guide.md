@@ -129,6 +129,35 @@ inference evidence; `available` records success; `cooling` remembers a failure;
 `probing` has one real request testing recovery. `retry_at` is eligibility to
 try again. Without traffic, recovery stays unconfirmed.
 
+Local cooldowns return HTTP 429 with the protocol's `rate_limit_error`. When
+the gateway knows a deadline, `Retry-After` is the rounded-up wait for the
+earliest compatible route. An active recovery probe has no known finish time;
+its response recommends exponential backoff with jitter, up to 30 seconds and
+three attempts. A valid upstream `Retry-After` is preserved unchanged.
+
+A new shared-model or `auto` request can select another healthy provider.
+An explicit `PROVIDER/MODEL` keeps that choice; the error may list qualified
+alternatives that require changing the model. Alternatives describe model,
+protocol and health; features, session capacity and budgets are checked again
+when a request is sent. `error.retry` supplies `strategy`, optional
+`after_seconds`, `wait_source`, `reselect_provider` and these alternatives.
+Clients choose their own retry policy.
+
+If a stream fails after partial output, its terminal SSE error carries the
+same recovery guidance and a gateway `request_id`. The ID also appears in the
+error message for retry guidance, the response header and the corresponding
+audit/log. Use the new request to recover; the partial reply can be incomplete.
+[SDK HTTP retries and mid-stream errors have different handling](https://platform.claude.com/docs/en/api/errors),
+so a client may need an explicit retry even when a compatible provider is ready.
+SDK-standard `request-id` and `x-request-id` headers carry the same gateway ID
+as `X-TideMux-Request-ID`. Responses include `X-TideMux-Version` for the running
+binary's version.
+
+Availability JSON includes failure `scope`, optional `retry_after_seconds` and
+up to 16 alternatives for an observed model. Omitted wait means no exact time
+is known; a zero wait means a real recovery probe can be attempted now. The CLI
+shows the wait, reason and model-health alternatives without sending inference.
+
 Key labels are opaque. `requests` counts adapter calls using a key;
 `http_attempts` counts actual HTTP attempts. Each downstream generation request
 initiates at most one such attempt.
@@ -137,6 +166,17 @@ Skipped keys and local rejections add no attempts. These counters are not billin
 Compatible reloads preserve them; credential/connection changes or restart reset
 the pool. Toggling diagnostics clears counters/history while preserving routing
 and cooldowns. See [recovery bounds](design.md#routing-and-recovery).
+
+`consecutive_rate_limits` on each key and pool is operational health state and
+remains visible with diagnostics disabled. The pool also reports
+`rate_limit_retry_at`, `last_rate_limit_at` and `recovery_in_progress` when relevant.
+One limited key leaves other ready keys usable. If all keys are cooling, later
+requests wait for the earliest eligible key; only one request tests recovery.
+Without a valid upstream wait, consecutive 429s back off from 30 seconds to
+30 minutes with jitter. The 11th failure silences the affected key for 24 hours;
+if the provider streak exceeds ten with no ready keys, the provider is silenced
+for 24 hours. Success resets the applicable streaks. This is local failure
+recovery, not a measurement of remaining subscription quota.
 
 ## Billing and budgets
 
@@ -177,8 +217,16 @@ Runtime stderr and terminal-request files use the same schema-2 JSONL records.
 Session files live at `logs/projects/tidemux/*.jsonl` beside the ledger.
 Each event has `timestamp`, `event`, `service` (name/version/process instance)
 and a unique persisted `event_id`. Requests also have `requestId`, outcome,
-model and known usage. Bodies, credentials, raw sessions and provider errors
+model and known usage. Bodies, credentials, raw sessions and provider error messages
 are omitted; [privacy](../PRIVACY.md) covers retained metadata.
+
+For a failed call, compare the request ID in the response header or terminal SSE
+error with `requestId` in the log. `failure` records upstream HTTP/embedded error
+status, source/phase, a safe provider code or its redaction state, provider request
+ID when valid, category and retryability. An HTTP 200 stream can end with an error;
+use `outcome` and the terminal error. `unknown` means the cause was not established,
+not a confirmed quota, policy or context-limit failure. Preserve the provider
+request ID when asking that provider to investigate; review metadata before sharing.
 
 Point an independently installed [ccusage](https://github.com/ccusage/ccusage)
 at the `logs/` directory:

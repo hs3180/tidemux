@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/diagnostics"
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
@@ -61,6 +62,7 @@ type handlerRuntime struct {
 	gate                   *limiter.ConcurrencyGate
 	cache                  *adapter.PromptCache
 	nextProviderGeneration uint64 // config preparation is serialized by the watcher
+	serviceVersion         string
 }
 
 type requestLogContextKey struct{}
@@ -211,6 +213,18 @@ func containsModel(models []string, model string) bool {
 }
 
 func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string, param ...string) {
+	h.failWithFailure(w, status, code, protocol, nil, param...)
+}
+
+func (h *handler) failWithFailure(w http.ResponseWriter, status int, code, protocol string, failure *diagnostics.Failure, param ...string) {
+	payload := h.errorPayload(status, code, protocol, failure, param...)
+	addRequestID(payload, w.Header().Get("X-TideMux-Request-ID"))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (h *handler) errorPayload(status int, code, protocol string, failure *diagnostics.Failure, param ...string) map[string]any {
 	kind := "api_error"
 	switch status {
 	case 400, 413:
@@ -222,8 +236,6 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 	case 429:
 		kind = "rate_limit_error"
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
 	field := ""
 	if len(param) > 0 {
 		field = param[0]
@@ -233,6 +245,7 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 		message = "unsupported_request_feature: " + field + " cannot be represented by the configured upstream protocol"
 	}
 	detail := map[string]any{"type": kind, "message": message, "code": code}
+	addFailureDetails(detail, failure)
 	switch code {
 	case "request_too_large":
 		limit := h.config.Limits.Effective().RequestBytes
@@ -256,19 +269,20 @@ func (h *handler) fail(w http.ResponseWriter, status int, code, protocol string,
 		if field != "" {
 			detail["param"] = field
 		}
-		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": detail})
+		return map[string]any{"type": "error", "error": detail}
 	} else {
 		detail["param"] = nil
 		if field != "" {
 			detail["param"] = field
 		}
-		json.NewEncoder(w).Encode(map[string]any{"error": detail})
+		return map[string]any{"error": detail}
 	}
 }
 
 func mappedUpstreamErrorPayload(callErr *adapter.CallError, protocol string) map[string]any {
 	_, code, message, kind := callErr.Category.ClientError(protocol)
 	detail := map[string]any{"type": kind, "message": message, "code": code}
+	addFailureDetails(detail, callErr.Failure)
 	if callErr.ProviderCode != "" {
 		detail["provider_code"] = callErr.ProviderCode
 	}
@@ -282,21 +296,31 @@ func mappedUpstreamErrorPayload(callErr *adapter.CallError, protocol string) map
 	return payload
 }
 
-func (h *handler) failUpstream(w http.ResponseWriter, callErr *adapter.CallError, protocol string) {
-	if callErr.Category == "" {
-		h.fail(w, callErr.Status, callErr.Code, protocol, callErr.Param)
-		return
-	}
+func (h *handler) failUpstream(w http.ResponseWriter, r *http.Request, callErr *adapter.CallError, protocol string) {
 	status := callErr.Status
 	if status < 400 || status > 599 {
 		status, _, _, _ = callErr.Category.ClientError(protocol)
 	}
+	if isAvailabilityError(callErr.Code) {
+		status = http.StatusTooManyRequests
+	}
+	payload := h.upstreamErrorPayload(w, r, callErr, protocol)
+	addRequestID(payload, w.Header().Get("X-TideMux-Request-ID"))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(mappedUpstreamErrorPayload(callErr, protocol))
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func addFailureDetails(detail map[string]any, failure *diagnostics.Failure) {
+	if failure = failure.Normalize(); failure != nil {
+		detail["failure"] = failure
+	}
 }
 
 func setRetryAfterHeader(w http.ResponseWriter, callErr *adapter.CallError) {
+	if tracked, ok := w.(*trackedResponseWriter); ok && tracked.wroteHeader {
+		return
+	}
 	if callErr.RetryProvided {
 		if callErr.RetryAfterValue != "" {
 			w.Header().Set("Retry-After", callErr.RetryAfterValue)
@@ -306,8 +330,8 @@ func setRetryAfterHeader(w http.ResponseWriter, callErr *adapter.CallError) {
 		return
 	}
 	if callErr.Category == adapter.ProviderErrorRateLimited {
-		// A provider's Retry-After is guidance for the downstream client. Do not
-		// invent a retry delay when the provider did not provide one.
+		// A missing upstream wait is not itself a deadline. The gateway's
+		// recovery guidance may separately supply a real local cooldown.
 		return
 	}
 	if callErr.RetryAfterSecs > 0 {
@@ -335,6 +359,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.reload != nil {
 		h = h.reload.active.Load()
 	}
+	serviceVersion := h.serviceVersion
+	if serviceVersion == "" {
+		serviceVersion = "unknown"
+	}
+	w.Header().Set("X-TideMux-Version", serviceVersion)
 	r = withRequestLogDetails(r, "", "")
 	tracked := &trackedResponseWriter{ResponseWriter: w}
 	defer func() {
@@ -528,6 +557,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	r = withRecoveryRequest(r, qualifiedModel, protocol, body)
 	r = withRequestLogDetails(r, "", qualifiedModel)
 	routes, routeError, routeStatus := h.resolveRoutes(qualifiedModel, protocol, body, sessionKey)
 	if routeError != "" {
@@ -608,7 +638,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	var delivered bool
 	send := func(id string, frame []byte) error {
 		if !delivered {
-			w.Header().Set("X-TideMux-Request-ID", id)
+			setRequestIDHeaders(w, id)
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.WriteHeader(http.StatusOK)
@@ -655,6 +685,9 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			if !route.dynamic && route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || !isAvailabilityError(preDispatchErr.Code) {
 				break
 			}
+			if !preDispatchErr.RequestStartedAt.IsZero() {
+				options.RequestStartedAt, options.PriorQueueMS = preDispatchErr.RequestStartedAt, preDispatchErr.QueueMS
+			}
 		}
 		if handled {
 			return nil, id, nil, true
@@ -686,25 +719,13 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		setRetryAfterHeader(w, upstreamErr)
 		if !delivered {
 			if id != "" {
-				w.Header().Set("X-TideMux-Request-ID", id)
+				setRequestIDHeaders(w, id)
 			}
-			h.failUpstream(w, upstreamErr, protocol)
+			h.failUpstream(w, r, upstreamErr, protocol)
 			return
 		}
-		payload := mappedUpstreamErrorPayload(upstreamErr, protocol)
-		if upstreamErr.Category == "" {
-			detail := map[string]any{"type": "api_error", "message": upstreamErr.Code, "code": upstreamErr.Code}
-			if upstreamErr.Param != "" {
-				detail["param"] = upstreamErr.Param
-			}
-			payload = map[string]any{"error": detail}
-			if protocol == "anthropic" {
-				payload["type"] = "error"
-			}
-		}
-		if id != "" {
-			payload["request_id"] = id
-		}
+		payload := h.upstreamErrorPayload(w, r, upstreamErr, protocol)
+		addRequestID(payload, id)
 		encoded, _ := json.Marshal(payload)
 		send(id, append(append([]byte("event: error\ndata: "), encoded...), []byte("\n\n")...))
 		w.streamComplete = true
@@ -716,13 +737,13 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		return
 	}
 	if id != "" {
-		w.Header().Set("X-TideMux-Request-ID", id)
+		setRequestIDHeaders(w, id)
 	}
 	if callErr != nil {
 		var upstreamErr *adapter.CallError
 		if errors.As(callErr, &upstreamErr) {
 			setRetryAfterHeader(w, upstreamErr)
-			h.failUpstream(w, upstreamErr, protocol)
+			h.failUpstream(w, r, upstreamErr, protocol)
 		} else {
 			h.fail(w, http.StatusInternalServerError, "internal_error", protocol)
 		}
@@ -753,13 +774,23 @@ func newRequestID() (string, error) {
 }
 
 func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string, status int, code string, param ...string) {
+	var advice *retryAdvice
+	if isAvailabilityError(code) || code == "auto_chain_exhausted" {
+		advice = h.retryAdviceFor(r)
+		if isAvailabilityError(code) || advice.hasCooldown {
+			status = http.StatusTooManyRequests
+			applyRetryHeader(w, advice)
+		} else {
+			advice = nil
+		}
+	}
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		h.fail(w, 500, "request_id_failed", protocol)
 		return
 	}
 	id := hex.EncodeToString(nonce)
-	w.Header().Set("X-TideMux-Request-ID", id)
+	setRequestIDHeaders(w, id)
 	details, _ := r.Context().Value(requestLogContextKey{}).(requestLogContext)
 	method := r.Method
 	if method != "GET" && method != "POST" {
@@ -793,8 +824,16 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		TimestampMS:     timestamp,
 	}.Log(h.logger)
 	if diagnosticErr != nil {
+		w.Header().Del("Retry-After")
 		h.fail(w, status, code, protocol)
 		return
 	}
-	h.fail(w, status, code, protocol, param...)
+	payload := h.errorPayload(status, code, protocol, nil, param...)
+	if advice != nil {
+		addRetryAdvice(payload["error"].(map[string]any), advice)
+	}
+	addRequestID(payload, id)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }

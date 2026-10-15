@@ -60,6 +60,7 @@ func writeStreamFailure(w http.ResponseWriter, protocol, code string) {
 	// A disconnected or panicking downstream writer cannot receive an error.
 	defer func() { _ = recover() }()
 	payload := map[string]any{"error": map[string]any{"type": "api_error", "code": code, "message": code}}
+	addRequestID(payload, w.Header().Get("X-TideMux-Request-ID"))
 	if protocol == "anthropic" {
 		payload["type"] = "error"
 	}

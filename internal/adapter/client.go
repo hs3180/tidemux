@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hs3180/tidemux/internal/diagnostics"
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
@@ -49,15 +50,22 @@ type CallError struct {
 	FailoverSafe bool
 	// BudgetCost preserves a known charge when the audit row itself cannot be
 	// written. It is internal accounting data and is never sent to clients.
-	BudgetCost      *float64
-	Param           string
-	ProviderCode    string
-	Category        ProviderErrorCategory
-	UpstreamStatus  int
-	Cooldown        time.Duration
-	RetryAfterSecs  int64
-	RetryProvided   bool
-	RetryAfterValue string
+	BudgetCost        *float64
+	Param             string
+	ProviderCode      string
+	Category          ProviderErrorCategory
+	UpstreamStatus    int
+	Cooldown          time.Duration
+	CooldownUntil     time.Time
+	RetryAfterSecs    int64
+	RetryProvided     bool
+	RetryAfterValue   string
+	Failure           *diagnostics.Failure
+	AllKeysCooling    bool
+	RateLimitFailures uint16
+	// Internal only: a route can yield after queueing without an HTTP attempt.
+	RequestStartedAt time.Time
+	QueueMS          int64
 }
 
 // ErrServerShuttingDown identifies a gateway-initiated cancellation without
@@ -70,10 +78,11 @@ func (e *CallError) Error() string { return e.Code }
 // outcome. A failed upstream attempt is returned to the downstream client;
 // this adapter does not replay it with another key.
 type KeyCandidateCallbacks struct {
-	Attempt   func(index int) func(HTTPAttemptResult) // one actual HTTP initiation/result
-	Completed func(err error)                         // upstream result, before releasing the dispatch gate
-	Ready     func(index int) (bool, time.Duration)
-	Failed    func(index int, callErr *CallError)
+	YieldUnavailable bool                                    // No audit/ID when yielding an undispatched route to its owner.
+	Attempt          func(index int) func(HTTPAttemptResult) // one actual HTTP initiation/result
+	Completed        func(index int, err error)              // upstream result, before releasing the dispatch gate
+	Ready            func(index int) (bool, time.Duration)
+	Failed           func(index int, callErr *CallError)
 }
 
 type observedReader struct {
@@ -130,6 +139,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		keys = []string{c.APIKey}
 	}
 	started := time.Now()
+	if !options.RequestStartedAt.IsZero() {
+		started = options.RequestStartedAt
+	}
 	nonce := make([]byte, 16)
 	if _, e := rand.Read(nonce); e != nil {
 		return nil, "", &CallError{Status: 500, Code: "request_id_failed", UpstreamNotAttempted: true}
@@ -151,8 +163,10 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	}
 	var observed bytes.Buffer
 	attempted := false
+	selectedCandidate := -1
 	delivered := false
 	auditPersisted := false
+	yielded := false
 	localEstimate := func(response []byte) {
 		if !priced || a.EstimatedCost != nil {
 			return
@@ -168,6 +182,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		}
 	}
 	defer func() {
+		if yielded {
+			return
+		}
 		if recovered := recover(); recovered != nil {
 			if recovered == http.ErrAbortHandler {
 				panic(recovered)
@@ -191,13 +208,25 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 				a.ErrorCode = ce.Code
 			}
 			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				var previous *CallError
+				var failure *diagnostics.Failure
+				if errors.As(err, &previous) {
+					failure = previous.Failure.Normalize()
+				}
+				if failure != nil {
+					failure.Source, failure.Category, failure.Retryability = "canceled", "canceled", "terminal"
+				}
 				a.Status = "canceled"
 				a.ErrorCode = "request_canceled"
-				err = &CallError{Status: 408, Code: "request_canceled"}
+				err = &CallError{Status: 408, Code: "request_canceled", Failure: failure}
 				if errors.Is(context.Cause(ctx), ErrServerShuttingDown) {
 					a.ErrorCode = "server_shutting_down"
-					err = &CallError{Status: http.StatusServiceUnavailable, Code: a.ErrorCode}
+					err = &CallError{Status: http.StatusServiceUnavailable, Code: a.ErrorCode, Failure: failure}
 				}
+			}
+			var terminal *CallError
+			if errors.As(err, &terminal) {
+				a.Failure = terminal.Failure.Normalize()
 			}
 		}
 		if e := c.Ledger.AppendAudit(a); e != nil {
@@ -253,11 +282,12 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			InputTokens: a.InputTokens, OutputTokens: a.OutputTokens,
 			CacheReadTokens: a.CacheReadTokens, CacheWriteTokens: a.CacheWriteTokens,
 			UsageLog: c.UsageLog,
+			Failure:  a.Failure,
 		}.Log(c.Logger)
 	}()
 	admission, e := c.Gate.Acquire(ctx)
-	a.QueueMS = admission.QueueWait.Milliseconds()
-	if admission.Queued {
+	a.QueueMS = options.PriorQueueMS + admission.QueueWait.Milliseconds()
+	if admission.Queued || options.PriorQueueMS > 0 {
 		a.Events = append(a.Events, "queue_wait")
 	}
 	if e != nil {
@@ -266,7 +296,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	defer c.Gate.Release()
 	defer func() {
 		if attempted && callbacks.Completed != nil {
-			callbacks.Completed(err)
+			callbacks.Completed(selectedCandidate, err)
 		}
 	}()
 	if e = ctx.Err(); e != nil {
@@ -277,7 +307,16 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	defer cancelRequest()
 	defer func() {
 		if err != nil && ctx.Err() == nil && requestCtx.Err() == context.DeadlineExceeded {
-			err = &CallError{Status: 504, Code: "upstream_timeout"}
+			var previous *CallError
+			var failure *diagnostics.Failure
+			if errors.As(err, &previous) {
+				failure = previous.Failure
+			}
+			if failure != nil {
+				failure = failure.Normalize()
+				failure.Category, failure.Retryability = "timeout", "retryable"
+			}
+			err = &CallError{Status: 504, Code: "upstream_timeout", Failure: failure}
 		}
 	}()
 	var data []byte
@@ -310,13 +349,17 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 					}
 				}
 				if !hasReadyCandidate {
-					err = &CallError{Status: 503, Code: "provider_keys_cooling_down", Cooldown: earliestCooldown}
+					err = &CallError{Status: 429, Code: "provider_keys_cooling_down", Cooldown: earliestCooldown, UpstreamNotAttempted: true, RequestStartedAt: started, QueueMS: a.QueueMS}
+					if callbacks.YieldUnavailable {
+						yielded, id = true, ""
+					}
 					break
 				}
 				continue
 			}
 		}
 		attempted = true
+		selectedCandidate = candidateIndex
 		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, func() func(HTTPAttemptResult) {
 			if callbacks.Attempt == nil {
 				return nil
@@ -411,7 +454,66 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		path = "/messages"
 	}
 	var headersWritten atomic.Bool
-	trace := &httptrace.ClientTrace{WroteHeaders: func() { headersWritten.Store(true) }}
+	var phase atomic.Uint32
+	advance := func(next uint32) {
+		for previous := phase.Load(); previous < next; previous = phase.Load() {
+			if phase.CompareAndSwap(previous, next) {
+				break
+			}
+		}
+	}
+	trace := &httptrace.ClientTrace{
+		DNSStart:             func(httptrace.DNSStartInfo) { advance(1) },
+		ConnectStart:         func(string, string) { advance(2) },
+		TLSHandshakeStart:    func() { advance(3) },
+		GotConn:              func(httptrace.GotConnInfo) { advance(4) },
+		WroteHeaders:         func() { headersWritten.Store(true); advance(5) },
+		GotFirstResponseByte: func() { advance(6) },
+	}
+	var upstreamResponse *http.Response
+	defer func() {
+		var callErr *CallError
+		if !errors.As(attemptErr, &callErr) {
+			return
+		}
+		if callErr.Failure == nil {
+			callErr.Failure = &diagnostics.Failure{}
+		}
+		f := callErr.Failure
+		if f.Source == "" {
+			switch {
+			case callErr.Code == "downstream_write_error":
+				f.Source = "downstream"
+			case phase.Load() == 8:
+				f.Source = "conversion"
+			case upstreamResponse == nil:
+				f.Source = "transport"
+			case sink != nil:
+				f.Source = "stream"
+			default:
+				f.Source = "response"
+			}
+		}
+		phases := []string{"request", "dns", "connect", "tls", "request", "response_headers", "response_body", "stream", "conversion"}
+		f.Phase = phases[phase.Load()]
+		if upstreamResponse != nil {
+			f.HTTPStatus = upstreamResponse.StatusCode
+			if f.ProviderRequestID == "" {
+				f.ProviderRequestID = providerRequestID(upstreamResponse.Header)
+			}
+		}
+		f.Category = SafeFailureClass(callErr)
+		if f.Category == "upstream_error" {
+			f.Category = "unknown"
+		}
+		f.Retryability = failureRetryability(callErr)
+		callErr.Failure = f.Redact(apiKey, options.SessionID)
+		for _, secret := range []string{apiKey, options.SessionID} {
+			if secret != "" && strings.Contains(callErr.ProviderCode, secret) {
+				callErr.ProviderCode = ""
+			}
+		}
+	}()
 	requestCtx := httptrace.WithClientTrace(ctx, trace)
 	req, err := http.NewRequestWithContext(requestCtx, "POST", strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(providerBody))
 	if err != nil {
@@ -445,6 +547,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		}
 	}
 	resp, err := client.Do(req)
+	upstreamResponse = resp
 	if err != nil {
 		var network interface{ Timeout() bool }
 		timedOut = errors.As(err, &network) && network.Timeout()
@@ -457,6 +560,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		return nil, TokenUsage{}, callErr
 	}
 	defer resp.Body.Close()
+	advance(6)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, TokenUsage{}, upstreamError(resp, c.ErrorCodeMappings...)
 	}
@@ -465,12 +569,14 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_content_type"}
 		}
+		advance(7)
 		translator := newStreamTranslator(c.Protocol, clientProtocol, model)
 		usage, data, err := readStreamWithLimits(c.Protocol, recordedBody, limits, func(frame []byte) error {
 			if translator != nil {
 				var translateErr error
 				frame, translateErr = translator.frame(frame)
 				if translateErr != nil {
+					advance(8)
 					var conversion *TranslationError
 					if errors.As(translateErr, &conversion) {
 						return &CallError{Status: 502, Code: conversion.Code, Param: conversion.Field}
@@ -494,6 +600,9 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		}, streamErrorContext{response: resp, mappings: c.ErrorCodeMappings})
 		if err == nil && translator != nil {
 			data, err = translator.terminal(data)
+			if err != nil {
+				advance(8)
+			}
 		}
 		if translator != nil {
 			logConversionWarnings(c.Logger, clientProtocol, c.Protocol, translator.warnings())
@@ -519,6 +628,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		return nil, TokenUsage{}, &CallError{Status: 502, Code: "invalid_upstream_response"}
 	}
 	var responseWarnings []string
+	advance(8)
 	data, responseWarnings, err = TranslateResponseWithWarnings(c.Protocol, clientProtocol, data, model)
 	logConversionWarnings(c.Logger, clientProtocol, c.Protocol, responseWarnings)
 	if err != nil {

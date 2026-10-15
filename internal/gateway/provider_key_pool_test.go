@@ -388,7 +388,7 @@ func TestGatewayRejectsRequestsWhileSingleKeyIsCoolingDown(t *testing.T) {
 	}
 	defer closeGateway()
 
-	for i, wantStatus := range []int{http.StatusBadGateway, http.StatusServiceUnavailable} {
+	for i, wantStatus := range []int{http.StatusBadGateway, http.StatusTooManyRequests} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "main", "custom-model")))
 		req.Header.Set("Authorization", "Bearer local-secret")
 		out := httptest.NewRecorder()

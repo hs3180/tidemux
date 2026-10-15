@@ -92,9 +92,15 @@ func completeRecovery(probe *routeFailure, now time.Time, handled bool, callErr,
 
 type availabilityLeaseContextKey struct{}
 type availabilityResultContextKey struct{}
-type availabilityResult struct{ finish func(error) }
+type availabilityResult struct{ finish func(error, bool) }
 
 func (h *handler) callRouteWithRecovery(w http.ResponseWriter, r *http.Request, protocol string, route routeStep, body []byte, options adapter.CallOptions, sink adapter.StreamSink, delivered *bool) (response []byte, id string, callErr error, handled bool) {
+	pool := h.keyPools[route.provider]
+	rateLease, rateBlocked := pool.beginRateRecovery(time.Now())
+	if rateBlocked != nil {
+		return nil, "", rateBlocked, false
+	}
+	defer pool.finishRateRecovery(rateLease)
 	if h.availability == nil {
 		return h.callRouteWithLegacyRecovery(w, r, protocol, route, body, options, sink, delivered)
 	}
@@ -109,9 +115,9 @@ func (h *handler) callRouteWithRecovery(w http.ResponseWriter, r *http.Request, 
 	}
 	r = r.WithContext(context.WithValue(r.Context(), availabilityLeaseContextKey{}, lease))
 	healthCompleted := false
-	r = r.WithContext(context.WithValue(r.Context(), availabilityResultContextKey{}, &availabilityResult{finish: func(err error) {
+	r = r.WithContext(context.WithValue(r.Context(), availabilityResultContextKey{}, &availabilityResult{finish: func(err error, stale bool) {
 		healthCompleted = true
-		if h.availability.complete(lease, false, err, r.Context().Err()) {
+		if h.availability.complete(lease, stale, err, r.Context().Err()) {
 			h.autoChain.restoreProvider(route.provider)
 		}
 	}}))

@@ -82,9 +82,12 @@ func gatewayAvailability(args []string, stdout, stderr *os.File, lookup gateway.
 	for _, provider := range report.Providers {
 		printAvailability(stdout, provider.Ref, provider.Generation, provider.AvailabilityStatus)
 		if pool := provider.KeyPool; pool != nil {
-			fmt.Fprintf(stdout, "  keys: capacity=%d eligible=%d cooling=%d telemetry=%t epoch=%d\n", pool.Capacity, pool.Eligible, pool.Cooling, pool.TelemetryEnabled, pool.CounterEpoch)
+			fmt.Fprintf(stdout, "  keys: capacity=%d eligible=%d cooling=%d rate-limit-streak=%d telemetry=%t epoch=%d\n", pool.Capacity, pool.Eligible, pool.Cooling, pool.ConsecutiveRateLimits, pool.TelemetryEnabled, pool.CounterEpoch)
 			for _, key := range pool.Keys {
 				fmt.Fprintf(stdout, "  %s state=%s", key.Label, key.State)
+				if key.ConsecutiveRateLimits > 0 {
+					fmt.Fprintf(stdout, " rate-limit-streak=%d", key.ConsecutiveRateLimits)
+				}
 				if key.LastFailureClass != "" {
 					fmt.Fprintf(stdout, " last-failure=%s", key.LastFailureClass)
 				}
@@ -102,6 +105,9 @@ func gatewayAvailability(args []string, stdout, stderr *os.File, lookup gateway.
 		}
 		for _, model := range provider.Models {
 			printAvailability(stdout, provider.Ref+"/"+model.Model, provider.Generation, model.AvailabilityStatus)
+			if len(model.Alternatives) > 0 {
+				fmt.Fprintf(stdout, "  alternatives: %s (model health; request features, capacity and budgets are rechecked)\n", strings.Join(model.Alternatives, ", "))
+			}
 		}
 	}
 	return nil
@@ -111,6 +117,14 @@ func printAvailability(out io.Writer, target string, generation uint64, status g
 	fmt.Fprintf(out, "%s generation=%d state=%s", target, generation, status.State)
 	if status.Reason != "" {
 		fmt.Fprintf(out, " reason=%s", status.Reason)
+	}
+	if status.Scope != "" {
+		fmt.Fprintf(out, " scope=%s", status.Scope)
+	}
+	if status.RetryAfterSeconds != nil {
+		fmt.Fprintf(out, " wait=%ds", *status.RetryAfterSeconds)
+	} else if status.State == "probing" {
+		fmt.Fprint(out, " wait=unknown")
 	}
 	if !status.RetryAt.IsZero() {
 		fmt.Fprintf(out, " retry-at=%s probe-due=%t", status.RetryAt.Format(time.RFC3339), status.ProbeDue)

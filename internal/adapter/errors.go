@@ -76,17 +76,22 @@ func providerErrorCode(body []byte) string {
 		return ""
 	}
 	var detail struct {
-		Code string `json:"code"`
-		Type string `json:"type"`
+		Code json.RawMessage `json:"code"`
+		Type json.RawMessage `json:"type"`
 	}
 	if json.Unmarshal(envelope.Error, &detail) != nil {
 		return ""
 	}
-	if safeProviderErrorCode(detail.Code) {
-		return detail.Code
+	var code string
+	if json.Unmarshal(detail.Code, &code) == nil && safeProviderErrorCode(code) {
+		return code
 	}
-	if safeProviderErrorCode(detail.Type) {
-		return detail.Type
+	if code = numericProviderCode(detail.Code); code != "" {
+		return code
+	}
+	var kind string
+	if json.Unmarshal(detail.Type, &kind) == nil && safeProviderErrorCode(kind) {
+		return kind
 	}
 	return ""
 }
@@ -113,7 +118,10 @@ func providerErrorHTTPStatus(body []byte) int {
 	return 0
 }
 
-func providerStreamError(body []byte, stream streamErrorContext) *CallError {
+func providerStreamError(body []byte, stream streamErrorContext) (result *CallError) {
+	defer func() {
+		result.Failure = providerFailure(body, stream.response, "stream_error", stream.mappings)
+	}()
 	providerCode := providerErrorCode(body)
 	if providerCode == "" {
 		return &CallError{Status: 502, Code: "upstream_stream_error"}
@@ -193,8 +201,9 @@ func mappedProviderError(resp *http.Response, category ProviderErrorCategory, pr
 // Preserve safe built-in categories without forwarding provider messages, which
 // can contain echoed prompts, credentials, or account details. Exact configured
 // error codes can add provider-specific meaning without parsing arbitrary text.
-func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) *CallError {
+func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) (result *CallError) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderErrorBody))
+	defer func() { result.Failure = providerFailure(body, resp, "http_error", mappings) }()
 	if providerCode := providerErrorCode(body); providerCode != "" {
 		if category, ok := resolveProviderErrorCategory(providerCode, resp.StatusCode, mappings); ok {
 			return mappedProviderError(resp, category, providerCode)
@@ -217,12 +226,10 @@ func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) *CallE
 		Error struct {
 			Message string `json:"message"`
 			Param   string `json:"param"`
-			Code    string `json:"code"`
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &envelope) == nil {
 		message := strings.ToLower(envelope.Error.Message)
-		param = envelope.Error.Param
 		unsupported := strings.Contains(message, "not support") || strings.Contains(message, "unsupported") || strings.Contains(message, "unavailable") || strings.Contains(message, "unknown parameter") || strings.Contains(message, "unrecognized") || strings.Contains(message, "extra inputs are not permitted")
 		if unsupported {
 			for _, p := range []string{"response_format", "output_config", "reasoning_effort", "thinking", "temperature", "tools", "tool_choice"} {

@@ -71,8 +71,29 @@ type availabilityState struct {
 
 func newAvailabilityState(logger *slog.Logger) *availabilityState {
 	return &availabilityState{entries: map[availabilityTarget]*availabilityEntry{},
-		now: time.Now, jitter: func(base time.Duration) time.Duration { return time.Duration(rand.Int63n(int64(base/5) + 1)) },
+		now: time.Now, jitter: recoveryJitter,
 		logger: observability.LoggerOrDiscard(logger)}
+}
+
+func recoveryJitter(base time.Duration) time.Duration {
+	return time.Duration(rand.Int63n(int64(base/5) + 1))
+}
+
+// Apply operational key health under the same publication fence as route
+// health. A compatible reload can reuse the pool, so a separate check followed
+// by an unlocked mutation would let an old view change the new view's state.
+func (s *availabilityState) withCurrent(epoch uint64, provider string, generation uint64, apply func()) bool {
+	if s == nil {
+		apply()
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch != epoch || s.generations[provider] != generation {
+		return false
+	}
+	apply()
+	return true
 }
 
 func (s *availabilityState) activate(epoch uint64, generations map[string]uint64, valid ...func(string, string) bool) {
@@ -165,10 +186,10 @@ func availabilityError(entry *availabilityEntry, target availabilityTarget, now 
 		code = "recovery_in_progress"
 	}
 	delay := entry.retryAt.Sub(now)
-	if delay < time.Second {
-		delay = time.Second
+	if entry.probing || delay < 0 {
+		delay = 0
 	}
-	return &adapter.CallError{Status: http.StatusServiceUnavailable, Code: code, Cooldown: delay, UpstreamNotAttempted: true}
+	return &adapter.CallError{Status: http.StatusTooManyRequests, Code: code, Cooldown: delay, UpstreamNotAttempted: true}
 }
 
 func isAvailabilityError(code string) bool {
@@ -232,6 +253,10 @@ func availabilityFailure(err error, ctxErr error, handled bool) (modelScope bool
 		return
 	}
 	switch callErr.Category {
+	case adapter.ProviderErrorRateLimited:
+		if callErr.AllKeysCooling {
+			return false, "rate_limited", callErr.Cooldown
+		}
 	case adapter.ProviderErrorModelNotFound:
 		return true, "model_not_found", callErr.Cooldown
 	case adapter.ProviderErrorTemporarilyUnavailable:
@@ -239,21 +264,65 @@ func availabilityFailure(err error, ctxErr error, handled bool) (modelScope bool
 	case adapter.ProviderErrorInsufficientBalance:
 		return false, "insufficient_balance", callErr.Cooldown
 	}
+	// An unknown upstream error frame is failure evidence for this model,
+	// without proving a provider-wide outage or a retryable error category.
+	// Explicit terminal categories and 4xx statuses must retain their meaning.
+	if callErr.Category != "" {
+		return
+	}
+	failure := callErr.Failure.Normalize()
+	if failure == nil || failure.Retryability == "terminal" {
+		return
+	}
+	if failure.Source == "stream_error" {
+		if failure.Retryability == "unknown" {
+			return true, "unclassified_stream_error", routeRecoveryCooldown
+		}
+		return true, "upstream_stream_error", callErr.Cooldown
+	}
+	if failure.Retryability != "retryable" {
+		return
+	}
+	switch callErr.Code {
+	case "upstream_timeout":
+		if failure.Phase != "conversion" && failure.Source != "downstream" {
+			return true, "upstream_timeout", callErr.Cooldown
+		}
+	case "upstream_stream_read_error", "incomplete_upstream_stream":
+		if failure.Source == "stream" {
+			return true, "stream_interrupted", callErr.Cooldown
+		}
+	case "upstream_read_error", "upstream_transport_error":
+		return true, "transport_error", callErr.Cooldown
+	case "upstream_error":
+		if failure.Source == "http_error" && failure.HTTPStatus >= 500 {
+			return true, "upstream_error", callErr.Cooldown
+		}
+	}
 	return
 }
 
 func (s *availabilityState) backoff(reason string, failures uint16, upstream time.Duration) time.Duration {
+	return boundedRecoveryBackoff(reason, failures, upstream, s.jitter)
+}
+
+func boundedRecoveryBackoff(reason string, failures uint16, upstream time.Duration, jitter func(time.Duration) time.Duration) time.Duration {
+	if reason == "rate_limited" && failures > 10 {
+		return 24 * time.Hour
+	}
 	base := routeRecoveryCooldown
 	if reason == "insufficient_balance" {
 		base = billingExhaustionCooldown
 	}
-	for n := uint16(1); n < failures && base < availabilityMaxBackoff; n++ {
-		base *= 2
+	if reason != "unclassified_stream_error" {
+		for n := uint16(1); n < failures && base < availabilityMaxBackoff; n++ {
+			base *= 2
+		}
 	}
 	if base > availabilityMaxBackoff {
 		base = availabilityMaxBackoff
 	}
-	delay := base + s.jitter(base)
+	delay := base + jitter(base)
 	if upstream > delay {
 		delay = upstream
 	}
@@ -338,7 +407,21 @@ func (s *availabilityState) complete(lease *availabilityLease, handled bool, err
 				next.failures++
 			}
 			next.lastFailure = now
-			next.retryAt = now.Add(s.backoff(next.reason, next.failures, cooldown))
+			var failure *adapter.CallError
+			if reason == "rate_limited" && errors.As(err, &failure) && failure.AllKeysCooling {
+				// The key pool already computed the real earliest eligible key,
+				// including upstream Retry-After and its provider-wide silence.
+				next.failures = failure.RateLimitFailures
+				if next.failures == 0 {
+					next.failures = 1
+				}
+				next.retryAt = now.Add(cooldown)
+				if !failure.CooldownUntil.IsZero() {
+					next.retryAt = failure.CooldownUntil
+				}
+			} else {
+				next.retryAt = now.Add(s.backoff(next.reason, next.failures, cooldown))
+			}
 		}
 		if s.put(target, &next) && (previous.state() != next.state() || previous != nil && previous.reason != next.reason) {
 			transitions = append(transitions, availabilityTransition{target, previous.state(), next.state(), next.reason, next.retryAt})
@@ -372,11 +455,14 @@ type AvailabilityStatus struct {
 	RetryAt             time.Time `json:"retry_at,omitzero"`
 	ProbeDue            bool      `json:"probe_due"`
 	ConsecutiveFailures uint16    `json:"consecutive_failures"`
+	Scope               string    `json:"scope"`
+	RetryAfterSeconds   *int64    `json:"retry_after_seconds,omitempty"`
 }
 
 type ModelAvailability struct {
 	Model string `json:"model"`
 	AvailabilityStatus
+	Alternatives []string `json:"alternatives"`
 }
 
 type ProviderAvailability struct {
@@ -388,11 +474,12 @@ type ProviderAvailability struct {
 }
 
 type AvailabilityReport struct {
-	Timestamp      time.Time              `json:"timestamp"`
-	Providers      []ProviderAvailability `json:"providers"`
-	RecoveryMode   string                 `json:"recovery_mode"`
-	StateLimit     int                    `json:"state_limit"`
-	IdleTTLSeconds int                    `json:"idle_ttl_seconds"`
+	Timestamp         time.Time              `json:"timestamp"`
+	Providers         []ProviderAvailability `json:"providers"`
+	RecoveryMode      string                 `json:"recovery_mode"`
+	StateLimit        int                    `json:"state_limit"`
+	IdleTTLSeconds    int                    `json:"idle_ttl_seconds"`
+	AlternativesScope string                 `json:"alternatives_scope"`
 }
 
 func availabilityStatus(entry *availabilityEntry, now time.Time) AvailabilityStatus {
@@ -400,6 +487,13 @@ func availabilityStatus(entry *availabilityEntry, now time.Time) AvailabilitySta
 	if entry != nil {
 		status.Reason, status.LastSuccess, status.LastFailure, status.RetryAt = entry.reason, entry.lastSuccess, entry.lastFailure, entry.retryAt
 		status.ProbeDue, status.ConsecutiveFailures = entry.failures > 0 && !entry.probing && !now.Before(entry.retryAt), entry.failures
+		if entry.failures > 0 && !entry.probing {
+			seconds := int64(0)
+			if entry.retryAt.After(now) {
+				seconds = int64((entry.retryAt.Sub(now) + time.Second - 1) / time.Second)
+			}
+			status.RetryAfterSeconds = &seconds
+		}
 	}
 	return status
 }
@@ -410,25 +504,84 @@ func (h *handler) availabilityReport() AvailabilityReport {
 	defer s.mu.Unlock()
 	now := s.now()
 	s.prune(now)
-	report := AvailabilityReport{Timestamp: now, Providers: []ProviderAvailability{}, RecoveryMode: "request_driven", StateLimit: availabilityLimit, IdleTTLSeconds: int(availabilityTTL / time.Second)}
+	report := AvailabilityReport{Timestamp: now, Providers: []ProviderAvailability{}, RecoveryMode: "request_driven", StateLimit: availabilityLimit, IdleTTLSeconds: int(availabilityTTL / time.Second), AlternativesScope: "model_health"}
 	for ref := range h.providers {
 		generation := h.providerGenerations[ref]
 		provider := ProviderAvailability{Ref: ref, Generation: generation,
 			AvailabilityStatus: availabilityStatus(s.entries[availabilityTarget{ref, "", generation}], now), Models: []ModelAvailability{}}
 		provider.KeyPool = h.keyPools[ref].diagnosticStatus(now)
+		provider.Scope = "provider"
+		if pool := provider.KeyPool; pool != nil && pool.Capacity > 0 && pool.Eligible == 0 && provider.State != "probing" {
+			var earliest time.Time
+			for _, key := range pool.Keys {
+				if earliest.IsZero() || key.CooldownUntil.Before(earliest) {
+					earliest = key.CooldownUntil
+				}
+			}
+			if earliest.After(provider.RetryAt) {
+				provider.State, provider.Reason, provider.RetryAt = "cooling", "keys_cooling_down", earliest
+				seconds := int64((earliest.Sub(now) + time.Second - 1) / time.Second)
+				provider.RetryAfterSeconds = &seconds
+			}
+		}
+		if pool := provider.KeyPool; pool != nil && pool.ConsecutiveRateLimits > 0 && !pool.RateLimitRetryAt.IsZero() && (provider.State == "unknown" || provider.State == "available" || provider.Reason == "rate_limited" || provider.Reason == "keys_cooling_down" || provider.State != "probing" && pool.RateLimitRetryAt.After(provider.RetryAt)) {
+			provider.State, provider.Reason = "cooling", "rate_limited"
+			if pool.RecoveryInProgress {
+				provider.State = "probing"
+			}
+			provider.RetryAt, provider.LastFailure, provider.ConsecutiveFailures = pool.RateLimitRetryAt, pool.LastRateLimitAt, pool.ConsecutiveRateLimits
+			provider.ProbeDue = !now.Before(pool.RateLimitRetryAt) && !pool.RecoveryInProgress
+			provider.RetryAfterSeconds = nil
+			if !pool.RecoveryInProgress {
+				seconds := int64(0)
+				if pool.RateLimitRetryAt.After(now) {
+					seconds = int64((pool.RateLimitRetryAt.Sub(now) + time.Second - 1) / time.Second)
+				}
+				provider.RetryAfterSeconds = &seconds
+			}
+		}
 		if _, unavailable := h.unavailableProviders[ref]; unavailable {
 			provider.State, provider.Reason = "unavailable", "protocol_unresolved"
 		}
 		for target, entry := range s.entries {
 			if target.provider == ref && target.generation == generation && target.model != "" {
-				provider.Models = append(provider.Models, ModelAvailability{target.model, availabilityStatus(entry, now)})
+				status := availabilityStatus(entry, now)
+				status.Scope = "model"
+				provider.Models = append(provider.Models, ModelAvailability{Model: target.model, AvailabilityStatus: status, Alternatives: []string{}})
 			}
 		}
 		sort.Slice(provider.Models, func(i, j int) bool { return provider.Models[i].Model < provider.Models[j].Model })
 		report.Providers = append(report.Providers, provider)
 	}
 	sort.Slice(report.Providers, func(i, j int) bool { return report.Providers[i].Ref < report.Providers[j].Ref })
+	for i := range report.Providers {
+		for j := range report.Providers[i].Models {
+			model := &report.Providers[i].Models[j]
+			for _, candidate := range report.Providers {
+				models, known := h.modelsForProvider(candidate.Ref)
+				if candidate.Ref == report.Providers[i].Ref || !known || !containsModel(models, model.Model) || !availabilityStatusEligible(candidate.AvailabilityStatus) {
+					continue
+				}
+				if pool := candidate.KeyPool; pool != nil && (pool.Eligible == 0 || pool.RecoveryInProgress) {
+					continue
+				}
+				eligible := true
+				for _, observed := range candidate.Models {
+					if observed.Model == model.Model && !availabilityStatusEligible(observed.AvailabilityStatus) {
+						eligible = false
+					}
+				}
+				if eligible && len(model.Alternatives) < 16 {
+					model.Alternatives = append(model.Alternatives, candidate.Ref+"/"+model.Model)
+				}
+			}
+		}
+	}
 	return report
+}
+
+func availabilityStatusEligible(status AvailabilityStatus) bool {
+	return status.State != "unavailable" && status.State != "probing" && (status.State != "cooling" || status.ProbeDue)
 }
 
 func (h *handler) modelRouteAvailable(provider, model string) bool {

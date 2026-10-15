@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hs3180/tidemux/internal/diagnostics"
 )
 
 const SchemaVersion = 2
@@ -214,6 +216,7 @@ type RequestSummary struct {
 	CacheReadTokens   *int64
 	CacheWriteTokens  *int64
 	UsageLog          *UsageLog
+	Failure           *diagnostics.Failure
 }
 
 func (e RequestSummary) Log(logger *slog.Logger) {
@@ -263,6 +266,9 @@ func (e RequestSummary) Log(logger *slog.Logger) {
 		slog.Bool("record_persisted", e.RecordPersisted),
 	}
 	group := ""
+	if failure := e.Failure.Normalize(); failure != nil {
+		attrs = append(attrs, slog.Any("failure", failure))
+	}
 	if event == "request_terminal" {
 		attrs = append(attrs, slog.String("type", "assistant"), slog.Any("message", e.usageMessage(requestID, model)))
 		group = normalizedSessionID(e.SessionID)
