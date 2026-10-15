@@ -101,7 +101,7 @@ func TestKeyDiagnosticsRecordOneAttemptPerClientRequest(t *testing.T) {
 					}
 					root.keyPools["a"].CooldownAll(time.Minute)
 					blocked := affinityGatewayRequest(h, protocol, "", body)
-					if blocked.Code != 503 || posts.Load() != before {
+					if blocked.Code != 429 || posts.Load() != before {
 						t.Fatal("cooled candidates initiated HTTP")
 					}
 					rows, err := root.ledger.Recent(context.Background(), 10)

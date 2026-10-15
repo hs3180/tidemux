@@ -1,6 +1,9 @@
 package adapter
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // SessionIDHeader is the stable gateway/provider boundary for a logical
 // conversation identifier. Providers may ignore the header, but compatible
@@ -15,6 +18,9 @@ type CallOptions struct {
 	SessionID            string
 	RequestScopedSession bool   // Gateway-generated admission ID; never reuse a prompt prefix.
 	ResponseModel        string // Optional downstream model name override for model:auto.
+	// Internal timing carried across an undispatched route re-selection.
+	RequestStartedAt time.Time
+	PriorQueueMS     int64
 }
 
 func (o CallOptions) Validate(protocol string) error {

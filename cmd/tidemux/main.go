@@ -217,6 +217,7 @@ func serveWithSignalsUsingConfig(config gateway.Config, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
+	config.ServiceVersion = version
 	listener, server, closeGateway, err := gateway.OpenWithLogger(config, nil, logger)
 	if err != nil {
 		stage, code := gateway.StartupFailure(err)

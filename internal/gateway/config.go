@@ -106,6 +106,7 @@ type SecretLookup interface {
 }
 
 type Config struct {
+	ServiceVersion                  string                   `json:"-"` // Supplied by the embedding binary, never decoded from disk.
 	HealthDiagnostics               *bool                    `json:"health_diagnostics,omitempty"`
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`

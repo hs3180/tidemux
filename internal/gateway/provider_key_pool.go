@@ -278,10 +278,10 @@ func (p *providerKeyPool) beginRateRecovery(now time.Time) (*rateRecoveryLease, 
 		return nil, nil
 	}
 	if p.rateProbe != nil {
-		return nil, &adapter.CallError{Status: 503, Code: "recovery_in_progress", UpstreamNotAttempted: true}
+		return nil, &adapter.CallError{Status: 429, Code: "recovery_in_progress", UpstreamNotAttempted: true}
 	}
 	if p.rateProviderUntil.After(now) {
-		return nil, &adapter.CallError{Status: 503, Code: "provider_rate_limited_cooling_down", Cooldown: p.rateProviderUntil.Sub(now), UpstreamNotAttempted: true}
+		return nil, &adapter.CallError{Status: 429, Code: "provider_rate_limited_cooling_down", Cooldown: p.rateProviderUntil.Sub(now), UpstreamNotAttempted: true}
 	}
 	lease := &rateRecoveryLease{}
 	p.rateProbe = lease

@@ -5,8 +5,10 @@ Uses fake Keychain credentials and loopback upstreams. Real cooldown recovery
 is exercised by test_route_recovery_package.py; clocks/backoff/TTL by Go tests.
 """
 import argparse
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 import json
+import math
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -63,6 +65,7 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
+    version = subprocess.check_output([str(binary), "version"], text=True).strip()
     results = []
     for protocol in ("openai", "anthropic"):
         for strategy in ("random", "price_priority"):
@@ -90,8 +93,15 @@ def main():
                     if call("a/one")[0] != 404:
                         raise RuntimeError("First mapped failure was changed or replayed")
                     status, error, headers = call("a/one")
-                    if status != 503 or "model_not_found_cooling_down" not in json.dumps(error) or not headers.get("Retry-After"):
+                    if status != 429 or "model_not_found_cooling_down" not in json.dumps(error) or not headers.get("Retry-After"):
                         raise RuntimeError("Explicit target did not explain cooldown")
+                    detail = error["error"]
+                    advice = detail.get("retry", {})
+                    if (detail["type"] != "rate_limit_error" or advice.get("after_seconds") != int(headers["Retry-After"])
+                            or advice.get("alternatives") != ["b/one"] or advice.get("reselect_provider")
+                            or not advice.get("alternatives_require_model_change") or advice.get("max_attempts") != 3
+                            or error.get("request_id") not in detail["message"]):
+                        raise RuntimeError("Cooldown lost native retry, explicit routing or visible request ID")
                     for model in ("one", "auto", "a/two", "b/one"):
                         if call(model)[0] != 200:
                             raise RuntimeError("Failed route affected healthy target: "+model)
@@ -100,14 +110,27 @@ def main():
                     if status != 401 or "providers" in value:
                         raise RuntimeError("Unauthenticated availability disclosure")
                     query.add_header("Authorization", "Bearer "+GATEWAY_KEY)
-                    status, value, _ = exchange(query)
+                    status, value, headers = exchange(query)
                     provider = next(p for p in value["providers"] if p["ref"] == "a")
                     failed = next(m for m in provider["models"] if m["model"] == "one")
                     if status != 200 or provider["state"] != "available" or failed["state"] != "cooling" or failed["reason"] != "model_not_found" or failed["probe_due"]:
                         raise RuntimeError("Model and provider state were conflated")
+                    if headers.get("X-TideMux-Version") != version or failed.get("scope") != "model" or failed.get("alternatives") != ["b/one"]:
+                        raise RuntimeError("Version, health scope or model alternative missing")
                     cli = subprocess.run([str(binary), "gateway", "availability", "--json", "--config", str(gateway["config_file"])],
                                          env=gateway["env"], cwd=gateway["root"], capture_output=True, text=True, timeout=10)
-                    if cli.returncode or json.loads(cli.stdout)["providers"] != value["providers"]:
+                    def stable_states(snapshot):
+                        observed = datetime.fromisoformat(snapshot["timestamp"].replace("Z", "+00:00"))
+                        for item in snapshot["providers"]:
+                            for target in [item, *item["models"]]:
+                                remaining = target.pop("retry_after_seconds", None)
+                                if remaining is not None:
+                                    deadline = datetime.fromisoformat(target["retry_at"].replace("Z", "+00:00"))
+                                    expected = math.ceil(max(0, (deadline-observed).total_seconds()))
+                                    if abs(remaining-expected) > 1:
+                                        raise RuntimeError("Availability countdown does not match its snapshot")
+                        return snapshot["providers"]
+                    if cli.returncode or stable_states(json.loads(cli.stdout)) != stable_states(value):
                         raise RuntimeError("CLI and endpoint disagree")
                     if gateway["upstream"].posts != 5:
                         raise RuntimeError("Cooling requests were dispatched")
@@ -118,7 +141,8 @@ def main():
                         if private in cli.stdout:
                             raise RuntimeError("Private data in shareable diagnostics")
                     results.append({"protocol": protocol, "strategy": strategy, "session": bool(session), "http_attempts": 5})
-    print(json.dumps({"passed": True, "scenarios": results, "query_and_cli": True, "privacy": True}))
+    print(json.dumps({"passed": True, "scenarios": results, "query_and_cli": True, "privacy": True,
+                      "cooldown_retry_guidance": True, "version_header": version}))
 
 
 if __name__ == "__main__":

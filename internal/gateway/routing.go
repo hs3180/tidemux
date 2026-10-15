@@ -42,17 +42,15 @@ func (h *handler) resolveRoutes(modelID, clientProtocol string, body []byte, ses
 		if len(h.config.AutoChain) == 0 {
 			return nil, "auto_chain_unconfigured", http.StatusBadRequest
 		}
-		if requiresNativeTools {
-			compatible := false
-			for _, entry := range h.config.AutoChain {
-				compatible = compatible || h.supportScopeAllows(entry.Provider, entry.Model) && h.supportsNativeAnthropicTools(entry.Provider)
-			}
-			if !compatible {
-				return nil, "unsupported_request_feature", http.StatusBadRequest
-			}
+		compatible := false
+		for _, entry := range h.config.AutoChain {
+			compatible = compatible || h.supportScopeAllows(entry.Provider, entry.Model) && h.routeRequestCompatible(entry.Provider, entry.Model, clientProtocol, body)
+		}
+		if !compatible {
+			return nil, "unsupported_request_feature", http.StatusBadRequest
 		}
 		route, ok := h.autoChain.selectRouteAvailable(sessionKey, func(entry AutoChainEntry) bool {
-			return h.supportScopeAllows(entry.Provider, entry.Model) && (!requiresNativeTools || h.supportsNativeAnthropicTools(entry.Provider)) && h.modelRouteAvailable(entry.Provider, entry.Model)
+			return h.supportScopeAllows(entry.Provider, entry.Model) && h.routeRequestCompatible(entry.Provider, entry.Model, clientProtocol, body) && h.modelRouteAvailable(entry.Provider, entry.Model)
 		})
 		if !ok {
 			return nil, "auto_chain_exhausted", http.StatusServiceUnavailable
@@ -131,7 +129,13 @@ func (h *handler) routeErrorParameter(model, protocol string, body []byte) strin
 	if protocol == "anthropic" && adapter.HasAnthropicServerTools(body) {
 		return "tools"
 	}
-	for _, ref := range h.bareModelCandidates(model, false) {
+	candidates := h.bareModelCandidates(model, false)
+	if model == "auto" {
+		for _, entry := range h.config.AutoChain {
+			candidates = append(candidates, entry.Provider)
+		}
+	}
+	for _, ref := range candidates {
 		if client := h.clients[ref]; client != nil {
 			if _, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.MaxOutputTokens); err != nil {
 				if field := adapter.ValidationParameter(err); field != "" {
@@ -141,6 +145,18 @@ func (h *handler) routeErrorParameter(model, protocol string, body []byte) strin
 		}
 	}
 	return "model"
+}
+
+func (h *handler) routeRequestCompatible(provider, model, protocol string, body []byte) bool {
+	client := h.clients[provider]
+	if client == nil || protocol == "anthropic" && adapter.HasAnthropicServerTools(body) && !h.supportsNativeAnthropicTools(provider) {
+		return false
+	}
+	if len(body) == 0 {
+		return true
+	}
+	_, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.MaxOutputTokens)
+	return err == nil
 }
 
 func (h *handler) supportsNativeAnthropicTools(provider string) bool {

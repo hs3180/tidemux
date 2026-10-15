@@ -236,7 +236,7 @@ func TestAvailabilityAcrossRoutingEntrypoints(t *testing.T) {
 						t.Fatal(failed.Code, failed.Body)
 					}
 					cooled := affinityGatewayRequest(h, protocol, session, body("a/one"))
-					if cooled.Code != 503 || cooled.Header().Get("Retry-After") == "" || !strings.Contains(cooled.Body.String(), "model_not_found_cooling_down") {
+					if cooled.Code != 429 || cooled.Header().Get("Retry-After") == "" || !strings.Contains(cooled.Body.String(), "model_not_found_cooling_down") {
 						t.Fatal(cooled.Code, cooled.Header(), cooled.Body)
 					}
 					for _, model := range []string{"one", "auto", "a/two", "b/one"} {

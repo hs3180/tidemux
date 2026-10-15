@@ -124,6 +124,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		}
 	}
 	h := &handler{config: c, ledger: l, handlerRuntime: runtime, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
+	h.serviceVersion = c.ServiceVersion
 	h.availability.activate(h.routingEpoch, h.providerGenerations, h.supportScopeAllows)
 	return h, func() error {
 		stopReconciliation()

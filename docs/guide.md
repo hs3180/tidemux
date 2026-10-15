@@ -129,6 +129,33 @@ inference evidence; `available` records success; `cooling` remembers a failure;
 `probing` has one real request testing recovery. `retry_at` is eligibility to
 try again. Without traffic, recovery stays unconfirmed.
 
+Local cooldowns return HTTP 429 with the protocol's `rate_limit_error`. When
+the gateway knows a deadline, `Retry-After` is the rounded-up wait for the
+earliest compatible route. An active recovery probe has no known finish time;
+its response recommends exponential backoff with jitter, up to 30 seconds and
+three attempts. A valid upstream `Retry-After` is preserved unchanged.
+
+A new shared-model or `auto` request can select another healthy provider.
+An explicit `PROVIDER/MODEL` keeps that choice; the error may list qualified
+alternatives that require changing the model. Alternatives describe model,
+protocol and health; features, session capacity and budgets are checked again
+when a request is sent. `error.retry` supplies `strategy`, optional
+`after_seconds`, `wait_source`, `reselect_provider` and these alternatives.
+Clients choose their own retry policy.
+
+If a stream fails after partial output, its terminal SSE error carries the
+same recovery guidance and a gateway `request_id`. The ID also appears in the
+error message for retry guidance, the response header and the corresponding
+audit/log. Use the new request to recover; the partial reply can be incomplete.
+[SDK HTTP retries and mid-stream errors have different handling](https://platform.claude.com/docs/en/api/errors),
+so a client may need an explicit retry even when a compatible provider is ready.
+Responses include `X-TideMux-Version` for the running binary's version.
+
+Availability JSON includes failure `scope`, optional `retry_after_seconds` and
+up to 16 alternatives for an observed model. Omitted wait means no exact time
+is known; a zero wait means a real recovery probe can be attempted now. The CLI
+shows the wait, reason and model-health alternatives without sending inference.
+
 Key labels are opaque. `requests` counts adapter calls using a key;
 `http_attempts` counts actual HTTP attempts. Each downstream generation request
 initiates at most one such attempt.

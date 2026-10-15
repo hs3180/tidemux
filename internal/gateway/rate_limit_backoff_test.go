@@ -171,7 +171,7 @@ func TestRateLimitMovesFromKeyToProviderWithoutReplaying(t *testing.T) {
 		}
 	}
 	w := affinityGatewayRequest(h, "openai", "session", body)
-	if w.Code != 503 || posts.Load() != 2 {
+	if w.Code != 429 || posts.Load() != 2 {
 		t.Fatalf("cooled provider replayed: status=%d posts=%d", w.Code, posts.Load())
 	}
 	report := h.availabilityReport()
@@ -215,7 +215,7 @@ func TestRateLimitMovesFromKeyToProviderWithoutReplaying(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			if w := affinityGatewayRequest(h, "openai", "session", body); w.Code != 503 {
+			if w := affinityGatewayRequest(h, "openai", "session", body); w.Code != 429 {
 				unexpected.Add(1)
 			}
 		}()

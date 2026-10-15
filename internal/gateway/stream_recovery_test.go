@@ -93,12 +93,20 @@ func TestStreamFailureNewRequestRebindsWithoutReplayingOutput(t *testing.T) {
 					if !strings.Contains(failed.Body.String(), "partial") || !strings.Contains(failed.Body.String(), "event: error") || strings.Contains(failed.Body.String(), "PRIVATE_UPSTREAM_MESSAGE") {
 						t.Fatal("partial error stream was lost, replayed or exposed provider text")
 					}
+					var terminal retryErrorEnvelope
+					payload := strings.SplitN(strings.SplitN(failed.Body.String(), "event: error\ndata: ", 2)[1], "\n\n", 2)[0]
+					if err := json.Unmarshal([]byte(payload), &terminal); err != nil {
+						t.Fatal(err)
+					}
+					if terminal.Error.Retry.AfterSeconds == nil || *terminal.Error.Retry.AfterSeconds != 0 || !terminal.Error.Retry.ReselectProvider || !strings.Contains(terminal.Error.Message, failed.Header().Get("X-TideMux-Request-ID")) || failed.Result().Header.Get("Retry-After") != "" {
+						t.Fatal("mid-stream recovery guidance was not in the terminal event")
+					}
 					rows, err := h.ledger.Recent(context.Background(), 10)
 					if err != nil || len(rows) != 1 || rows[0].Failure == nil || rows[0].Failure.Category != "unknown" || rows[0].Failure.Retryability != "unknown" {
 						t.Fatalf("unknown upstream failure was reclassified: %+v %v", rows, err)
 					}
 					request("active", model, false, 200, 1, "b")
-					request("active", "a/one", false, 503, 0, "")
+					request("active", "a/one", false, 429, 0, "")
 					request("active", "a/two", false, 200, 1, "a")
 					// A successful real probe restores a without moving the healthy
 					// random/auto binding that already recovered onto b.
