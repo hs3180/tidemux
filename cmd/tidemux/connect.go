@@ -128,6 +128,9 @@ func launch(args []string, stdout, stderr *os.File) error {
 	// Use the running view's per-model limits, including catalog discovery.
 	// A shared bare model must not inherit one candidate's exclusive limits.
 	capabilities := catalog.capabilitiesFor(providerRef, *model)
+	if len(c.Providers) == 0 {
+		capabilities = c.ModelCapabilities // legacy profiles do not discover a catalog
+	}
 	overrides, clientArgs, err := clientLaunch(name, url, *model, state, os.Getenv("KILO_CONFIG_CONTENT"), capabilities)
 	if err != nil {
 		return err
