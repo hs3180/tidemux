@@ -5,6 +5,7 @@ The test uses fake Keychain credentials and loopback HTTP mocks only. It does
 not read the user's Keychain or contact a real provider.
 """
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -47,19 +48,32 @@ class UpstreamHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length)
+        body = json.loads(self.rfile.read(length))
         self.server.posts.append({
-            "body": json.loads(raw),
+            "body": body,
             "auth_ok": self.headers.get("Authorization") == "Bearer " + PROVIDER_KEY,
         })
+        if self.path.startswith("/success/"):
+            self._write(200, json.dumps({
+                "id": "test", "object": "chat.completion", "model": "custom-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": UPSTREAM_SENTINEL}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2,
+                          "prompt_tokens_details": {"cached_tokens": 3, "cache_write_tokens": 1}},
+            }).encode())
+            return
+        if body.get("stream"):
+            # Deliver content, then EOF without a terminal marker.
+            frame = {"choices": [{"index": 0, "delta": {"content": UPSTREAM_SENTINEL}}]}
+            self._write(200, b"data: " + json.dumps(frame).encode() + b"\n\n", "text/event-stream")
+            return
         self._write(403, json.dumps({"error": {
             "code": "private-provider-code",
             "message": UPSTREAM_SENTINEL,
         }}).encode())
 
-    def _write(self, status, payload):
+    def _write(self, status, payload, content_type="application/json"):
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -128,13 +142,13 @@ def main():
                 "max_in_flight": 2,
                 "ledger_path": str(ledger),
                 "access_token_keychain": {"service": "test.gateway", "account": "local"},
-                "providers": {"mock": {
+                "providers": {name: {
                     "protocol": "openai",
-                    "base_url": f"http://127.0.0.1:{upstream.server_port}/v1",
-                    "upstream_id": "mock",
+                    "base_url": f"http://127.0.0.1:{upstream.server_port}/{name}/v1",
+                    "upstream_id": name,
                     "upstream_keychain": {"service": "test.provider", "account": "local"},
                     "supported_models": ["custom-model"],
-                }},
+                } for name in ("mock", "success", "stream")},
             }
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -172,6 +186,20 @@ def main():
                 raise RuntimeError(f"mock upstream error was not relayed safely: HTTP {status}: {body}")
             terminal_id = headers["X-TideMux-Request-ID"]
 
+            outcomes = [(terminal_id, "mock", "error", 502)]
+            for provider, stream in (("success", False), ("stream", True)):
+                status, body, headers = request(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    "POST", {"model": provider + "/custom-model", "stream": stream,
+                             "messages": [{"role": "user", "content": REQUEST_SENTINEL}]},
+                    session_id=SESSION_SENTINEL,
+                )
+                if status != 200 or not headers.get("X-TideMux-Request-ID"):
+                    raise RuntimeError(f"{provider} fixture failed: HTTP {status}")
+                if stream and ("event: error" not in body or "[DONE]" in body):
+                    raise RuntimeError("incomplete HTTP-200 stream did not end with an error")
+                outcomes.append((headers["X-TideMux-Request-ID"], provider, "error" if stream else "success", 200))
+
             status, _, headers = request(
                 f"http://127.0.0.1:{port}/v1/unsupported?{QUERY_SENTINEL}", "GET", token="invalid-local-token",
             )
@@ -187,22 +215,38 @@ def main():
             events = [json.loads(line) for line in stderr.splitlines() if line.strip()]
             version = subprocess.check_output([str(binary), "version"], text=True).strip()
             validate_runtime_events(events, version)
-            by_request = {
-                event.get("requestId"): event
-                for event in events
-                if event.get("event") in ("request_terminal", "local_rejection")
-            }
-            terminal = by_request.get(terminal_id)
-            rejected = by_request.get(rejection_id)
-            if not terminal or terminal.get("event") != "request_terminal":
-                raise RuntimeError(f"terminal JSON event did not correlate to {terminal_id}: {stderr}")
-            if (terminal.get("provider_ref") != "mock" or terminal.get("message", {}).get("model") != "custom-model"
-                    or terminal.get("outcome") != "error" or terminal.get("http_status") != 502
-                    or terminal.get("record_persisted") is not True):
-                raise RuntimeError(f"terminal runtime event is incomplete: {terminal}")
-            if any(field in terminal for field in ("session_id", "estimated_cost", "price_snapshot", "input_tokens", "output_tokens")):
-                raise RuntimeError(f"terminal runtime event included session/accounting fields: {terminal}")
-            if not rejected or rejected.get("event") != "local_rejection" or rejected.get("http_status") != 401:
+            for event in events:
+                if event.get("schema_version") != 2:
+                    raise RuntimeError("unexpected runtime schema version")
+                datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
+            for identity, provider, outcome, status in outcomes:
+                matches = [event for event in events if event.get("event") == "request_terminal"
+                           and event.get("requestId") == identity]
+                if len(matches) != 1:
+                    raise RuntimeError("missing or duplicate terminal event for " + provider)
+                event, = matches
+                if (event.get("provider_ref"), event.get("outcome"), event.get("http_status")) != (provider, outcome, status):
+                    raise RuntimeError("terminal outcome/status mismatch for " + provider)
+                for field in ("http_status", "latency_ms", "queue_time_ms"):
+                    if type(event.get(field)) is not int or event[field] < 0:
+                        raise RuntimeError("invalid numeric terminal field: " + field)
+                if event.get("record_persisted") is not True:
+                    raise RuntimeError("terminal event is not joined to persisted accounting")
+                if event.get("message", {}).get("model") != "custom-model":
+                    raise RuntimeError("terminal event lost its canonical model")
+                if any(field in event for field in ("session_id", "estimated_cost", "price_snapshot", "input_tokens", "output_tokens")):
+                    raise RuntimeError("terminal event included session/accounting fields")
+                usage = event.get("message", {}).get("usage")
+                if provider == "success":
+                    expected = {"input_tokens": 3, "output_tokens": 2,
+                                "cache_read_input_tokens": 3, "cache_creation_input_tokens": 1}
+                    if usage != expected:
+                        raise RuntimeError("canonical known usage changed")
+                elif usage is not None:
+                    raise RuntimeError("failed request fabricated unknown usage")
+            rejections = [event for event in events if event.get("event") == "local_rejection"
+                          and event.get("requestId") == rejection_id]
+            if len(rejections) != 1 or rejections[0].get("http_status") != 401:
                 raise RuntimeError(f"local rejection JSON event did not correlate to {rejection_id}: {stderr}")
             if not any(event.get("event") == "gateway_start" for event in events) or not any(
                 event.get("event") == "gateway_shutdown" for event in events
@@ -211,12 +255,12 @@ def main():
             with sqlite3.connect(ledger, timeout=5) as connection:
                 audit_ids = {row[0] for row in connection.execute("SELECT id FROM request_audit")}
                 diagnostic_ids = {row[0] for row in connection.execute("SELECT id FROM local_diagnostics")}
-            if terminal_id not in audit_ids or rejection_id not in diagnostic_ids:
+            if not {item[0] for item in outcomes}.issubset(audit_ids) or rejection_id not in diagnostic_ids:
                 raise RuntimeError("runtime request IDs did not join to their persisted audit/diagnostic rows")
             for secret in (GATEWAY_KEY, PROVIDER_KEY, REQUEST_SENTINEL, UPSTREAM_SENTINEL, QUERY_SENTINEL, SESSION_SENTINEL, "invalid-local-token"):
                 if secret in stderr:
                     raise RuntimeError(f"runtime logs exposed sensitive marker {secret!r}")
-            if len(upstream.posts) != 1 or not upstream.posts[0]["auth_ok"] or REQUEST_SENTINEL not in json.dumps(upstream.posts[0]["body"]):
+            if len(upstream.posts) != 3 or any(not post["auth_ok"] or REQUEST_SENTINEL not in json.dumps(post["body"]) for post in upstream.posts):
                 raise RuntimeError(f"unexpected provider mock traffic: {upstream.posts}")
             for ledger_file in root.glob("ledger.db*"):
                 if ledger_file.is_file() and REQUEST_SENTINEL.encode() in ledger_file.read_bytes():
@@ -226,6 +270,8 @@ def main():
                 "terminal_request_correlated": True, "local_rejection_correlated": True,
                 "stdout_human_readable": True, "stderr_jsonl": True,
                 "ledger_join_verified": True, "request_body_not_persisted": True,
+                "http_200_stream_failure": True, "known_and_unknown_usage": True,
+                "typed_fields_and_timestamps": True,
                 "sensitive_markers_absent": True, "fake_credentials_only": True,
             }, ensure_ascii=False))
     finally:

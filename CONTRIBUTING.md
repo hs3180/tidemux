@@ -46,7 +46,7 @@ privacy, security and SPDX/SBOM material.
 3. Verify every checksum, binary version, BUILD source commit, SBOM and archive
    contents. Extract into a fresh directory; check its Markdown links and run
    every required package gate against that exact binary.
-4. Finish installed-client, official ccusage and actual collector checks below.
+4. Finish installed-client and official ccusage checks below.
    Verify installation/reinstallation and data-preserving uninstall in isolated
    directories. Keep source/archive/binary hashes and results outside the repo.
 5. After the scoped PRs are human-approved and explicitly authorized for merge,
@@ -81,12 +81,11 @@ client generates that header itself. Verify ambiguity, binding, recovery and
 actual upstream/key attempt counts.
 
 Run the unmodified official ccusage executable on the same package's session
-logs and verify known counts and exclusion of unknown usage. Run actual
-Filebeat/Logstash against isolated ES with fresh namespaces and registries;
-check types/time/usage, replay IDs, parse failures and mapping DLQ. Production
-ES tests require explicit authorization and a dedicated namespace.
-The Docker Logstash gate gives image download a separate five-minute bound;
-each config validation retains its 90-second bound. Partial command output and
-cleanup diagnostics remain in the supplied evidence directory on failures.
+logs and verify known counts and exclusion of unknown usage. Local startup,
+runtime and usage-log package checks verify JSONL, field types/timestamps,
+event/request identities, HTTP-200 stream failures, accounting and privacy.
+CI and release acceptance do not require Elasticsearch, Filebeat or Logstash.
+Collector configuration, indexing and dead-letter queues belong to the
+operator's deployment; the user guide provides reference configuration.
 Build and CI artifact upload do not publish a release. If public installation
 fails, resolve it in a new qualified version before announcing delivery.
