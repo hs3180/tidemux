@@ -14,9 +14,9 @@ Homebrew commands are in the [README](../README.md#install).
 For a standalone installation, download and inspect the version-pinned script:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.3/scripts/install.sh -o /tmp/tidemux-install.sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.4/scripts/install.sh -o /tmp/tidemux-install.sh
 less /tmp/tidemux-install.sh
-TIDEMUX_VERSION=0.3.3 sh /tmp/tidemux-install.sh
+TIDEMUX_VERSION=0.3.4 sh /tmp/tidemux-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -71,6 +71,10 @@ cannot use this gateway as their model provider. Coding agents can still follow
 this guide to install and configure TideMux.
 
 ## Routing and limits
+
+When upgrading to 0.3.4, remove `routing.billing_exhaustion_failover` from an old
+configuration, including a value of `false`. The field is no longer accepted.
+Each client retry is a new request; the gateway dispatches at most once for it.
 
 | Model | Selection |
 | --- | --- |
@@ -293,6 +297,14 @@ provider-owned. TideMux carries tool calls and never executes client tools.
 Responses API, audio, embeddings and IDE integrations are outside the supported
 interface. Full interactive/dsh/Codex workflows are outside release acceptance.
 
+GLM's native server search can return provider-specific names, assistant
+`tool_result` blocks with string content, and a reported search counter of zero.
+Native mode preserves these provider blocks and usage. Include the tool
+definitions on every request that needs them. [#157](https://github.com/hs3180/tidemux/issues/157)
+tracks the remaining provider contract/continuation limitations; the provider's
+[search MCP documentation](https://docs.bigmodel.cn/cn/coding-plan/mcp/search-mcp-server)
+describes its client tool workflow.
+
 ## Troubleshooting
 
 Run `tidemux doctor`, `tidemux gateway check` and `tidemux doctor --diagnostics`
@@ -308,6 +320,7 @@ first. Correlate failures with the JSON event's request ID and safe error code.
 | `runtime_identity_failed` | Check OS randomness and restart; this early failure intentionally has no JSON fallback. |
 | `active_session_limit` | Wait for active work and retained sessions to release, then retry with bounded backoff. A new conversation does not free another slot. |
 | Upstream stream/response error | Check the `request_terminal` event's `outcome` and `error_code`; HTTP 200 can still end in failure. |
+| `upstream_timeout` | Check `error.failure.phase` and the effective upstream protocol. Defaults are 60 seconds for non-streaming and ten minutes for streaming; a fast model-list query does not establish inference health. |
 
 Partial output is not a completed turn. TideMux never replays output that may
 have reached the client; client retries create new requests. After correcting
