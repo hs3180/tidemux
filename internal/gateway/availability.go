@@ -264,6 +264,41 @@ func availabilityFailure(err error, ctxErr error, handled bool) (modelScope bool
 	case adapter.ProviderErrorInsufficientBalance:
 		return false, "insufficient_balance", callErr.Cooldown
 	}
+	// An unknown upstream error frame is failure evidence for this model,
+	// without proving a provider-wide outage or a retryable error category.
+	// Explicit terminal categories and 4xx statuses must retain their meaning.
+	if callErr.Category != "" {
+		return
+	}
+	failure := callErr.Failure.Normalize()
+	if failure == nil || failure.Retryability == "terminal" {
+		return
+	}
+	if failure.Source == "stream_error" {
+		if failure.Retryability == "unknown" {
+			return true, "unclassified_stream_error", routeRecoveryCooldown
+		}
+		return true, "upstream_stream_error", callErr.Cooldown
+	}
+	if failure.Retryability != "retryable" {
+		return
+	}
+	switch callErr.Code {
+	case "upstream_timeout":
+		if failure.Phase != "conversion" && failure.Source != "downstream" {
+			return true, "upstream_timeout", callErr.Cooldown
+		}
+	case "upstream_stream_read_error", "incomplete_upstream_stream":
+		if failure.Source == "stream" {
+			return true, "stream_interrupted", callErr.Cooldown
+		}
+	case "upstream_read_error", "upstream_transport_error":
+		return true, "transport_error", callErr.Cooldown
+	case "upstream_error":
+		if failure.Source == "http_error" && failure.HTTPStatus >= 500 {
+			return true, "upstream_error", callErr.Cooldown
+		}
+	}
 	return
 }
 
@@ -279,8 +314,10 @@ func boundedRecoveryBackoff(reason string, failures uint16, upstream time.Durati
 	if reason == "insufficient_balance" {
 		base = billingExhaustionCooldown
 	}
-	for n := uint16(1); n < failures && base < availabilityMaxBackoff; n++ {
-		base *= 2
+	if reason != "unclassified_stream_error" {
+		for n := uint16(1); n < failures && base < availabilityMaxBackoff; n++ {
+			base *= 2
+		}
 	}
 	if base > availabilityMaxBackoff {
 		base = availabilityMaxBackoff
