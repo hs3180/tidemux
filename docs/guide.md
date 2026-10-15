@@ -176,8 +176,11 @@ initiates at most one such attempt.
 Success, failure, cancellation, timeout and in-flight counts are separate.
 Skipped keys and local rejections add no attempts. These counters are not billing.
 Compatible reloads preserve them; credential/connection changes or restart reset
-the counters. A recorded server pause survives credential rotation on the same
-provider endpoint; changing the endpoint or restarting the process resets it.
+the counters. A server pause survives policy reload and credential rotation on
+the same provider endpoint/protocol, even when its response arrives after the
+reload. It also protects requests already queued under an older configuration.
+Changing the endpoint/protocol, removing and re-adding the provider, or restarting
+the process resets it. Recovery advice uses the current available routes.
 Toggling diagnostics clears counters/history while preserving routing
 and cooldowns. See [recovery bounds](design.md#routing-and-recovery).
 

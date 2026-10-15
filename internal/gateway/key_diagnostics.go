@@ -180,13 +180,15 @@ func (p *providerKeyPool) diagnosticStatus(now time.Time) *KeyPoolStatus {
 		Keys: []KeyStatus{}, RecentFailovers: append([]KeyFailover{}, p.decisions...), RecentLimit: keyDecisionLimit, RecentTTLSeconds: int(keyDecisionTTL / time.Second)}
 	status.ConsecutiveRateLimits = p.rateStreak
 	status.RateLimitRetryAt, status.LastRateLimitAt, status.RecoveryInProgress = p.rateProviderUntil, p.lastRateLimit, p.rateProbe != nil
-	status.ProviderRetryAt = p.providerRetryUntil
+	server := p.providerRetry.snapshot()
+	status.ProviderRetryAt = server.until
+	status.RecoveryInProgress = status.RecoveryInProgress || server.probe != nil
 	for i, label := range p.labels {
 		key := KeyStatus{Label: label, State: "eligible", LastFailureClass: p.failureClasses[i], LastFailureAt: p.failureTimes[i]}
 		key.ConsecutiveRateLimits = p.rateFailures[i]
 		until := p.cooldowns[i]
-		if p.providerRetryUntil.After(until) {
-			until = p.providerRetryUntil
+		if server.until.After(until) {
+			until = server.until
 		}
 		if until.After(now) {
 			key.State, key.CooldownUntil = "cooling", until

@@ -29,6 +29,14 @@ probe keeps its claim until the old request ends; its old result only releases
 ownership. Local prompt-prefix estimates use the admitted generation, are bounded
 to 256 entries/16 MiB with five-minute idle expiry, and reset on restart.
 
+Server-supplied provider waits have a separate identity: a continuously
+configured provider name with the same resolved protocol and endpoint shares
+its deadline, observation version and recovery claim across credential changes
+and admitted views. A late Retry-After still pauses current and queued requests
+after policy reload or key rotation, including during view preparation. Changing
+the endpoint/protocol, removal/re-addition or process restart starts new server
+wait state. This does not relax epoch/generation fences for other health results.
+
 ## Routing and recovery
 
 Explicit routes, ordered auto chains and shared random/price selection use the
@@ -71,6 +79,8 @@ has occurred, the provider streak. Older successes and old routing epochs cannot
 erase newer failures. Operational streaks do not depend on optional telemetry.
 Only one real request probes a rate-limited provider after silence, even if its
 idle availability observation has expired; cancellation releases that claim.
+The dispatch check also claims recovery if a wait appeared and expired while
+the request was queued; sharing a server wait also shares this single probe.
 
 Gateway/provider session ceilings count logical conversations separately from
 request concurrency. The optional global request gate is disabled when
