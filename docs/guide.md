@@ -1,5 +1,11 @@
 # User guide
 
+This guide owns setup, commands, configuration examples, observable interfaces
+and troubleshooting. The [core design](design.md) owns runtime semantics,
+invariants and policy bounds; link to its contracts instead of restating them.
+CLI help owns option syntax, and [CONTRIBUTING](https://github.com/hs3180/tidemux/blob/main/CONTRIBUTING.md)
+owns validation and releases.
+
 Start with the [README](../README.md#first-request). Use `tidemux --help` and
 `tidemux <command> --help` for all options and defaults. Pass `--config PATH`
 to manage another profile; the gateway and its clients must use the same file.
@@ -347,54 +353,37 @@ recovery time remains unknown. Its fixed conditional guidance is included even
 when provider message forwarding is disabled or a forwarded reason is present.
 Set `forward_error_messages: false` for strict exclusion of upstream free text.
 
-Provider error reasons are forwarded by default in the primary `error.message`
-for both HTTP and terminal SSE errors. Standard API types/codes keep their meaning
-across protocols; a recognized native code uses `error.code` and the generated
-code moves to `gateway_code`. Specific unsupported-parameter diagnostics retain
-their gateway code. Configured vendor mappings keep their category code
-and expose the retained original as `provider_code`. No numeric vendor code is
-classified globally. Clients can still choose their own recovery behavior.
+### Provider error messages
 
-For a provider whose errors can echo sensitive account or prompt details, set
-`"forward_error_messages": false` in its `providers.REF` JSON object. Omitted or
-true enables forwarding. Legacy single-provider configuration uses the same
-field at the root. Save atomically; confirm the config reload applied before
-sending new requests. Already admitted requests retain their original policy.
-This switch removes text from client errors, SQLite and JSONL. The enabled policy
-removes known credentials/sessions and common credential/account shapes, cleans
-controls and terminal escapes, and limits reasons to 512 Unicode characters.
-It cannot recognize every sensitive free-text value; see [privacy](../PRIVACY.md).
+Read `error.message` and the diagnostic identifiers `error.code`, `gateway_code`
+and `provider_code` when investigating an upstream failure. Their classification,
+forwarding defaults and redaction rules are defined by the
+[failure-message contract](design.md#failure-metadata-and-messages).
 
-Unambiguous explicit token comparisons retain `actual_tokens` and `limit_tokens`
-in `error` and `error.failure` even with forwarding disabled. They describe that
-rejected request, not the model's permanent window or every key in a pool.
-Contradictory, missing and overflowing facts stay unknown. Model overrides and
-catalog metadata remain unchanged. Before upgrading from 0.3.4, set false for
-providers that require the previous text-free behavior; keep a config/ledger
-backup. New optional audit JSON fields need no SQLite table migration, and old
-rows remain readable. The existing legacy billing-failover field must still be
-removed according to the migration guidance above.
+To exclude upstream free text, set `"forward_error_messages": false` in the
+selected `providers.REF` JSON object; legacy single-provider configuration places
+this field at the root. Save atomically and confirm the reload applied. Use this
+setting before upgrading from 0.3.4 if the provider needs the previous text-free
+policy, and keep a configuration/ledger backup. Review the [privacy contract](../PRIVACY.md)
+before sharing diagnostic metadata.
 
-If a stream fails after partial output, its terminal SSE error carries the
-same recovery guidance and a gateway `request_id`. The ID also appears in the
-error message for retry guidance, the response header and the corresponding
-audit/log. Use the new request to recover; the partial reply can be incomplete.
-For `audit_failed_do_not_retry_blindly`, the provider may already have completed
-the request. `error.retry.strategy=manual_check` and `max_attempts=0` require
-checking the request ID and accounting state before deciding to resubmit. HTTP
-errors send `x-should-retry: false`; an already-open stream can only carry this
-guidance in its terminal error. The gateway holds successful stop/finish signals
-until the audit commits. After an audit failure, new generation requests are
-rejected locally with `audit_unavailable`, including after a config reload;
-client retries cannot keep generating upstream work. Already-dispatched calls
-may still finish. Reconcile the failed request's accounting, repair storage,
-then restart the gateway to resume. A successful later write does not clear
-this guard. Model discovery remains available.
+`actual_tokens` and `limit_tokens`, when supplied, describe the rejected request;
+use the [token-fact rules](design.md#failure-metadata-and-messages) when comparing
+them with model discovery or a configured context override.
+
+### Audit failures
+
+Use the response or terminal SSE request ID to inspect the corresponding
+SQLite/JSONL record. For `audit_failed_do_not_retry_blindly` with
+`error.retry.strategy=manual_check`, check accounting before resubmitting: the
+provider may already have completed the request. If later requests report
+`audit_unavailable`, reconcile the failed request, repair storage, then restart
+the gateway. Model discovery remains available. The
+[audit guard contract](design.md#audit-failure-guard) defines its lifetime and
+stream-completion ordering.
+
 [SDK HTTP retries and mid-stream errors have different handling](https://platform.claude.com/docs/en/api/errors),
-so a client may need an explicit retry even when a compatible provider is ready.
-SDK-standard `request-id` and `x-request-id` headers carry the same gateway ID
-as `X-TideMux-Request-ID`. Responses include `X-TideMux-Version` for the running
-binary's version.
+so a client may need an explicit new request after resolving the failure.
 
 Availability JSON includes failure `scope`, optional `retry_after_seconds` and
 up to 16 alternatives for an observed model. Omitted wait means no exact time
@@ -466,26 +455,25 @@ Runtime stderr and terminal-request files use the same schema-2 JSONL records.
 Session files live at `logs/projects/tidemux/*.jsonl` beside the ledger.
 Each event has `timestamp`, `event`, `service` (name/version/process instance)
 and a unique persisted `event_id`. Requests also have `requestId`, outcome,
-model and known usage. Full bodies, credentials and raw sessions
+model (`message.model`) and known usage. Full bodies, credentials and raw sessions
 are omitted; provider error reasons follow the configured policy; [privacy](../PRIVACY.md) covers retained metadata.
 
-For a failed call, compare the request ID in the response header or terminal SSE
-error with `requestId` in the log. `failure` records upstream HTTP/embedded error
+For a failed call, compare the response's `request-id`, `x-request-id` or
+`X-TideMux-Request-ID` (or terminal SSE `request_id`) with `requestId` in the log.
+`X-TideMux-Version` identifies the running binary version. `failure` records upstream HTTP/embedded error
 status, source/phase, a safe provider code or its redaction state, provider request
 ID when valid, category and retryability, plus the redacted reason when enabled
-and explicit token facts. Terminal records also carry `key_label` and `backend_id`;
-use the authenticated key status to match the actual pool slot. Labels survive
-policy reloads but reset with the process or connection/key pool. `backend_id`
-identifies that gateway connection, not a known physical upstream server. The
-canonical schema 2 model remains `message.model`. An HTTP 200 stream can end with an error;
+and explicit token facts. Match a terminal `key_label` against the authenticated key status;
+`backend_id` is a gateway connection label. Their
+[identity and lifetime contract](design.md#key-and-connection-labels) explains
+what those labels can establish. An HTTP 200 stream can end with an error;
 use `outcome` and the terminal error. `unknown` means the cause was not established,
 not a confirmed quota, policy or context-limit failure. Preserve the provider
 request ID when asking that provider to investigate; review metadata before sharing.
-`failure.response_retry_headers` records the generated `x_should_retry`, optional
-`retry_after_seconds` and matching `retry_after_ms`. An empty object means retry
-headers were absent, including an error after SSE headers were sent. This
-content-free snapshot is shared by the response, terminal log and SQLite audit;
-it does not copy arbitrary provider response headers.
+The optional `failure.response_retry_headers` object exposes `x_should_retry`,
+`retry_after_seconds` and `retry_after_ms`; use the
+[response snapshot contract](design.md#response-retry-snapshot) to interpret
+absence and consistency across outputs.
 
 Point an independently installed [ccusage](https://github.com/ccusage/ccusage)
 at the `logs/` directory:

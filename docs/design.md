@@ -1,6 +1,9 @@
 # Core design
 
-The [user guide](guide.md) owns setup and operations. CLI help owns flags;
+This manual is the normative source for runtime semantics, invariants and policy
+bounds. The [user guide](guide.md) owns setup, commands, configuration examples,
+observable interfaces and troubleshooting; keep only an operator summary and a
+link there instead of a second specification. CLI help owns flags;
 [CONTRIBUTING](https://github.com/hs3180/tidemux/blob/main/CONTRIBUTING.md) owns validation and releases.
 
 ```text
@@ -205,6 +208,8 @@ compatible reloads retain that process version.
 
 ## Accounting and observability
 
+### Audit and budget settlement
+
 Each downstream generation request has one terminal adapter audit and at most
 one initiated upstream generation attempt. Queued cancellation is recorded
 without upstream work. Request/events
@@ -215,6 +220,9 @@ attempts survive crashes as unknown charges, fail closed when unresolved and
 settle against the admitted provider/policy. Operational counts add no usage rows.
 Prices/currencies stay with history; missing usage/cost is unknown, and local
 estimates or supplied statement CSVs are not automatically fetched invoices.
+
+### Audit failure guard
+
 If audit persistence fails after dispatch, the terminal outcome is error even
 when the upstream completed successfully. Preserve known usage/cost and upstream
 health evidence independently. Before headers are sent, return `x-should-retry:
@@ -231,12 +239,16 @@ Provider health is independent. Already-dispatched calls can still finish; a
 later successful write does not repair missing accounting or clear the latch.
 Reconcile the failed request and repair storage, then restart to resume work.
 
+### Key counters
+
 Optional key counters observe initiated HTTP calls and complete outcomes; labels
 are assigned independently of secrets. One state slot exists per configured key;
 legacy failover history is bounded to 32 records per provider for one hour. The
 single-attempt policy does not create in-request key failover records. Generation
 or telemetry-epoch changes fence old completions; disabling counters preserves
 operational routing/cooldowns. Status queries are authenticated and read-only.
+
+### Runtime identity and usage records
 
 The central logger supplies schema 2, service version, a random process identity
 and unique event ID to all runtime events. Identity failure stops startup without
@@ -246,6 +258,9 @@ other events add no assistant usage. `event_id` deduplicates copies/replay;
 `requestId` correlates events. SQLite is authoritative for accounting. Logs and
 queries omit credentials, full bodies and raw session IDs. Provider error reasons
 follow the bounded/redacted message policy below.
+
+### Failure metadata and messages
+
 Failed calls carry the same normalized `failure` metadata in the audit JSON,
 terminal event and client error. Upstream HTTP status and embedded SSE error
 status are separate from downstream status: a failed open stream can still have
@@ -259,9 +274,10 @@ Recognized native codes occupy `error.code` with the gateway code separately in
 `gateway_code`; mapped vendor codes retain the category code and `provider_code`.
 Numeric vendor codes alone never imply a category. Unknown identifiers remain
 redacted. The per-provider `forward_error_messages` policy defaults to true;
-false omits text from clients and all persistence. Legacy single-provider configs
-support the same field at the root. Policy reloads retain key/connection identity,
-and admitted calls keep their original policy and credential redaction set.
+false omits text from clients and all persistence. Configuration placement is in
+the [user guide](guide.md#provider-error-messages). Policy reloads retain
+key/connection identity, and admitted calls keep their original policy and
+credential redaction set.
 
 Known admitted credentials and raw sessions are removed before message bounds;
 credential shapes, control/format characters and terminal escapes are cleaned.
@@ -270,6 +286,8 @@ comparisons yield request-local `actual_tokens` and `limit_tokens` even when tex
 is disabled or truncated. Ambiguous or overflowing counts remain unknown; no
 catalog or configured capability is changed. The [privacy contract](../PRIVACY.md)
 describes residual free-text risk and strict-policy migration.
+
+### Key and connection labels
 
 Each initiated attempt persists an independently assigned `key_label` and
 `backend_id` (the admitted provider connection, not an asserted physical server).
@@ -281,6 +299,8 @@ backend identity remains unknown unless the provider supplies correlation;
 request IDs support provider-side investigation without copying arbitrary headers.
 The audit JSON can grow these optional fields without altering historical rows
 or migrating SQLite tables. Schema 2 retains the canonical `message.model`.
+
+### Response retry snapshot
 
 After health feedback, the gateway freezes its response retry decision before
 the adapter commits the terminal audit. `failure.response_retry_headers` retains
