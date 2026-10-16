@@ -25,7 +25,7 @@ func TestProviderContextOverridePreservesOtherSettings(t *testing.T) {
 		ModelCapabilities: gateway.ModelCapabilities{ContextTokens: 65536, MaxOutputTokens: 8192},
 	}
 	c := gateway.Config{
-		ListenAddr: defaultListenAddr, MaxInFlight: 4, MaxActiveSessions: 17,
+		ListenAddr: defaultListenAddr, MaxInFlight: 4,
 		LedgerPath:          filepath.Join(dir, "ledger.db"),
 		AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"},
 		Providers:           map[string]gateway.Provider{"glm": provider, "other": provider},

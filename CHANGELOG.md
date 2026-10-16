@@ -2,6 +2,11 @@
 
 ## 0.3.5 — 2026-10-16
 
+- Keep logical-session limits only at provider scope. Remove the gateway-wide
+  session cap, CLI option and status counters; reject the obsolete top-level
+  `max_active_sessions` field, including zero, with removal guidance. Preserve
+  provider occupancy across reload and keep request concurrency independent.
+
 - Add a remaining-cooldown switch threshold, default 60 seconds with global,
   provider and model overrides. Keep short-wait random/auto affinity, switch long
   waits only on a new request to a healthy compatible provider, and preserve

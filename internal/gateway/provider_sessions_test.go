@@ -19,7 +19,7 @@ import (
 	"github.com/hs3180/tidemux/internal/limiter"
 )
 
-func providerCapacityFixture(t *testing.T, cap, global int, post func(http.ResponseWriter, *http.Request)) (*handler, Config, *atomic.Int64) {
+func providerCapacityFixture(t *testing.T, cap, otherCap int, post func(http.ResponseWriter, *http.Request)) (*handler, Config, *atomic.Int64) {
 	t.Helper()
 	calls := &atomic.Int64{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,12 +36,15 @@ func providerCapacityFixture(t *testing.T, cap, global int, post func(http.Respo
 	}))
 	t.Cleanup(upstream.Close)
 	c := routingTestConfig(filepath.Join(t.TempDir(), "ledger.db"))
-	c.MaxInFlight, c.MaxActiveSessions = 64, global
+	c.MaxInFlight = 64
 	addRoutingProvider(&c, "glm", upstream.URL, "openai", "custom-model", "other-model")
-	addRoutingProvider(&c, "other", upstream.URL, "openai", "custom-model")
+	addRoutingProvider(&c, "other", upstream.URL, "openai", "custom-model", "other-model")
 	p := c.Providers["glm"]
 	p.MaxActiveSessions = cap
 	c.Providers["glm"] = p
+	p = c.Providers["other"]
+	p.MaxActiveSessions = otherCap
+	c.Providers["other"] = p
 	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -67,59 +70,82 @@ func requireCapacityRejection(t *testing.T, out *httptest.ResponseRecorder, scop
 	}
 }
 
-func TestProviderCapacityGLMFiveIndependentFromOtherAndGlobal(t *testing.T) {
+func TestProviderCapacityIndependentFivePerProvider(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		t.Run(protocol, func(t *testing.T) {
-			h, _, calls := providerCapacityFixture(t, 5, 6, nil)
-			for i := range 5 {
-				if out := providerCapacityRequest(h, protocol, fmt.Sprint(i), "glm", "custom-model"); out.Code != 200 {
-					t.Fatalf("admission %d: %d %s", i, out.Code, out.Body)
+			h, _, calls := providerCapacityFixture(t, 5, 5, nil)
+			for _, ref := range []string{"glm", "other"} {
+				for i := range 5 {
+					model := "custom-model"
+					if i%2 == 1 {
+						model = "other-model"
+					}
+					if out := providerCapacityRequest(h, protocol, fmt.Sprintf("%s-%d", ref, i), ref, model); out.Code != 200 {
+						t.Fatalf("%s session %d: %d %s", ref, i, out.Code, out.Body)
+					}
+				}
+				out := providerCapacityRequest(h, protocol, "sixth-"+ref, ref, "other-model")
+				requireCapacityRejection(t, out, "provider", 5)
+				if !strings.Contains(out.Body.String(), `"provider_ref":"`+ref+`"`) {
+					t.Fatal(out.Body)
 				}
 			}
-			requireCapacityRejection(t, providerCapacityRequest(h, protocol, "sixth", "glm", "custom-model"), "provider", 5)
-			if calls.Load() != 5 {
-				t.Fatalf("rejected request dispatched: %d", calls.Load())
+			if calls.Load() != 10 {
+				t.Fatalf("dispatches=%d, want ten; refusals must not dispatch", calls.Load())
 			}
-			if _, current, _ := h.sessions.Stats(); current != 5 {
-				t.Fatalf("first provider refusal left a global lease: %d", current)
+			var audits, rejections int
+			if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM request_audit").Scan(&audits); err != nil {
+				t.Fatal(err)
 			}
-			if _, current, _ := h.providerSessions["glm"].Stats(); current != 5 {
-				t.Fatalf("first provider refusal changed provider occupancy: %d", current)
+			if err := h.ledger.QueryRow(context.Background(), "SELECT COUNT(*) FROM local_diagnostics").Scan(&rejections); err != nil {
+				t.Fatal(err)
 			}
-			for _, r := range []struct{ session, ref, model string }{{"0", "glm", "other-model"}, {"different-sixth", "other", "custom-model"}, {"0", "other", "custom-model"}} {
-				if out := providerCapacityRequest(h, protocol, r.session, r.ref, r.model); out.Code != 200 {
-					t.Fatalf("reuse/independence: %d %s", out.Code, out.Body)
+			if audits != 10 || rejections != 2 {
+				t.Fatalf("audits=%d local rejections=%d", audits, rejections)
+			}
+			for _, ref := range []string{"glm", "other"} {
+				if out := providerCapacityRequest(h, protocol, ref+"-0", ref, "other-model"); out.Code != 200 {
+					t.Fatal(out.Code, out.Body)
 				}
-			}
-			requireCapacityRejection(t, providerCapacityRequest(h, protocol, "seventh", "other", "custom-model"), "gateway", 6)
-			if calls.Load() != 8 {
-				t.Fatalf("global refusal dispatched: %d", calls.Load())
-			}
-			if _, current, _ := h.sessions.Stats(); current != 6 {
-				t.Fatalf("global sessions=%d", current)
 			}
 			req := httptest.NewRequest("GET", "/tidemux/session-status", nil)
 			req.Header.Set("Authorization", "Bearer local-secret")
 			out := httptest.NewRecorder()
 			h.ServeHTTP(out, req)
-			if out.Code != 200 || strings.Contains(out.Body.String(), "sixth") || strings.Contains(out.Body.String(), "local-secret") {
-				t.Fatalf("unsafe status: %d %s", out.Code, out.Body)
-			}
 			var status struct {
 				Providers map[string]sessionCapacityStatus `json:"providers"`
 			}
 			if err := json.Unmarshal(out.Body.Bytes(), &status); err != nil {
 				t.Fatal(err)
 			}
-			if status.Providers["glm"].Current != 5 || status.Providers["other"].Current != 2 || status.Providers["glm"].Rejected != 1 {
-				t.Fatalf("status=%+v", status)
+			if out.Code != 200 || strings.Contains(out.Body.String(), `"gateway"`) || strings.Contains(out.Body.String(), "sixth-") || strings.Contains(out.Body.String(), "local-secret") {
+				t.Fatal(out.Code, out.Body)
+			}
+			for _, ref := range []string{"glm", "other"} {
+				got := status.Providers[ref]
+				if got.Limit != 5 || got.Current != 5 || got.Rejected != 1 {
+					t.Fatalf("%s status=%+v", ref, got)
+				}
 			}
 		})
 	}
 }
 
+func TestSameSessionCountsIndependentlyInEachProvider(t *testing.T) {
+	h, _, calls := providerCapacityFixture(t, 1, 1, nil)
+	for _, ref := range []string{"glm", "other"} {
+		if out := providerCapacityRequest(h, "openai", "shared", ref, "custom-model"); out.Code != 200 {
+			t.Fatal(out.Code, out.Body)
+		}
+		requireCapacityRejection(t, providerCapacityRequest(h, "openai", "new", ref, "other-model"), "provider", 1)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("dispatches=%d", calls.Load())
+	}
+}
+
 func TestProviderCapacitySessionHeaderMetadataAndProtocolNamespace(t *testing.T) {
-	h, _, calls := providerCapacityFixture(t, 1, 2, nil)
+	h, _, calls := providerCapacityFixture(t, 1, 0, nil)
 	if out := providerCapacityRequest(h, "anthropic", "same", "glm", "custom-model"); out.Code != 200 {
 		t.Fatal(out.Body)
 	}
@@ -331,7 +357,7 @@ func TestProviderBalanceFailureDoesNotFailOverOrDisturbBudget(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		for _, retained := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/retained_%v", protocol, retained), func(t *testing.T) {
-				h, c, targetCalls := providerCapacityFixture(t, 1, 3, func(w http.ResponseWriter, r *http.Request) {
+				h, c, targetCalls := providerCapacityFixture(t, 1, 0, func(w http.ResponseWriter, r *http.Request) {
 					io.WriteString(w, responseBody(protocol))
 				})
 				var upstreamCalls atomic.Int64
@@ -396,9 +422,6 @@ func TestProviderBalanceFailureDoesNotFailOverOrDisturbBudget(t *testing.T) {
 				if audits != kept+2 || charges != kept+1 || pending != 0 {
 					t.Fatalf("prior settlement lost audits=%d charges=%d pending=%d", audits, charges, pending)
 				}
-				if _, current, _ := h.sessions.Stats(); current != kept+1 {
-					t.Fatalf("refusal removed existing/global lease or leaked new lease: %d", current)
-				}
 				for ref, want := range map[string]int{"glm": 1, "other": kept} {
 					if _, current, _ := h.providerSessions[ref].Stats(); current != want {
 						t.Fatalf("refusal changed retained provider %s: %d", ref, current)
@@ -412,7 +435,7 @@ func TestProviderBalanceFailureDoesNotFailOverOrDisturbBudget(t *testing.T) {
 func TestProviderCapacityReleaseOnFailureStreamDisconnectAndPanic(t *testing.T) {
 	for _, scenario := range []string{"error", "stream", "disconnect", "panic"} {
 		t.Run(scenario, func(t *testing.T) {
-			h, _, _ := providerCapacityFixture(t, 1, 1, func(w http.ResponseWriter, r *http.Request) {
+			h, _, _ := providerCapacityFixture(t, 1, 0, func(w http.ResponseWriter, r *http.Request) {
 				if scenario == "error" {
 					w.WriteHeader(500)
 					return
@@ -442,9 +465,6 @@ func TestProviderCapacityReleaseOnFailureStreamDisconnectAndPanic(t *testing.T) 
 			if _, current, _ := h.providerSessions["glm"].Stats(); current != 0 {
 				t.Fatalf("provider retained on %s: %d", scenario, current)
 			}
-			if _, current, _ := h.sessions.Stats(); current != 0 {
-				t.Fatalf("global retained on %s: %d", scenario, current)
-			}
 		})
 	}
 }
@@ -460,7 +480,7 @@ func TestProviderCapacityQueuedCancelAndShutdownRelease(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			started, release := make(chan struct{}, 1), make(chan struct{})
 			defer close(release)
-			h, _, calls := providerCapacityFixture(t, 2, 2, func(w http.ResponseWriter, r *http.Request) {
+			h, _, calls := providerCapacityFixture(t, 2, 0, func(w http.ResponseWriter, r *http.Request) {
 				started <- struct{}{}
 				select {
 				case <-release:
@@ -529,9 +549,6 @@ func TestProviderCapacityQueuedCancelAndShutdownRelease(t *testing.T) {
 			}
 			if _, n, _ := h.providerSessions["glm"].Stats(); n != 0 {
 				t.Fatalf("provider leaked %d", n)
-			}
-			if _, n, _ := h.sessions.Stats(); n != 0 {
-				t.Fatalf("global leaked %d", n)
 			}
 		})
 	}

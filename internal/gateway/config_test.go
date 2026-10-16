@@ -34,6 +34,28 @@ func TestProviderCapacityConfigBoundsAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRemovedGatewaySessionLimitIsRejected(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		c := testConfig("ledger.db", "https://provider.example/v1")
+		if named {
+			c = namedProviderConfig(c, "p")
+		}
+		data, _ := json.Marshal(c)
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			t.Fatal(err)
+		}
+		for _, obsolete := range []string{"0", "1", "-1", "null", "false", `"private-invalid-value"`} {
+			fields["max_active_sessions"] = json.RawMessage(obsolete)
+			data, _ = json.Marshal(fields)
+			_, err := decodeValidatedConfig(data)
+			if err == nil || !strings.Contains(err.Error(), "top-level max_active_sessions was removed") || !strings.Contains(err.Error(), "remove the field") || !strings.Contains(err.Error(), "providers.<ref>.max_active_sessions") || strings.Contains(err.Error(), "private-invalid-value") {
+				t.Fatalf("obsolete field error=%v", err)
+			}
+		}
+	}
+}
+
 func TestGlobalConcurrencyConfigAllowsUnlimited(t *testing.T) {
 	c := testConfig("ledger.db", "https://provider.example/v1")
 	for _, limit := range []int{-1, 0, 1, 1024, 1025} {
@@ -95,13 +117,6 @@ func TestConfigCredentialsAndValidation(t *testing.T) {
 		bad.BaseURL = url
 		if bad.Validate() == nil {
 			t.Errorf("accepted %s", url)
-		}
-	}
-	for _, value := range []int{-1, 4097} {
-		bad := c
-		bad.MaxActiveSessions = value
-		if bad.Validate() == nil {
-			t.Fatalf("accepted max_active_sessions=%d", value)
 		}
 	}
 	for _, value := range []int{-1, 86401} {

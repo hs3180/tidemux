@@ -238,13 +238,13 @@ func TestProviderNameGenerationDoesNotRequireUserLabel(t *testing.T) {
 }
 
 func TestLegacyProviderMigrationPreservesGatewaySettings(t *testing.T) {
-	c := gateway.Config{ListenAddr: "0.0.0.0:4000", Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "primary", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "old"}, AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, MaxInFlight: 5, MaxActiveSessions: 12, ActiveSessionIdleTimeoutSeconds: 120, LedgerPath: "ledger.db"}
+	c := gateway.Config{ListenAddr: "0.0.0.0:4000", Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "primary", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "old"}, AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, MaxInFlight: 5, ActiveSessionIdleTimeoutSeconds: 120, LedgerPath: "ledger.db"}
 	c.ForwardErrorMessages = new(false)
 	got, err := migrateLegacyProvider(c, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.BaseURL != "" || got.MaxInFlight != 5 || got.MaxActiveSessions != 12 || got.ActiveSessionIdleTimeoutSeconds != 120 || got.LedgerPath != c.LedgerPath {
+	if got.BaseURL != "" || got.MaxInFlight != 5 || got.ActiveSessionIdleTimeoutSeconds != 120 || got.LedgerPath != c.LedgerPath {
 		t.Fatalf("migration lost settings: %+v", got)
 	}
 	if len(got.Providers) != 1 || got.Providers["provider"].UpstreamKeychain != c.UpstreamKeychain || got.Providers["provider"].BaseURL != c.BaseURL {
@@ -385,7 +385,7 @@ func TestGatewayConfigureChangesOnlyGatewaySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stderr.Close()
-	args := []string{"--config", path, "--listen", "loopback", "--max-in-flight", "4", "--max-active-sessions", "12", "--active-session-idle-timeout-seconds", "180", "--health-diagnostics=false"}
+	args := []string{"--config", path, "--listen", "loopback", "--max-in-flight", "4", "--active-session-idle-timeout-seconds", "180", "--health-diagnostics=false"}
 	if err := gatewayConfigure(args, stdout, stderr); err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestGatewayConfigureChangesOnlyGatewaySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.ListenAddr != defaultListenAddr || updated.MaxInFlight != 4 || updated.MaxActiveSessions != 12 || updated.ActiveSessionIdleTimeoutSeconds != 180 || updated.HealthDiagnosticsEnabled() {
+	if updated.ListenAddr != defaultListenAddr || updated.MaxInFlight != 4 || updated.ActiveSessionIdleTimeoutSeconds != 180 || updated.HealthDiagnosticsEnabled() {
 		t.Fatalf("gateway settings=%+v", updated)
 	}
 	if updated.Providers["p"].BaseURL != c.Providers["p"].BaseURL {
@@ -416,7 +416,7 @@ func TestProviderCommandDoesNotRetainConfigureAlias(t *testing.T) {
 func TestGatewayConfigureDisablesGlobalConcurrency(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, MaxActiveSessions: 12, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"glm": {Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "glm"}, MaxActiveSessions: 5}}}
+	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 1, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"glm": {Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "glm"}, MaxActiveSessions: 5}}}
 	if err := writeCommandConfig(path, c, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -432,8 +432,35 @@ func TestGatewayConfigureDisablesGlobalConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.MaxInFlight != 0 || updated.MaxActiveSessions != c.MaxActiveSessions || updated.Providers["glm"].MaxActiveSessions != 5 || updated.Providers["glm"].BaseURL != c.Providers["glm"].BaseURL || updated.AccessTokenKeychain != c.AccessTokenKeychain {
+	if updated.MaxInFlight != 0 || updated.Providers["glm"].MaxActiveSessions != 5 || updated.Providers["glm"].BaseURL != c.Providers["glm"].BaseURL || updated.AccessTokenKeychain != c.AccessTokenKeychain {
 		t.Fatalf("disabling global request concurrency changed other settings: %+v", updated)
+	}
+}
+
+func TestGatewayConfigureRemovesSessionLimitOption(t *testing.T) {
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	for _, value := range []string{"0", "5"} {
+		err := gatewayConfigure([]string{"--max-active-sessions", value}, output, output)
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("removed flag error=%v", err)
+		}
+	}
+	if err := output.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := output.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := gatewayConfigure([]string{"--help"}, output, output); err != nil {
+		t.Fatal(err)
+	}
+	help, _ := os.ReadFile(output.Name())
+	if strings.Contains(string(help), "max-active-sessions") || !strings.Contains(string(help), "max-in-flight") || !strings.Contains(string(help), "active-session-idle-timeout-seconds") {
+		t.Fatalf("gateway help=%s", help)
 	}
 }
 

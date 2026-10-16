@@ -30,7 +30,6 @@ type handler struct {
 	ledger *ledger.Ledger
 	*handlerRuntime
 	reload               *configReload
-	sessions             *limiter.SessionLimiter
 	providers            map[string]Provider
 	clients              map[string]*adapter.Client
 	keyPools             map[string]*providerKeyPool
@@ -261,14 +260,10 @@ func (h *handler) errorPayload(status int, code, protocol string, failure *diagn
 			detail["type"] = "request_too_large"
 		}
 	case "active_session_limit":
-		limit, scope := h.config.MaxActiveSessions, "gateway"
-		if provider, ok := h.providers[field]; ok && field != "" {
-			limit, scope = provider.MaxActiveSessions, "provider"
-			detail["provider_ref"] = field
-			field = ""
-		}
-		detail["message"] = fmt.Sprintf("%s capacity of %d active sessions is full; capacity release time is unknown. Retry with bounded exponential backoff and jitter (up to 30 seconds).", scope, limit)
-		detail["scope"], detail["limit"] = scope, limit
+		limit := h.providers[field].MaxActiveSessions
+		detail["provider_ref"], field = field, ""
+		detail["message"] = fmt.Sprintf("provider capacity of %d active sessions is full; capacity release time is unknown. Retry with bounded exponential backoff and jitter (up to 30 seconds).", limit)
+		detail["scope"], detail["limit"] = "provider", limit
 		detail["retry"] = map[string]any{"strategy": "exponential_backoff_with_jitter", "initial_delay_seconds": 1, "max_delay_seconds": 30}
 	}
 	if protocol == "anthropic" {
@@ -618,25 +613,12 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Capacity shares a caller/protocol namespace across models and providers.
+	// Each provider tracks the same caller/protocol namespace across its models.
 	// Anonymous identity stays internal unless the route needs an upstream
 	// request-scoped ID; it never becomes a retained conversation.
 	capacityKey := h.callerSessionKey("", protocol, capacityID)
-	lease, err := h.sessions.Acquire(r.Context(), hex.EncodeToString(capacityKey[:]))
-	if err != nil {
-		if errors.Is(context.Cause(callCtx), adapter.ErrServerShuttingDown) {
-			h.reject(w, r, protocol, http.StatusServiceUnavailable, "server_shutting_down")
-			return
-		}
-		if errors.Is(err, limiter.ErrActiveSessionLimit) {
-			h.reject(w, r, protocol, http.StatusTooManyRequests, limiter.ErrActiveSessionLimit.Error())
-			return
-		}
-		h.reject(w, r, protocol, http.StatusBadRequest, "invalid_session_id")
-		return
-	}
 	retainSession := false
-	admission := &requestSessionAdmission{handler: h, id: hex.EncodeToString(capacityKey[:]), global: lease, providers: map[string]*limiter.SessionLease{}}
+	admission := &requestSessionAdmission{handler: h, id: hex.EncodeToString(capacityKey[:]), providers: map[string]*limiter.SessionLease{}}
 	r = r.WithContext(context.WithValue(r.Context(), requestSessionAdmissionKey{}, admission))
 	defer func() { admission.release(retainSession) }()
 

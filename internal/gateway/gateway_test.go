@@ -39,6 +39,14 @@ func namedProviderConfig(c Config, name string) Config {
 	c.Providers = map[string]Provider{name: provider}
 	return c
 }
+func providerSessionConfig(c Config, name string, limit int) Config {
+	c = namedProviderConfig(c, name)
+	provider := c.Providers[name]
+	provider.MaxActiveSessions = limit
+	c.Providers[name] = provider
+	return c
+}
+
 func requestBody(protocol string) string {
 	return requestBodyFor(protocol, "legacy", "custom-model")
 }
@@ -908,13 +916,17 @@ func TestActiveBudgetsAreIsolatedBySelectedProvider(t *testing.T) {
 func TestActiveSessionLimitRejectsNewSessionsAndAllowsExistingSession(t *testing.T) {
 	calls := 0
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+			return
+		}
 		calls++
 		io.WriteString(w, responseBody("openai"))
 	}))
 	defer up.Close()
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
 	c.MaxInFlight = 4
-	c.MaxActiveSessions = 1
+	c = providerSessionConfig(c, "legacy", 1)
 	h, closeDB, err := NewHandler(c, up.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -948,6 +960,10 @@ func TestActiveSessionConfiguredLimitEndToEnd(t *testing.T) {
 	providerCalls := 0
 	providerSessions := []string{}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+			return
+		}
 		providerCalls++
 		providerSessions = append(providerSessions, r.Header.Get(adapter.SessionIDHeader))
 		io.WriteString(w, responseBody("openai"))
@@ -956,7 +972,7 @@ func TestActiveSessionConfiguredLimitEndToEnd(t *testing.T) {
 
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), provider.URL)
 	c.MaxInFlight = 2
-	c.MaxActiveSessions = 1
+	c = providerSessionConfig(c, "legacy", 1)
 	c.ActiveSessionIdleTimeoutSeconds = 1
 	h, closeDB, err := NewHandler(c, nil)
 	if err != nil {
@@ -1007,6 +1023,10 @@ func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+					return
+				}
 				calls++
 				if scenario == "failed" && calls == 1 {
 					// Keep the capacity-release test independent of transient
@@ -1023,7 +1043,7 @@ func TestActiveSessionLimitReleasesFailedAndStreamingSessions(t *testing.T) {
 			}))
 			defer up.Close()
 			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
-			c.MaxActiveSessions = 1
+			c = providerSessionConfig(c, "legacy", 1)
 			h, closeDB, err := NewHandler(c, up.Client())
 			if err != nil {
 				t.Fatal(err)
@@ -1068,11 +1088,15 @@ func TestActiveSessionDisconnectDoesNotRetainSession(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+					return
+				}
 				io.WriteString(w, responseBody("openai"))
 			}))
 			defer up.Close()
 			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), up.URL)
-			c.MaxActiveSessions = 1
+			c = providerSessionConfig(c, "legacy", 1)
 			h, closeDB, err := NewHandler(c, up.Client())
 			if err != nil {
 				t.Fatal(err)
@@ -1118,7 +1142,7 @@ func TestActiveSessionCancellationReleasesSession(t *testing.T) {
 		}, nil
 	})
 	c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), "https://upstream.invalid/v1")
-	c.MaxActiveSessions = 1
+	c = providerSessionConfig(c, "legacy", 1)
 	h, closeDB, err := NewHandler(c, &http.Client{Transport: transport})
 	if err != nil {
 		t.Fatal(err)

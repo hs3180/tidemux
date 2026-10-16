@@ -303,7 +303,7 @@ func TestAvailabilityQueuedDispatchRechecksConfirmedFailure(t *testing.T) {
 			defer upstream.Close()
 			defer unblock()
 			c := routingTestConfig(filepath.Join(t.TempDir(), "ledger.db"))
-			c.MaxInFlight, c.MaxActiveSessions = 1, 8
+			c.MaxInFlight = 1
 			for _, ref := range []string{"a", "b"} {
 				addRoutingProvider(&c, ref, upstream.URL+"/"+ref, protocol, "one")
 				p := c.Providers[ref]
@@ -332,7 +332,13 @@ func TestAvailabilityQueuedDispatchRechecksConfirmedFailure(t *testing.T) {
 			go func() { second <- affinityGatewayRequest(h, protocol, "second", body("one")) }()
 			deadline := time.Now().Add(5 * time.Second)
 			for {
-				_, current, _ := h.sessions.Stats()
+				h.providerSessionMu.Lock()
+				current := 0
+				for _, sessions := range h.providerSessions {
+					_, n, _ := sessions.Stats()
+					current += n
+				}
+				h.providerSessionMu.Unlock()
 				if current == 2 {
 					break
 				}

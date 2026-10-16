@@ -101,7 +101,7 @@ func TestConfigWatcherAtomicViewsAndSharedRuntime(t *testing.T) {
 	save(next)
 	wait(func() bool { return len(root.reload.active.Load().providers) == 2 })
 	view := root.reload.active.Load()
-	if view.handlerRuntime != root.handlerRuntime || view.ledger != root.ledger || view.sessions != root.sessions || view.clients["a"] != root.clients["a"] || view.keyPools["a"] != root.keyPools["a"] || !view.isBudgetBlocked("a", "USD") {
+	if view.handlerRuntime != root.handlerRuntime || view.ledger != root.ledger || view.clients["a"] != root.clients["a"] || view.keyPools["a"] != root.keyPools["a"] || !view.isBudgetBlocked("a", "USD") {
 		t.Fatal("swap reset shared runtime or unaffected provider state")
 	}
 	if admitted.Err() != nil {

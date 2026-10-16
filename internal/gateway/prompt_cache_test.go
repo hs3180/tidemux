@@ -22,7 +22,9 @@ func TestGeneratedSessionIDsDoNotRetainPrompts(t *testing.T) {
 				}))
 				defer upstream.Close()
 				c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL), "mock")
-				c.MaxActiveSessions = capacity
+				p := c.Providers["mock"]
+				p.MaxActiveSessions = capacity
+				c.Providers["mock"] = p
 				model := "mock/custom-model"
 				if automatic {
 					c.AutoChain = []AutoChainEntry{{Provider: "mock", Model: "custom-model"}}

@@ -158,7 +158,7 @@ func runtimeSettings(c Config) Config {
 }
 
 func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Config, previous *handler, client *http.Client) (*handler, error) {
-	view := &handler{config: c, ledger: root.ledger, handlerRuntime: root.handlerRuntime, sessions: root.sessions, logger: root.logger,
+	view := &handler{config: c, ledger: root.ledger, handlerRuntime: root.handlerRuntime, logger: root.logger,
 		autoChain: previous.autoChain, providers: map[string]Provider{}, clients: map[string]*adapter.Client{}, keyPools: map[string]*providerKeyPool{}, models: map[string][]string{}, modelsKnown: map[string]bool{}, catalogs: map[string]providerCatalog{}, unavailableProviders: map[string]error{},
 		providerGenerations: map[string]uint64{}, reusedConnections: map[string]bool{}, routingEpoch: previous.routingEpoch + 1}
 	rawProviders := c.Providers
