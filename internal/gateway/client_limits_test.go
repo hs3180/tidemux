@@ -99,12 +99,17 @@ func TestSessionCapacityGuidanceForBothProtocols(t *testing.T) {
 		t.Run(protocol, func(t *testing.T) {
 			calls := 0
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					io.WriteString(w, `{"object":"list","data":[{"id":"custom-model"}]}`)
+					return
+				}
 				calls++
 				io.WriteString(w, responseBody(protocol))
 			}))
 			defer upstream.Close()
 			c := testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL)
-			c.Protocol, c.MaxActiveSessions = protocol, 1
+			c.Protocol = protocol
+			c = providerSessionConfig(c, "legacy", 1)
 			h, closeDB, err := NewHandler(c, upstream.Client())
 			if err != nil {
 				t.Fatal(err)
@@ -129,7 +134,7 @@ func TestSessionCapacityGuidanceForBothProtocols(t *testing.T) {
 					t.Fatal(err)
 				}
 				retry, ok := payload.Error["retry"].(map[string]any)
-				if out.Code != http.StatusTooManyRequests || calls != 1 || out.Header().Get("Retry-After") != "" || payload.Error["code"] != "active_session_limit" || payload.Error["scope"] != "gateway" || payload.Error["limit"] != float64(1) || !ok || retry["strategy"] != "exponential_backoff_with_jitter" || retry["max_delay_seconds"] != float64(30) {
+				if out.Code != http.StatusTooManyRequests || calls != 1 || out.Header().Get("Retry-After") != "" || payload.Error["code"] != "active_session_limit" || payload.Error["scope"] != "provider" || payload.Error["provider_ref"] != "legacy" || payload.Error["limit"] != float64(1) || !ok || retry["strategy"] != "exponential_backoff_with_jitter" || retry["max_delay_seconds"] != float64(30) {
 					t.Fatalf("capacity guidance: %d calls=%d headers=%v body=%s", out.Code, calls, out.Header(), out.Body)
 				}
 				if strings.Contains(out.Body.String(), "private-session") {

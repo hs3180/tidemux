@@ -182,6 +182,7 @@ func TestProviderKeyPoolRoundRobinKeepsKeyForEachRequest(t *testing.T) {
 	provider := c.Providers["main"]
 	provider.APIKeys = []string{"key-a", "key-b"}
 	provider.APIKey = "key-a"
+	provider.MaxActiveSessions = 1
 	c.Providers["main"] = provider
 	h, closeGateway, err := NewHandler(c, upstream.Client())
 	if err != nil {
@@ -196,6 +197,7 @@ func TestProviderKeyPoolRoundRobinKeepsKeyForEachRequest(t *testing.T) {
 		}
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer local-secret")
+		req.Header.Set(adapter.SessionIDHeader, "same-session-across-keys")
 		out := httptest.NewRecorder()
 		h.ServeHTTP(out, req)
 		if out.Code != http.StatusOK {
@@ -208,6 +210,16 @@ func TestProviderKeyPoolRoundRobinKeepsKeyForEachRequest(t *testing.T) {
 			t.Fatalf("request %d used %q, want %q", i+1, got, expected)
 		}
 	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBodyFor("openai", "main", "custom-model")))
+	req.Header.Set("Authorization", "Bearer local-secret")
+	req.Header.Set(adapter.SessionIDHeader, "new-session")
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, req)
+	requireCapacityRejection(t, out, "provider", 1)
+	if len(seen) != 0 {
+		t.Fatal("capacity rejection dispatched another key")
+	}
+
 }
 
 func TestGatewayReturnsProviderFailureWithoutKeyFailover(t *testing.T) {

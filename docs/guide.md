@@ -77,7 +77,7 @@ provider secrets. `provider remove` and `provider key remove` ask for confirmati
 A running gateway applies valid provider/routing edits automatically; invalid
 edits leave the last valid view active. Wait for **applied**, rather than only
 **saved**, before using a change. Admitted requests retain their original view.
-Listener, ledger and global-limit changes require a gateway restart.
+Listener, ledger, request-concurrency and session-idle-timeout changes require a gateway restart.
 
 ## Clients
 
@@ -111,7 +111,6 @@ Each client retry is a new request; the gateway dispatches at most once for it.
 tidemux routing set --shared-model-strategy random
 tidemux auto-chain set --entries REF_A/MODEL_A,REF_B/MODEL_B
 tidemux provider update REF --max-active-sessions 5
-tidemux gateway configure --max-active-sessions 20
 ```
 
 Shared selection is off by default. `random` retains a healthy binding when
@@ -220,9 +219,18 @@ existing configuration, then restart the gateway. Existing positive values
 still cap simultaneous upstream requests across all providers; this setting
 does not hot reload.
 
-Session ceilings count conversations independently of request concurrency.
-A full session ceiling returns `active_session_limit` before dispatch.
-Reducing a provider cap does not cancel admitted work. Listener mode defaults
+Only providers limit logical sessions. Inspect a cap with `provider show REF`
+or authenticated `GET /tidemux/session-status`, whose `providers` object contains
+each reference's `limit`, `current` and `rejected` counts. A full provider returns
+HTTP 429 / `active_session_limit` with `scope: "provider"`, `provider_ref` and
+`limit` before dispatch. See the [session contract](design.md#session-capacity)
+for identity, lifetime and reload behavior.
+
+Remove the obsolete top-level `max_active_sessions` field before upgrading,
+including a value of `0`; validation rejects it with removal guidance. Configure
+each intended cap using `provider update REF --max-active-sessions N` instead.
+There is no gateway-wide session option, prompt or status counter.
+Listener mode defaults
 to authenticated loopback; `0.0.0.0` exposes plain HTTP on the LAN and needs
 network protection. Use `gateway configure --help` for global settings.
 

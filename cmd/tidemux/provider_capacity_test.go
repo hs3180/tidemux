@@ -13,7 +13,7 @@ func TestProviderCapacityUpdateAndShowWithoutChangingOtherSettings(t *testing.T)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	p := gateway.Provider{Protocol: "openai", BaseURL: "https://provider.example/v1", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "local"}, SupportedModels: []string{"custom-model"}}
-	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 3, MaxActiveSessions: 17, ActiveSessionIdleTimeoutSeconds: 40, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"glm": p, "other": p}}
+	c := gateway.Config{ListenAddr: defaultListenAddr, MaxInFlight: 3, ActiveSessionIdleTimeoutSeconds: 40, LedgerPath: filepath.Join(dir, "ledger.db"), AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, Providers: map[string]gateway.Provider{"glm": p, "other": p}}
 	if err := writeCommandConfig(path, c, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestProviderCapacityUpdateAndShowWithoutChangingOtherSettings(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if updated.MaxActiveSessions != 17 || updated.ActiveSessionIdleTimeoutSeconds != 40 || updated.Providers["other"].MaxActiveSessions != 0 || updated.Providers["glm"].BaseURL != p.BaseURL {
+		if updated.ActiveSessionIdleTimeoutSeconds != 40 || updated.Providers["other"].MaxActiveSessions != 0 || updated.Providers["glm"].BaseURL != p.BaseURL {
 			t.Fatalf("unrelated config changed: %+v", updated)
 		}
 	}

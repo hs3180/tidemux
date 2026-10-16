@@ -17,14 +17,10 @@ type requestSessionAdmissionKey struct{}
 type requestSessionAdmission struct {
 	handler   *handler
 	id        string
-	global    *limiter.SessionLease
 	providers map[string]*limiter.SessionLease
 }
 
 func (h *handler) sessionCapacityEnabled(routes []routeStep) bool {
-	if h.config.MaxActiveSessions > 0 {
-		return true
-	}
 	for _, route := range routes {
 		if h.providers[route.provider].MaxActiveSessions > 0 {
 			return true
@@ -80,7 +76,6 @@ func (a *requestSessionAdmission) releaseProvider(ref string) {
 }
 
 func (a *requestSessionAdmission) touchOutput() {
-	a.global.TouchOutput()
 	for _, lease := range a.providers {
 		lease.TouchOutput()
 	}
@@ -90,7 +85,6 @@ func (a *requestSessionAdmission) release(retain bool) {
 	for _, lease := range a.providers {
 		lease.Release(retain)
 	}
-	a.global.Release(retain)
 }
 
 func (h *handler) closeProviderSessions() {
@@ -109,7 +103,6 @@ type sessionCapacityStatus struct {
 }
 
 func (h *handler) sessionStatus(w http.ResponseWriter) {
-	limit, current, rejected := h.sessions.Stats()
 	providers := map[string]sessionCapacityStatus{}
 	h.providerSessionMu.Lock()
 	for ref, provider := range h.providers {
@@ -122,5 +115,5 @@ func (h *handler) sessionStatus(w http.ResponseWriter) {
 	}
 	h.providerSessionMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"gateway": sessionCapacityStatus{limit, current, rejected}, "providers": providers})
+	_ = json.NewEncoder(w).Encode(map[string]any{"providers": providers})
 }

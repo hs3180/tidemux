@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
@@ -139,7 +140,6 @@ type Config struct {
 	UpstreamKeychain                KeychainReference        `json:"upstream_keychain,omitempty"`
 	AccessTokenKeychain             KeychainReference        `json:"access_token_keychain"`
 	MaxInFlight                     int                      `json:"max_in_flight"`
-	MaxActiveSessions               int                      `json:"max_active_sessions,omitempty"`
 	ActiveSessionIdleTimeoutSeconds int                      `json:"active_session_idle_timeout_seconds,omitempty"`
 	LedgerPath                      string                   `json:"ledger_path"`
 	Prices                          map[string]adapter.Price `json:"prices,omitempty"`
@@ -165,6 +165,12 @@ func decodeValidatedConfig(data []byte) (Config, error) {
 }
 
 func decodeConfig(data []byte) (Config, error) {
+	var fields map[string]json.RawMessage
+	if adapter.StrictJSON(data, &fields) == nil {
+		if _, obsolete := fields["max_active_sessions"]; obsolete {
+			return Config{}, errors.New("top-level max_active_sessions was removed; remove the field, including a zero value, and use providers.<ref>.max_active_sessions via tidemux provider update REF --max-active-sessions N")
+		}
+	}
 	var c Config
 	if adapter.StrictJSON(data, &c) != nil {
 		return Config{}, errors.New("invalid config: use the current example; plaintext and legacy fields are not supported")
@@ -312,9 +318,6 @@ func (c Config) Validate() error {
 	}
 	if c.MaxInFlight < 0 || c.MaxInFlight > 1024 {
 		return errors.New("max_in_flight must be 0..1024; zero disables the limit")
-	}
-	if c.MaxActiveSessions < 0 || c.MaxActiveSessions > 4096 {
-		return errors.New("max_active_sessions must be 0..4096")
 	}
 	if c.ActiveSessionIdleTimeoutSeconds < 0 || c.ActiveSessionIdleTimeoutSeconds > 86400 {
 		return errors.New("active_session_idle_timeout_seconds must be 0..86400; zero uses the five-minute default")

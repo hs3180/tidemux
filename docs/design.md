@@ -115,13 +115,30 @@ idle availability observation has expired; cancellation releases that claim.
 The dispatch check also claims recovery if a wait appeared and expired while
 the request was queued; sharing a server wait also shares this single probe.
 
-Gateway/provider session ceilings count logical conversations separately from
-request concurrency. The optional global request gate is disabled when
+### Session capacity
+
+`providers.<ref>.max_active_sessions` is the only logical-session ceiling; zero
+or omission makes that provider unlimited. Each reference counts its own
+caller/protocol/session identities across models and keys. A session using two
+providers occupies a slot in each; there is no overall session limit. Unlimited
+providers still track occupancy so lowering a cap preserves admitted sessions.
+Compatible reloads and removal/re-addition keep retained and in-flight entries.
+Concurrent requests in one session share its slot. Successful non-stream calls
+retain the session until both input and output are idle for the configured
+`active_session_idle_timeout_seconds` (zero selects five minutes). Active calls
+do not expire; streaming completion, cancellation and failures release their
+request's reference without removing another request's retained state. Anonymous
+requests use request-scoped identities and never retain a conversation.
+
+Logical sessions are separate from concurrent request execution. The optional
+global request gate is disabled when
 `max_in_flight` is zero or omitted; new configurations default to zero. Positive
 values share a single gate across providers and queue until a slot is available
 or the caller cancels. Changing this process-wide setting requires a restart.
 Session admission, budgets, cancellation and terminal accounting still apply
 with the request gate disabled.
+
+### Dispatch and recovery
 
 TideMux dispatches at most one upstream generation request for each downstream
 generation request. After dispatch, it does not wait for a retry, retry a 429,

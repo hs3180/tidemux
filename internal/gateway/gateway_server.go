@@ -102,12 +102,6 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	usageLog := observability.NewUsageLog(filepath.Join(filepath.Dir(c.LedgerPath), "logs"), c.AccessToken)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
 	idleTTL := time.Duration(c.ActiveSessionIdleTimeoutSeconds) * time.Second
-	sessions, err := limiter.NewSessionLimiter(c.MaxActiveSessions, idleTTL)
-	if err != nil {
-		stopReconciliation()
-		_ = l.Close()
-		return nil, nil, startupFailure("config", err)
-	}
 	autoChain := newAutoChainState(c.AutoChain, idleTTL)
 	cache := adapter.NewPromptCache()
 	clients := make(map[string]*adapter.Client, len(providers))
@@ -132,7 +126,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		clients[name] = &adapter.Client{Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, APIVersion: provider.APIVersion, Upstream: provider.UpstreamID, ProviderRef: name, Logger: logger, UsageLog: usageLog, Prices: provider.Prices, ErrorCodeMappings: provider.ErrorCodeMappings, PromptCache: cache, CacheNamespace: providerCacheNamespace(providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: provider.ModelCapabilities.MaxOutputTokens, ModelOutputLimits: providerOutputLimits(provider, catalogs[name]), HTTP: httpClient, Ledger: l, Gate: gate}
 		configureProviderErrors(clients[name], provider, keyPools[name], c)
 	}
-	h := &handler{config: c, ledger: l, handlerRuntime: runtime, sessions: sessions, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, catalogs: catalogs, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
+	h := &handler{config: c, ledger: l, handlerRuntime: runtime, autoChain: autoChain, providers: providers, clients: clients, keyPools: keyPools, models: models, modelsKnown: modelsKnown, catalogs: catalogs, unavailableProviders: unavailableProviders, logger: logger, providerGenerations: providerGenerations}
 	for name := range clients {
 		h.warnModelCapabilities(name)
 	}
@@ -140,7 +134,6 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	return h, func() error {
 		stopReconciliation()
 		h.closeProviderSessions()
-		sessions.Close()
 		cache.Close()
 		return l.Close()
 	}, nil
