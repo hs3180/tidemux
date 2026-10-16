@@ -71,7 +71,7 @@ func deleteUnreferencedProviderKeys(c gateway.Config, references []gateway.Keych
 func providerUpdate(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
-		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID[,ID...]|all] [--max-active-sessions N] [--rotate-key] [--config PATH]")
+		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID[,ID...]|all] [--context-tokens N] [--max-active-sessions N] [--rotate-key] [--config PATH]")
 	}
 	flags := flag.NewFlagSet("provider update", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -79,6 +79,7 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	endpoint := flags.String("endpoint", "", "replace API endpoint")
 	protocol := flags.String("protocol", "", "force API protocol: openai or anthropic")
 	model := flags.String("model", "", "replace the comma-separated model allowlist, or 'all'")
+	contextTokens := flags.Int64("context-tokens", 0, "context limit for all provider models in tokens; 0 clears the configured override")
 	rotateKey := flags.Bool("rotate-key", false, "replace the API key using hidden terminal input")
 	maxSessions := flags.Int("max-active-sessions", 0, "provider's maximum distinct active sessions; zero disables its cap")
 	version := flags.String("anthropic-version", "2023-06-01", "Anthropic API version")
@@ -94,10 +95,11 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	modelRequested := flagWasSet(flags, "model")
 	versionRequested := flagWasSet(flags, "anthropic-version")
 	maxSessionsRequested := flagWasSet(flags, "max-active-sessions")
+	contextRequested := flagWasSet(flags, "context-tokens")
 	if maxSessionsRequested && (*maxSessions < 0 || *maxSessions > 4096) {
 		return errors.New("--max-active-sessions must be 0..4096")
 	}
-	formRequested := *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested && !maxSessionsRequested
+	formRequested := *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested && !maxSessionsRequested && !contextRequested
 	if runtime.GOOS != "darwin" {
 		return errors.New("provider credentials require macOS Keychain")
 	}
@@ -153,7 +155,7 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 			}
 		}
 	}
-	if !formRequested && *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested && !maxSessionsRequested {
+	if !formRequested && *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested && !maxSessionsRequested && !contextRequested {
 		return errors.New("provider update requires at least one changed field")
 	}
 	var previousKeyRefs []gateway.KeychainReference
@@ -231,6 +233,12 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	}
 	if maxSessionsRequested {
 		p.MaxActiveSessions = *maxSessions
+	}
+	if contextRequested {
+		p.ModelCapabilities.ContextTokens = *contextTokens
+		if err := p.ModelCapabilities.Validate(); err != nil {
+			return fmt.Errorf("invalid --context-tokens: %w", err)
+		}
 	}
 	if versionRequested && p.Protocol != "anthropic" {
 		return errors.New("--anthropic-version is valid only for an Anthropic provider")

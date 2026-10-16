@@ -113,6 +113,14 @@ configuring them. The override applies to the entire provider, so use a dedicate
 scope for models with the same limits. Model names and overflow error text are
 not used to guess a window. A missing field still means unknown.
 
+Set a verified provider-wide context override with
+`tidemux provider update REF --context-tokens 1000000` (one million tokens).
+`tidemux provider show REF` displays the configured override. Set it to `0` to
+clear the override and use catalog discovery again; missing catalog metadata
+still means unknown. This preserves the configured output limit and other
+provider settings. The running gateway applies the saved configuration through
+its normal reload process.
+
 Auto-chain failures affect later eligible requests; the dispatched request is
 not replayed. After dispatch, TideMux does not wait for a retry, retry a 429,
 switch keys, fail over to another provider, or change the requested model. It
