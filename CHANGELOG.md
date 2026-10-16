@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.4 — 2026-10-15
+## 0.3.4 — 2026-10-16
 
 - Discover and cache per-model context/output limits from provider catalogs,
   with explicit configuration priority and warnings for unknown or conflicting
