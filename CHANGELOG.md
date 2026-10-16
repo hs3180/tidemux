@@ -6,6 +6,8 @@
   with explicit configuration priority and warnings for unknown or conflicting
   metadata. Publish limits in both model APIs and use the running catalog in
   client launchers without assigning one provider's limits to shared models.
+- Set or clear provider-wide context overrides with `provider update
+  --context-tokens`; inspect the configured value with `provider show`.
 - Preserve safe upstream failure codes, statuses, phases and provider request
   IDs across client errors, JSONL and SQLite audit JSON. Unknown causes stay
   unknown; provider messages, credentials and raw sessions remain excluded.

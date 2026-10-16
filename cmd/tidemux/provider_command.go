@@ -623,6 +623,7 @@ func providerShow(args []string, stdout, stderr *os.File) error {
 		budget = fmt.Sprintf("%s; 5h=%g; 7d=%g; threshold=%g; mode=%s", p.Budget.Currency, p.Budget.FiveHourLimit, p.Budget.WeeklyLimit, p.Budget.AlertThreshold, p.Budget.Mode)
 	}
 	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nAPI keys: %d\nModel scope: %s\nBudget: %s\nMax active sessions: %d (0 disables provider cap)\n", ref, p.Protocol, p.BaseURL, configuredProviderKeyCount(p), scope, budget, p.MaxActiveSessions)
+	fmt.Fprintf(stdout, "Context token override: %d (0 uses catalog)\n", p.ModelCapabilities.ContextTokens)
 	return nil
 }
 

@@ -62,6 +62,11 @@ def call(url, path, body=None):
 def query(url,path,body=None):
     with call(url,path,body) as response: return response.status,response.read().decode()
 
+def model_context(url,path,model):
+    status,payload=query(url,path)
+    if status!=200:raise RuntimeError('model catalog failed')
+    return next(m for m in json.loads(payload)['data'] if m['id']==model).get('context_length')
+
 def body(model,stream=False):
     return {'model':model,'max_tokens':32,'stream':stream,'messages':[{'role':'user','content':PROMPT}]}
 
@@ -139,6 +144,12 @@ else:sys.exit(1)
                     output=cli(binary,env,config,['add',endpoint,'--name','added','--protocol','openai','--model','custom-model'],KEY+'-added')
                     wait_for(lambda: 'added/custom-model' in query(url,'/v1/models')[1],'CLI-added provider')
                     if 'pending' not in output and 'applied' not in output:raise RuntimeError('CLI has no applied/pending status')
+                    calls_before_context=len(upstream.calls)
+                    for limit in (1000000,0,1000000):
+                        cli(binary,env,config,['update','added','--context-tokens',str(limit)])
+                        wait_for(lambda:all(model_context(url,path,'added/custom-model')==(limit or None) for path in ('/v1/models','/models')),'CLI context override')
+                        if any(model_context(url,path,'original/custom-model') is not None for path in ('/v1/models','/models')):raise RuntimeError('context update changed another provider')
+                    if len(upstream.calls)!=calls_before_context:raise RuntimeError('context update triggered generation')
                     for path in ('/v1/chat/completions','/v1/messages'):
                         if query(url,path,body('added/custom-model'))[0]!=200:raise RuntimeError('added provider not callable in both protocols')
                     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -204,6 +215,6 @@ else:sys.exit(1)
             upstream.release.set()
             if process and process.poll() is None:process.kill();process.wait()
             upstream.shutdown();upstream.server_close()
-    print(json.dumps({'binary':str(binary),'one_process':True,'cli_add_both_protocols':True,'scope_update_remove_keys':True,'failed_reload_preserves_snapshot':True,'held_sse_pricing_budget':True,'concurrent_unique_settlement':True,'privacy':True}))
+    print(json.dumps({'binary':str(binary),'one_process':True,'cli_add_both_protocols':True,'cli_context_override_reload':True,'scope_update_remove_keys':True,'failed_reload_preserves_snapshot':True,'held_sse_pricing_budget':True,'concurrent_unique_settlement':True,'privacy':True}))
 
 if __name__=='__main__':main()
