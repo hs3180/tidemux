@@ -30,11 +30,17 @@ func routingTestConfig(path string) Config {
 	c := testConfig(path, "https://legacy.example/v1")
 	c.Protocol, c.BaseURL, c.APIVersion, c.APIKey = "", "", "", ""
 	c.UpstreamKeychain, c.UpstreamID, c.Model = KeychainReference{}, "", ""
+	// Older routing regressions isolate immediate recovery explicitly.
+	// Cooldown policy tests clear this override to exercise the default.
+	c.Routing = &RoutingConfig{ProviderSwitchThreshold: new(int64(0))}
 	c.Providers = nil
 	return c
 }
 
 func configureRouting(c *Config, settings RoutingConfig) {
+	if settings.ProviderSwitchThreshold == nil && c.Routing != nil {
+		settings.ProviderSwitchThreshold = c.Routing.ProviderSwitchThreshold
+	}
 	if settings == (RoutingConfig{}) {
 		c.Routing = nil
 		return

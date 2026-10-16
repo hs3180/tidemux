@@ -577,6 +577,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		return
 	}
 	initial := routes[0]
+	r = withRoutingChoice(r, initial)
 	r = withRequestLogDetails(r, initial.provider, initial.model)
 	if _, exists := h.providers[initial.provider]; !exists {
 		h.reject(w, r, protocol, http.StatusNotFound, "provider_not_found", "model")
@@ -681,12 +682,19 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 					h.reject(w, r, protocol, status, code, parameter)
 					return nil, "", nil, true
 				}
+				previous := route.decision
 				route = rebound[0]
+				if route.decision == nil && previous != nil && previous.ToProvider == route.provider && (previous.ToModel == route.model || previous.ToModel == "" && previous.Model == route.model) {
+					route.decision = previous
+				}
+
 			}
 			r = withRequestLogDetails(r, route.provider, route.model)
+			r = withRoutingChoice(r, route)
+			options.RoutingDecision = route.decision
 			response, id, callErr, handled = h.callRouteWithRecovery(w, r, protocol, route, body, options, sink, &delivered)
 			var preDispatchErr *adapter.CallError
-			if !route.dynamic && route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || !isAvailabilityError(preDispatchErr.Code) {
+			if route.holdAffinity && h.retainQueuedAffinity(route, protocol, body) || !route.dynamic && route.sessionKey == nil && route.autoChainIndex == nil || handled || delivered || r.Context().Err() != nil || preDispatch >= len(h.providers) || !errors.As(callErr, &preDispatchErr) || !preDispatchErr.UpstreamNotAttempted || !isAvailabilityError(preDispatchErr.Code) {
 				break
 			}
 			if !preDispatchErr.RequestStartedAt.IsZero() {
@@ -827,7 +835,7 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		endpoint = "models"
 	}
 	timestamp := time.Now().UnixMilli()
-	diagnosticErr := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: timestamp, Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code})
+	diagnosticErr := h.ledger.AppendDiagnostic(ledger.Diagnostic{ID: id, TimestampMS: timestamp, Protocol: protocol, Method: method, Endpoint: endpoint, Status: status, ErrorCode: code, RoutingDecision: routingDecision(r)})
 	if diagnosticErr != nil {
 		status = http.StatusInternalServerError
 		code = "local_diagnostic_failed"
@@ -843,6 +851,7 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		LatencyMS: latency, QueueTimeMS: 0, UpstreamAttempted: false,
 		RecordPersisted: diagnosticErr == nil,
 		TimestampMS:     timestamp,
+		RoutingDecision: routingDecision(r),
 	}.Log(h.logger)
 	if diagnosticErr != nil {
 		writeRetryHeaders(w, &diagnostics.RetryHeaders{ShouldRetry: "false"})
@@ -857,6 +866,9 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		}
 	}
 	payload := h.errorPayload(status, code, protocol, nil, param...)
+	if decision := routingDecision(r); decision != nil {
+		payload["error"].(map[string]any)["routing_decision"] = decision
+	}
 	if advice != nil {
 		addRetryAdvice(payload["error"].(map[string]any), advice)
 	}

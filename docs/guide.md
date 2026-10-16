@@ -128,6 +128,63 @@ returns the mapped result and bounded gateway retry advice to the caller; the
 client owns retry timing and sends a new request. Configure error mappings with
 `provider error-map --help`.
 
+A stable random/auto session keeps its provider during a short cooldown. On the
+next request, TideMux compares the **remaining** wait with
+`routing.provider_switch_threshold` (default **60 seconds**). A known remaining
+wait strictly greater than the threshold switches to a healthy compatible
+alternative; equality or a shorter wait retains the binding and returns a local
+429 with a bounded wait, without generating upstream. Price priority applies the
+same comparison to its lowest-price compatible provider. It still has no session
+affinity: after recovery, later price-priority requests follow normal price order.
+Fresh random/auto conversations keep normal eligible-route selection.
+
+Set or inspect the global threshold:
+
+```sh
+tidemux routing set --provider-switch-threshold 60
+tidemux routing show
+tidemux routing set --provider-switch-threshold default
+```
+
+Values are integer seconds in `0..86400`. Zero explicitly selects the previous
+immediate eligible-route recovery policy. Global, provider and exact upstream
+model overrides are hot reloadable; precedence is model, then provider, then
+global, then 60 seconds. Add these optional fields to an existing provider object:
+
+```json
+{
+  "provider_switch_threshold": 120,
+  "model_switch_thresholds": {"glm-max": 30}
+}
+```
+
+Confirm the saved revision is applied. Already admitted requests keep their own
+threshold/configuration snapshot. The comparison includes the maximum independent
+provider, model and key gate; it never shortens a full server pause to the client
+retry cadence. An active probe has unknown completion time. Unless a known lower
+bound already exceeds the threshold, the default retains that binding with
+bounded backoff rather than inventing a countdown. Without a healthy compatible
+alternative, the binding stays in place. Explicit `PROVIDER/MODEL` never switches.
+Alternatives still pass request-feature, capacity and budget admission checks.
+
+After a long-wait switch, healthy random/auto bindings stay on their new provider;
+there is no active migration back. A fresh conversation can probe an earlier
+eligible route, and successful recovery restores it for normal new selection.
+Auto chains keep their configured permitted model order; only bare shared models
+require the identical model across providers. A partial reply is never replayed.
+For the older immediate recovery behavior during migration, configure threshold
+zero explicitly; omitting the field now enables the 60-second policy.
+
+The `routing_decision` metadata in terminal JSONL/SQLite identifies the actual
+source/destination provider, model, action, reason, threshold, known remaining
+wait and cooldown deadline. Millisecond remainders round upward; `wait_unknown`
+means any recorded wait is only a known lower bound. An optional `to_model`
+identifies an allowed auto-chain model change. Local waits have one correlated
+`local_diagnostics` row and optional `local_routing_decisions` details, committed
+together; these are not generation/cost records. Historical rows and the old
+diagnostic table's write shape remain readable/usable. Back up the complete
+SQLite database before upgrading, including this additive metadata table.
+
 The `routing.billing_exhaustion_failover` field has been removed. Delete it from
 existing configuration files before upgrading; configuration validation rejects
 unknown fields.

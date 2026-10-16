@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/diagnostics"
 )
 
 type routeStep struct {
@@ -17,6 +18,8 @@ type routeStep struct {
 	sessionKey     *sharedModelSessionKey
 	autoChainIndex *int
 	dynamic        bool
+	holdAffinity   bool
+	decision       *diagnostics.RoutingDecision
 }
 
 func (h *handler) resolveRoutes(modelID, clientProtocol string, body []byte, sessionKey *sharedModelSessionKey) ([]routeStep, string, int) {
@@ -49,11 +52,37 @@ func (h *handler) resolveRoutes(modelID, clientProtocol string, body []byte, ses
 		if !compatible {
 			return nil, "unsupported_request_feature", http.StatusBadRequest
 		}
+		var compatibleRoutes []routeStep
+		for i, entry := range h.config.AutoChain {
+			if h.supportScopeAllows(entry.Provider, entry.Model) && h.routeRequestCompatible(entry.Provider, entry.Model, clientProtocol, body) {
+				index := i
+				compatibleRoutes = append(compatibleRoutes, routeStep{provider: entry.Provider, model: entry.Model, autoChainIndex: &index, dynamic: true})
+			}
+		}
+		preferred, found := h.autoChain.boundRoute(sessionKey)
+		var decision *diagnostics.RoutingDecision
+		if found && h.supportScopeAllows(preferred.provider, preferred.model) && h.routeRequestCompatible(preferred.provider, preferred.model, clientProtocol, body) {
+			held, retain := h.retainedRoute(preferred, compatibleRoutes)
+			if retain {
+				return []routeStep{held}, "", 0
+			}
+			decision = held.decision
+		}
 		route, ok := h.autoChain.selectRouteAvailable(sessionKey, func(entry AutoChainEntry) bool {
 			return h.supportScopeAllows(entry.Provider, entry.Model) && h.routeRequestCompatible(entry.Provider, entry.Model, clientProtocol, body) && h.modelRouteAvailable(entry.Provider, entry.Model)
 		})
 		if !ok {
 			return nil, "auto_chain_exhausted", http.StatusServiceUnavailable
+		}
+		route.sessionKey = sessionKey
+		if decision != nil {
+			if route.provider != decision.FromProvider {
+				decision.ToProvider = route.provider
+				if route.model != decision.Model {
+					decision.ToModel = route.model
+				}
+				route.decision = decision
+			}
 		}
 		return []routeStep{route}, "", 0
 	}
@@ -74,18 +103,57 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 		return nil, "model_not_found", http.StatusNotFound
 	}
 	if h.config.EffectiveRouting().SharedModelStrategy == "random" && sessionKey != nil {
+		var decision *diagnostics.RoutingDecision
+		var alternatives []routeStep
+		for _, provider := range candidates {
+			alternatives = append(alternatives, routeStep{provider: provider, model: model})
+		}
+		if bound, ok := h.sharedAffinity.boundRoute(*sessionKey, model, h.routingEpoch, candidates, h.providerGenerations); ok {
+			held, retain := h.retainedRoute(bound, alternatives)
+			if retain {
+				return []routeStep{held}, "", 0
+			}
+			decision = held.decision
+		}
 		selected, ok := h.sharedAffinity.selectProviderForView(*sessionKey, model, h.routingEpoch, candidates, func(provider string) bool { return h.modelRouteAvailable(provider, model) }, h.chooseRandomProvider, func(provider string) uint64 { return h.providerGenerations[provider] }, h.reusableRandomCandidates)
 		if !ok {
 			return nil, "provider_keys_cooling_down", http.StatusServiceUnavailable
 		}
 		// Session affinity selects one provider for this downstream request.
-		return []routeStep{{provider: selected, model: model, sessionKey: sessionKey, dynamic: true}}, "", 0
+		if decision != nil {
+			if selected == decision.FromProvider {
+				decision = nil
+			} else {
+				decision.ToProvider = selected
+			}
+		}
+		return []routeStep{{provider: selected, model: model, sessionKey: sessionKey, dynamic: true, decision: decision}}, "", 0
 	}
 	if len(candidates) == 1 {
-		return []routeStep{{provider: candidates[0], model: model, dynamic: true}}, "", 0
+		route := routeStep{provider: candidates[0], model: model, dynamic: true}
+		if h.config.EffectiveRouting().SharedModelStrategy == "price_priority" {
+			if held, retain := h.retainedRoute(route, nil); retain {
+				return []routeStep{held}, "", 0
+			}
+		}
+		return []routeStep{route}, "", 0
 	}
 	if h.config.EffectiveRouting().SharedModelStrategy == "" {
 		return nil, "model_ambiguous", http.StatusBadRequest
+	}
+	var decision *diagnostics.RoutingDecision
+	if h.config.EffectiveRouting().SharedModelStrategy == "price_priority" {
+		if preferred, err := h.orderSharedModelProviders(model, candidates); err == nil && len(preferred) > 0 {
+			var alternatives []routeStep
+			for _, provider := range preferred {
+				alternatives = append(alternatives, routeStep{provider: provider, model: model, dynamic: true})
+			}
+			held, retain := h.retainedRoute(alternatives[0], alternatives)
+			if retain {
+				return []routeStep{held}, "", 0
+			}
+			decision = held.decision
+		}
 	}
 	available := make([]string, 0, len(candidates))
 	for _, name := range candidates {
@@ -104,7 +172,14 @@ func (h *handler) routesForBareModel(model string, candidates []string, qualifie
 		return nil, "routing_price_unavailable", http.StatusServiceUnavailable
 	}
 	selected := ordered[0]
-	return []routeStep{{provider: selected, model: model, dynamic: true}}, "", 0
+	if decision != nil {
+		if selected == decision.FromProvider {
+			decision = nil
+		} else {
+			decision.ToProvider = selected
+		}
+	}
+	return []routeStep{{provider: selected, model: model, dynamic: true, decision: decision}}, "", 0
 }
 
 func (h *handler) routingCandidates(model string, requireKnownScope bool, clientProtocol string, body []byte) []string {

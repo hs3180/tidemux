@@ -171,7 +171,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		return nil, "", &CallError{Status: 500, Code: "request_id_failed", UpstreamNotAttempted: true}
 	}
 	id = hex.EncodeToString(nonce)
-	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, ProviderRef: c.ProviderRef, Model: model, Status: "error", Events: []string{}}
+	a := ledger.Audit{ID: id, TimestampMS: started.UnixMilli(), Protocol: c.Protocol, Upstream: c.Upstream, ProviderRef: c.ProviderRef, Model: model, RoutingDecision: options.RoutingDecision.Normalize(), Status: "error", Events: []string{}}
 	providerBody, preparedModel, requestWarnings, e := PrepareRequestWithWarnings(clientProtocol, c.Protocol, body, model, c.OutputTokenDefault(model))
 	if e != nil {
 		return nil, id, &CallError{Status: 400, Code: e.Error(), Param: ValidationParameter(e), UpstreamNotAttempted: true}
@@ -316,8 +316,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			SessionID:   c.UsageLog.SessionID(clientProtocol, options.SessionID, options.RequestScopedSession),
 			InputTokens: a.InputTokens, OutputTokens: a.OutputTokens,
 			CacheReadTokens: a.CacheReadTokens, CacheWriteTokens: a.CacheWriteTokens,
-			UsageLog: c.UsageLog,
-			Failure:  a.Failure,
+			UsageLog:        c.UsageLog,
+			Failure:         a.Failure,
+			RoutingDecision: a.RoutingDecision,
 		}.Log(c.Logger)
 	}()
 	admission, e := c.Gate.Acquire(ctx)

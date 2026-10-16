@@ -98,7 +98,7 @@ def main():
                                           "upstream_code": "missing_model", "http_status": 404, "category": "model_not_found"}])
                             for ref in ("a", "b")}
                         config["max_in_flight"] = 16
-                        config["routing"] = {"shared_model_strategy": "random"}
+                        config["routing"] = {"shared_model_strategy": "random", "provider_switch_threshold": 0}
                         if mode == "auto":
                             config["auto_chain"] = [{"provider": ref, "model": "custom-model"} for ref in ("a", "b")]
                     gateway = stack.enter_context(running_gateway(binary, upstream_handler=RecoveryUpstream, configure=configure))

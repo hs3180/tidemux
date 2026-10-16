@@ -129,15 +129,23 @@ switch keys, or fail over to another provider. It returns the mapped upstream
 result with bounded gateway retry advice; the downstream client owns
 retry timing and submits each retry as a new request. Key and route health can
 influence selection for later requests, but never replay the current request.
-The next request on a failed shared-model or auto session selects an eligible
-alternative under the same model/capability and admission policies. A healthy
+For stable shared-random/auto bindings, the next request compares the remaining
+maximum independent cooldown against an admitted threshold: model override,
+provider override, routing override, then 60 seconds. Known waits strictly above
+the threshold can select a healthy compatible alternative; short/equal waits and
+unknown probe completion retain affinity. A known lower bound can justify a
+switch despite another unknown gate. No eligible alternative retains the binding;
+zero explicitly requests the earlier immediate eligible-route policy. Price
+priority applies the comparison to its ordered preference without adding affinity.
+Fresh random/auto sessions retain ordinary eligible selection. Auto retains its
+configured model choices; bare shared routing keeps the same model. A healthy
 binding remains stable. An explicitly qualified provider stays explicit; without
 an eligible alternative, cooldown is reported rather than bypassed.
 
 Local temporary cooldowns use HTTP 429 and native rate-limit error types.
 Route eligibility is the maximum independent gate for each route, then the
 minimum across compatible routes. This is reported separately from client wait.
-An eligible alternative yields a two-second client wait; otherwise known client
+When policy permits reselection, an eligible alternative yields a two-second client wait; otherwise known client
 waits are capped at 30 seconds. The full server deadline remains in provider
 state and is rechecked after queueing, before any HTTP attempt. An active probe
 makes its completion time unknown and never supplies a synthetic countdown.
@@ -150,6 +158,21 @@ automatic retry only when the requested shared/auto route has an eligible
 alternative; explicit selection and routes all blocked by quota stay terminal.
 After SSE headers are committed, guidance and request IDs belong in the terminal
 error event. Client SDKs may ignore custom retry fields or replace the message.
+
+Cooling bindings survive compatible reloads. The selector retains them until a
+new request makes the threshold decision; failure feedback never eagerly deletes
+an auto binding under unified availability. Generation/epoch fences still apply.
+A retained choice also constrains retry advice to that route, so a short wait does
+not promise immediate reselection. The post-queue yield path re-evaluates health
+and thresholds without adding an attempt/audit; a retained cooldown exits locally.
+Healthy random/auto sessions are not moved back by another provider's recovery.
+
+Routing decisions contain only bounded provider/model references, action/reason,
+threshold and known wait/deadline. Terminal audit JSON and JSONL share the same
+normalized snapshot. Local rejection plus optional decision details commit in one
+transaction using an additive `local_routing_decisions` table; the historical
+local-diagnostic table shape is unchanged. Read-only inspection also handles old
+databases without the optional table. Decisions add no generated usage or cost.
 
 If a route becomes unavailable while queued, the adapter can yield before
 initiating HTTP. The gateway releases that route's resources and reselects within

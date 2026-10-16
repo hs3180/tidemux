@@ -14,28 +14,29 @@ import (
 // Request and event data are committed atomically. Provider error reasons follow
 // the configured message policy; full request/response bodies are excluded.
 type Audit struct {
-	ID               string               `json:"id"`
-	TimestampMS      int64                `json:"timestamp_ms"`
-	Protocol         string               `json:"protocol"`
-	Upstream         string               `json:"upstream"`
-	ProviderRef      string               `json:"provider_ref,omitempty"`
-	KeyLabel         string               `json:"key_label,omitempty"`
-	BackendID        string               `json:"backend_id,omitempty"`
-	Model            string               `json:"model"`
-	Status           string               `json:"status"`
-	ErrorCode        string               `json:"error_code,omitempty"`
-	Failure          *diagnostics.Failure `json:"failure,omitempty"`
-	InputTokens      *int64               `json:"input_tokens"`
-	OutputTokens     *int64               `json:"output_tokens"`
-	CacheReadTokens  *int64               `json:"cache_read_tokens"`
-	CacheWriteTokens *int64               `json:"cache_write_tokens"`
-	EstimatedCost    *float64             `json:"estimated_cost"`
-	CostSource       string               `json:"cost_source,omitempty"`
-	Currency         string               `json:"currency,omitempty"`
-	PriceSnapshot    json.RawMessage      `json:"price_snapshot,omitempty"`
-	LatencyMS        int64                `json:"latency_ms"`
-	QueueMS          int64                `json:"queue_ms"`
-	Events           []string             `json:"events"`
+	ID               string                       `json:"id"`
+	TimestampMS      int64                        `json:"timestamp_ms"`
+	Protocol         string                       `json:"protocol"`
+	Upstream         string                       `json:"upstream"`
+	ProviderRef      string                       `json:"provider_ref,omitempty"`
+	KeyLabel         string                       `json:"key_label,omitempty"`
+	BackendID        string                       `json:"backend_id,omitempty"`
+	Model            string                       `json:"model"`
+	Status           string                       `json:"status"`
+	ErrorCode        string                       `json:"error_code,omitempty"`
+	RoutingDecision  *diagnostics.RoutingDecision `json:"routing_decision,omitempty"`
+	Failure          *diagnostics.Failure         `json:"failure,omitempty"`
+	InputTokens      *int64                       `json:"input_tokens"`
+	OutputTokens     *int64                       `json:"output_tokens"`
+	CacheReadTokens  *int64                       `json:"cache_read_tokens"`
+	CacheWriteTokens *int64                       `json:"cache_write_tokens"`
+	EstimatedCost    *float64                     `json:"estimated_cost"`
+	CostSource       string                       `json:"cost_source,omitempty"`
+	Currency         string                       `json:"currency,omitempty"`
+	PriceSnapshot    json.RawMessage              `json:"price_snapshot,omitempty"`
+	LatencyMS        int64                        `json:"latency_ms"`
+	QueueMS          int64                        `json:"queue_ms"`
+	Events           []string                     `json:"events"`
 }
 
 func (l *Ledger) initAudit(ctx context.Context) error {
@@ -76,6 +77,7 @@ func (l *Ledger) AppendAudit(a Audit) (err error) {
 		return errors.New("invalid audit cost")
 	}
 	a.Failure = a.Failure.Normalize()
+	a.RoutingDecision = a.RoutingDecision.Normalize()
 	a.KeyLabel, a.BackendID = diagnostics.KeyLabel(a.KeyLabel), diagnostics.KeyLabel(a.BackendID)
 	data, err := json.Marshal(a)
 	if err != nil {

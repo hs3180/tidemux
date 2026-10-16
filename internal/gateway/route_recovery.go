@@ -133,7 +133,7 @@ func (h *handler) callRouteWithRecovery(w http.ResponseWriter, r *http.Request, 
 		var classified *adapter.CallError
 		_ = errors.As(callErr, &classified)
 		if route.autoChainIndex != nil {
-			h.autoChain.recordFailure(*route.autoChainIndex, len(h.config.AutoChain), classified, r.Context().Err(), delivered != nil && *delivered)
+			h.autoChain.recordFailure(*route.autoChainIndex, len(h.config.AutoChain), classified, r.Context().Err(), delivered != nil && *delivered, true)
 		}
 		if !healthCompleted && h.availability.complete(lease, handled, callErr, r.Context().Err()) {
 			h.autoChain.restoreProvider(route.provider)

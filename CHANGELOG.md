@@ -2,6 +2,13 @@
 
 ## 0.3.5 — Unreleased
 
+- Add a remaining-cooldown switch threshold, default 60 seconds with global,
+  provider and model overrides. Keep short-wait random/auto affinity, switch long
+  waits only on a new request to a healthy compatible provider, and preserve
+  explicit routes, queued rechecks and existing admission fences. Persist safe
+  routing decisions with terminal audits and local rejections; healthy bindings
+  do not actively migrate back after another provider recovers.
+
 - Document explicit Z.ai 1308/1310 quota, 1311 provider entitlement and 1313
   fair-use mappings. Keep permission/fair-use terminal categories distinct,
   pause the configured provider and recover only through later eligible requests.
