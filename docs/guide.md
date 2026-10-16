@@ -14,9 +14,9 @@ Homebrew commands are in the [README](../README.md#install).
 For a standalone installation, download and inspect the version-pinned script:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.4/scripts/install.sh -o /tmp/tidemux-install.sh
+curl -fsSL https://raw.githubusercontent.com/hs3180/tidemux/v0.3.5/scripts/install.sh -o /tmp/tidemux-install.sh
 less /tmp/tidemux-install.sh
-TIDEMUX_VERSION=0.3.4 sh /tmp/tidemux-install.sh
+TIDEMUX_VERSION=0.3.5 sh /tmp/tidemux-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -72,7 +72,7 @@ this guide to install and configure TideMux.
 
 ## Routing and limits
 
-When upgrading to 0.3.4, remove `routing.billing_exhaustion_failover` from an old
+When upgrading from 0.3.3 or earlier, remove `routing.billing_exhaustion_failover` from an old
 configuration, including a value of `false`. The field is no longer accepted.
 Each client retry is a new request; the gateway dispatches at most once for it.
 
@@ -241,13 +241,24 @@ present, matches the bounded `Retry-After` in milliseconds. Known terminal
 errors use `x-should-retry: false` without a wait; a header does not override a
 client's retry budget or guarantee that its agent loop will retry.
 For confirmed provider quota exhaustion, shared/auto requests can recover through
-an eligible alternative; explicit requests and routes all blocked by quota stop
-automatic retries. Quota errors retain HTTP 429 and their full server pause.
+an eligible alternative; explicit requests and routes all blocked by quota send
+the terminal retry signal. Quota errors retain HTTP 429 and their full server pause.
 Map a verified vendor quota code for that provider with
 `tidemux provider error-map add REF --code CODE --status 429 --category quota_exhausted`.
 The standard `insufficient_quota` code is recognized directly; numeric vendor
 codes are not inferred globally. Without a server reset time, quota health uses
 a five-minute initial local recovery wait, not a claimed subscription reset.
+
+Client retry budgets remain client settings. In loopback acceptance, Claude Code
+2.1.263/2.1.283 and the official OpenAI/Anthropic SDKs consume the terminal signal;
+Kilo 7.8.1 and Hermes 0.21.2 can issue further new requests under their own retry,
+transport or auxiliary-call policies. The provider gate rejects blocked routes
+locally, and shared routing can select an eligible alternative on a new request.
+Bound the client budget with `CLAUDE_CODE_MAX_RETRIES`,
+`KILO_SESSION_RETRY_LIMIT`, or Hermes `agent.api_max_retries`; a value of 2 was
+used in the installed-client comparisons. These limits do not cap every client's
+capability checks or independently admitted auxiliary calls. Inspect request IDs
+and upstream-attempt counts when diagnosing repeated client messages.
 
 For a Z.ai / BigModel deployment, first confirm that `REF` is that provider,
 then install the four explicit mappings below (use your usual `--config` path):
