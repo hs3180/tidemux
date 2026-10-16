@@ -141,9 +141,17 @@ func (h *handler) retainedRoute(route routeStep, alternatives []routeStep) (rout
 // dispatch rather than freezing a short wait observed before the queue.
 func (h *handler) retainQueuedAffinity(route routeStep, protocol string, body []byte) bool {
 	var alternatives []routeStep
-	for provider := range h.providers {
-		if h.supportScopeAllows(provider, route.model) && h.routeRequestCompatible(provider, route.model, protocol, body) {
-			alternatives = append(alternatives, routeStep{provider: provider, model: route.model})
+	if route.autoChainIndex != nil {
+		for _, entry := range h.config.AutoChain {
+			if h.supportScopeAllows(entry.Provider, entry.Model) && h.routeRequestCompatible(entry.Provider, entry.Model, protocol, body) {
+				alternatives = append(alternatives, routeStep{provider: entry.Provider, model: entry.Model})
+			}
+		}
+	} else {
+		for provider := range h.providers {
+			if h.supportScopeAllows(provider, route.model) && h.routeRequestCompatible(provider, route.model, protocol, body) {
+				alternatives = append(alternatives, routeStep{provider: provider, model: route.model})
+			}
 		}
 	}
 	_, retain := h.cooldownChoice(route, alternatives)

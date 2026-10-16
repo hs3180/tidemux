@@ -291,6 +291,27 @@ func TestThresholdConfigurationBoundsAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestQueuedAutoThresholdKeepsConfiguredModelAlternatives(t *testing.T) {
+	h, _, _ := thresholdTestGateway(t, "openai", "openai", "auto")
+	h.config.AutoChain[1].Model = "two"
+	p := h.providers["b"]
+	p.SupportedModels = []string{"two"}
+	h.providers["b"] = p
+	now := time.Now()
+	h.availability.now = func() time.Time { return now }
+	h.availability.entries[availabilityTarget{"a", "", h.providerGenerations["a"]}] = &availabilityEntry{failures: 1, reason: "rate_limited", retryAt: now.Add(90 * time.Second), touched: now}
+	index := 0
+	route := routeStep{provider: "a", model: "one", autoChainIndex: &index}
+	body := []byte(`{"model":"auto","messages":[{"role":"user","content":"fixture"}]}`)
+	if h.retainQueuedAffinity(route, "openai", body) {
+		t.Fatal("late auto-chain check discarded the configured alternate model")
+	}
+	route.autoChainIndex = nil
+	if !h.retainQueuedAffinity(route, "openai", body) {
+		t.Fatal("bare-model routing escaped its same-model constraint")
+	}
+}
+
 func TestQueuedThresholdDecisionDoesNotReplayOrLoseAudit(t *testing.T) {
 	for _, remaining := range []time.Duration{30 * time.Second, 90 * time.Second} {
 		t.Run(remaining.String(), func(t *testing.T) {
