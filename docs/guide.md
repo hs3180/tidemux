@@ -83,7 +83,8 @@ provider secrets. `provider remove` and `provider key remove` ask for confirmati
 A running gateway applies valid provider/routing edits automatically; invalid
 edits leave the last valid view active. Wait for **applied**, rather than only
 **saved**, before using a change. Admitted requests retain their original view.
-Listener, ledger, request-concurrency and session-idle-timeout changes require a gateway restart.
+For process-wide changes that need a restart, see the
+[configuration contract](design.md#configuration-and-requests).
 
 ## Clients
 
@@ -157,7 +158,8 @@ tidemux routing set --provider-switch-threshold default
 ```
 
 For provider/model overrides, add these optional fields to the intended provider
-object (illustrative values, not defaults):
+object. Model-map keys are exact upstream model IDs. Values below are examples,
+not defaults:
 
 ```json
 {

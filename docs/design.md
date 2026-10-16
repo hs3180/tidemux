@@ -22,7 +22,8 @@ Setup atomically saves validated configuration with Keychain references. The
 watcher resolves credentials and prepares a complete provider/routing view;
 failed validation keeps the previous view. Saved intent and applied state differ.
 Admitted requests retain their endpoint, credentials, protocol, prices and budget
-snapshot while queued or in flight.
+snapshot while queued or in flight. Listener, ledger, request-concurrency and
+session-idle-timeout changes require a gateway restart.
 
 Compatible policy reloads reuse connections, key pools and eligible bindings.
 Endpoint/protocol/API-version/key changes and removal/re-addition create a new
@@ -154,7 +155,7 @@ Logical sessions are separate from concurrent request execution. The optional
 global request gate is disabled when
 `max_in_flight` is zero or omitted; new configurations default to zero. Positive
 values share a single gate across providers and queue until a slot is available
-or the caller cancels. Changing this process-wide setting requires a restart.
+or the caller cancels. The configuration contract above owns restart behavior.
 Session admission, budgets, cancellation and terminal accounting still apply
 with the request gate disabled.
 
@@ -169,7 +170,8 @@ influence selection for later requests, but never replay the current request.
 
 ### Cooldown switching
 
-Thresholds are integer seconds in `0..86400`.
+Thresholds are integer seconds in `0..86400`. Routing, provider and model overrides
+hot reload; admitted requests retain their configuration snapshot.
 For stable shared-random/auto bindings, the next request compares the remaining
 maximum independent cooldown against an admitted threshold: model override,
 provider override, routing override, then 60 seconds. Known waits strictly above
@@ -278,7 +280,8 @@ are assigned independently of secrets. One state slot exists per configured key;
 legacy failover history is bounded to 32 records per provider for one hour. The
 single-attempt policy does not create in-request key failover records. Generation
 or telemetry-epoch changes fence old completions; disabling counters preserves
-operational routing/cooldowns. Status queries are authenticated and read-only.
+operational routing/cooldowns. Toggling diagnostics clears counters/history while
+preserving routing and cooldown state. Status queries are authenticated and read-only.
 
 ### Runtime identity and usage records
 
