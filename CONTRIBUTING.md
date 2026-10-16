@@ -15,10 +15,15 @@ CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go vet ./...
 go test -race ./...
 gofmt -l cmd internal
+python3 scripts/test_install.py
+sh -n scripts/install.sh
 ```
 
-Formatting output must be empty. Use focused tests for changed behavior and the
-affected package gates in `.github/workflows/ci.yml`. For a source installation,
+Formatting output must be empty. Keep core unit tests for protocol/stream/tool
+boundaries, admission/routing/reload, accounting/budgets, configuration and
+privacy. Prefer focused, deterministic cases over duplicate process-level suites.
+The installer unit tests protect failure atomicity and unsupported targets.
+For a source installation,
 build `./cmd/tidemux` to your chosen binary directory; preserve existing
 configuration, Keychain and ledger data.
 
@@ -45,10 +50,16 @@ privacy, security and SPDX/SBOM material.
    immutable `dist/<version>+<commit>/` directory. Scripts/fixtures do not ship.
 3. Verify every checksum, binary version, BUILD source commit, SBOM and archive
    contents. Extract into a fresh directory; check its Markdown links and run
-   every required package gate against that exact binary.
-4. Finish installed-client and official ccusage checks below.
-   Verify installation/reinstallation and data-preserving uninstall in isolated
-   directories. Keep source/archive/binary hashes and results outside the repo.
+   the single offline smoke entry against that exact archive:
+
+   ```sh
+   python3 scripts/smoke.py --directory dist/<version>+<commit>
+   ```
+
+4. Keep source/archive/binary hashes, tool versions, validation results and any
+   known limits outside the repo. The smoke uses temporary state, fake Keychain
+   commands and loopback upstreams; it needs macOS arm64, Python 3 and Ruby, and
+   does not need installed AI clients, paid providers or collection services.
 5. After the scoped PRs are human-approved and explicitly authorized for merge,
    align the release with actual main and requalify if the source changed.
    With separate publication authorization, create the version tag/release,
@@ -58,34 +69,15 @@ privacy, security and SPDX/SBOM material.
    PR. Verify real Homebrew installation after its authorized merge. Production
    installation requires separate authorization and preserves local data.
 
-The required package gates cover protocol/tools, routing/recovery, reload,
-capacity, budgets, startup and JSONL. For actual installed Claude/Kilo/Hermes:
-
-```sh
-python3 scripts/test_client_recovery_package.py --binary /path/to/extracted/tidemux --evidence /path/to/private/evidence
-```
-
-Require all three clients and both capacity scopes. Record their actual versions,
-read/edit/shell-test, recovery and continuation. Loopback scripted models verify
-client/gateway behavior, not reasoning or paid invoices; interactive TUIs and
-complete dsh/Codex workflows are outside acceptance.
-
-Also require all three installed clients under both shared-model strategies:
-
-```sh
-python3 scripts/test_shared_model_launch_package.py --binary /path/to/extracted/tidemux --installed-clients --evidence /path/to/private/shared-launch-evidence
-```
-
-The fixture supplies a stable session header; it does not certify that each
-client generates that header itself. Verify ambiguity, binding, recovery and
-actual upstream/key attempt counts.
-
-Run the unmodified official ccusage executable on the same package's session
-logs and verify known counts and exclusion of unknown usage. Local startup,
-runtime and usage-log package checks verify JSONL, field types/timestamps,
-event/request identities, HTTP-200 stream failures, accounting and privacy.
-CI and release acceptance do not require Elasticsearch, Filebeat or Logstash.
-Collector configuration, indexing and dead-letter queues belong to the
-operator's deployment; the user guide provides reference configuration.
+The smoke verifies manifests/SBOM, packaged manuals, install/reinstall and
+data-preserving uninstall, doctor/provider/discovery/connectivity commands,
+native and converted protocol requests, streaming completion, single dispatch on
+upstream failure, audit identities/usage/unknown cost, JSONL privacy and orderly
+shutdown. Its PTY helper checks hidden credential entry and unlock failure or
+cancellation without touching a real Keychain. Detailed routing, capacity,
+recovery and budget contracts stay in the core unit tests; do not duplicate their
+matrices in package scripts. Core observability tests protect ccusage-compatible
+records and exclusion of unknown usage; external-client, SDK and collector runs
+are optional investigations, not release gates.
 Build and CI artifact upload do not publish a release. If public installation
 fails, resolve it in a new qualified version before announcing delivery.

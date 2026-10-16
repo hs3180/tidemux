@@ -7,13 +7,10 @@ import pathlib
 import pty
 import select
 import signal
-import subprocess
+import sys
 import tempfile
 import threading
 import time
-
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-
 
 class ModelsHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -34,12 +31,10 @@ endpoint = f"http://127.0.0.1:{server.server_port}/v1"
 
 with tempfile.TemporaryDirectory(prefix="tidemux-provider-pty-") as temp:
     root = pathlib.Path(temp)
-    binary = os.environ.get("TIDEMUX_TEST_BINARY", str(root / "tidemux"))
-    if "TIDEMUX_TEST_BINARY" not in os.environ:
-        subprocess.run(["go", "build", "-o", binary, "./cmd/tidemux"], cwd=ROOT, check=True)
+    binary = os.environ["TIDEMUX_TEST_BINARY"]
     fake = root / "bin"
     fake.mkdir()
-    (fake / "security").write_text(r'''#!/usr/bin/env python3
+    (fake / "security").write_text('#!' + sys.executable + r'''
 import sys,os,json,shlex,pathlib,getpass
 p=pathlib.Path(os.environ['TIDEMUX_TEST_KEYCHAIN_DB']);marker=p.with_suffix('.unlocked')
 mode=os.environ['TIDEMUX_TEST_UNLOCK'];d=json.loads(p.read_text()) if p.exists() else {};a=sys.argv[1:]
