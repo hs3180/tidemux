@@ -25,6 +25,9 @@ type Client struct {
 	Limits                                          Limits
 	Protocol, BaseURL, APIKey, APIVersion, Upstream string
 	ProviderRef                                     string
+	BackendID                                       string
+	ForwardErrorMessages                            *bool    // nil enables bounded, redacted provider reasons
+	RedactValues                                    []string // admitted gateway credentials; never serialized
 	Logger                                          *slog.Logger
 	UsageLog                                        *observability.UsageLog
 	MaxOutputTokens                                 int64
@@ -92,6 +95,7 @@ func (e *CallError) Error() string { return e.Code }
 // outcome. A failed upstream attempt is returned to the downstream client;
 // this adapter does not replay it with another key.
 type KeyCandidateCallbacks struct {
+	KeyLabel         func(index int) string
 	YieldUnavailable bool                                    // No audit/ID when yielding an undispatched route to its owner.
 	Attempt          func(index int) func(HTTPAttemptResult) // one actual HTTP initiation/result
 	Completed        func(index int, err error)              // upstream result, before releasing the dispatch gate
@@ -304,6 +308,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			Event: "request_terminal", RequestID: id,
 			Protocol: clientProtocol, ProviderProtocol: c.Protocol,
 			Endpoint: requestEndpoint(clientProtocol), ProviderRef: c.ProviderRef,
+			KeyLabel: a.KeyLabel, BackendID: a.BackendID,
 			Model: a.Model, Outcome: outcome, ErrorCode: errorCode,
 			HTTPStatus: status, LatencyMS: a.LatencyMS, QueueTimeMS: a.QueueMS,
 			UpstreamAttempted: attempted, RecordPersisted: auditPersisted,
@@ -396,6 +401,10 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		}
 		attempted = true
 		selectedCandidate = candidateIndex
+		a.BackendID = diagnostics.KeyLabel(c.BackendID)
+		if callbacks.KeyLabel != nil {
+			a.KeyLabel = diagnostics.KeyLabel(callbacks.KeyLabel(candidateIndex))
+		}
 		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, func() func(HTTPAttemptResult) {
 			if callbacks.Attempt == nil {
 				return nil
@@ -404,6 +413,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		})
 		var callErr *CallError
 		if err != nil && errors.As(err, &callErr) {
+			if callErr.Failure != nil {
+				callErr.Failure.KeyLabel, callErr.Failure.BackendID = a.KeyLabel, a.BackendID
+			}
 			if callErr.Category == ProviderErrorRateLimited {
 				a.Events = append(a.Events, "rate_limit")
 			}
@@ -543,8 +555,12 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 			f.Category = "unknown"
 		}
 		f.Retryability = failureRetryability(callErr)
-		callErr.Failure = f.Redact(apiKey, options.SessionID)
-		for _, secret := range []string{apiKey, options.SessionID} {
+		secrets := append([]string{apiKey, options.SessionID}, c.RedactValues...)
+		callErr.Failure = f.Redact(secrets...)
+		if c.ForwardErrorMessages != nil && !*c.ForwardErrorMessages {
+			callErr.Failure.ProviderMessage = ""
+		}
+		for _, secret := range secrets {
 			if secret != "" && strings.Contains(callErr.ProviderCode, secret) {
 				callErr.ProviderCode = ""
 			}

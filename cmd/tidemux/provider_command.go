@@ -305,6 +305,7 @@ func providerAdd(args []string, stdout, stderr *os.File) error {
 		setup.Provider.APIVersion = *apiVersion
 	}
 	if c.Providers == nil {
+		c.ForwardErrorMessages = nil
 		c.Providers = map[string]gateway.Provider{}
 	}
 	c.Providers[providerName] = setup.Provider
@@ -457,7 +458,8 @@ func migrateLegacyProvider(c gateway.Config, secrets gateway.SecretLookup) (gate
 			}
 		}
 	}
-	provider := gateway.Provider{Protocol: protocol, BaseURL: c.BaseURL, UpstreamKeychain: c.UpstreamKeychain, APIVersion: c.APIVersion, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices}
+	provider := gateway.Provider{Protocol: protocol, BaseURL: c.BaseURL, ForwardErrorMessages: c.ForwardErrorMessages, UpstreamKeychain: c.UpstreamKeychain, APIVersion: c.APIVersion, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices}
+	c.ForwardErrorMessages = nil
 	c.Providers = map[string]gateway.Provider{name: provider}
 	c.Protocol, c.BaseURL, c.APIVersion, c.UpstreamKeychain = "", "", "", gateway.KeychainReference{}
 	c.Model, c.UpstreamID = "", ""

@@ -44,7 +44,7 @@ func TestAuditFailureReplacesRetryAdviceAndTerminalOutcome(t *testing.T) {
 									io.WriteString(w, "event: message_start\ndata: "+`{"type":"message_start","message":{"role":"assistant","model":"custom-model","usage":{"input_tokens":3,"output_tokens":0}}}`+"\n\n")
 									w.(http.Flusher).Flush()
 									if rateLimited {
-										io.WriteString(w, "event: error\ndata: "+`{"type":"error","error":{"type":"rate_limit_error","status":429,"message":"PRIVATE_PROVIDER_ERROR"}}`+"\n\n")
+										io.WriteString(w, "event: error\ndata: "+`{"type":"error","error":{"type":"rate_limit_error","status":429,"message":"Bearer PRIVATE_PROVIDER_ERROR"}}`+"\n\n")
 									} else {
 										io.WriteString(w, "event: message_delta\ndata: "+`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`+"\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 									}
@@ -53,7 +53,7 @@ func TestAuditFailureReplacesRetryAdviceAndTerminalOutcome(t *testing.T) {
 								io.WriteString(w, "data: "+`{"id":"fixture","model":"custom-model","choices":[{"index":0,"delta":{"content":"partial"}}]}`+"\n\n")
 								w.(http.Flusher).Flush()
 								if rateLimited {
-									io.WriteString(w, "event: error\ndata: "+`{"error":{"type":"rate_limit_error","status":429,"message":"PRIVATE_PROVIDER_ERROR"}}`+"\n\n")
+									io.WriteString(w, "event: error\ndata: "+`{"error":{"type":"rate_limit_error","status":429,"message":"Bearer PRIVATE_PROVIDER_ERROR"}}`+"\n\n")
 								} else {
 									io.WriteString(w, "data: "+`{"id":"fixture","model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`+"\n\ndata: [DONE]\n\n")
 								}
@@ -61,7 +61,7 @@ func TestAuditFailureReplacesRetryAdviceAndTerminalOutcome(t *testing.T) {
 							}
 							if rateLimited {
 								w.WriteHeader(429)
-								io.WriteString(w, `{"error":{"type":"rate_limit_error","message":"PRIVATE_PROVIDER_ERROR"}}`)
+								io.WriteString(w, `{"error":{"type":"rate_limit_error","message":"Bearer PRIVATE_PROVIDER_ERROR"}}`)
 							} else {
 								io.WriteString(w, responseBody(providerProtocol))
 							}

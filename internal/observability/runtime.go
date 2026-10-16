@@ -201,6 +201,8 @@ type RequestSummary struct {
 	ProviderProtocol  string
 	Endpoint          string
 	ProviderRef       string
+	KeyLabel          string
+	BackendID         string
 	Model             string
 	Outcome           string
 	ErrorCode         string
@@ -266,6 +268,12 @@ func (e RequestSummary) Log(logger *slog.Logger) {
 		slog.Bool("record_persisted", e.RecordPersisted),
 	}
 	group := ""
+	if label := diagnostics.KeyLabel(e.KeyLabel); label != "" {
+		attrs = append(attrs, slog.String("key_label", label))
+	}
+	if label := diagnostics.KeyLabel(e.BackendID); label != "" {
+		attrs = append(attrs, slog.String("backend_id", label))
+	}
 	if failure := e.Failure.Normalize(); failure != nil {
 		attrs = append(attrs, slog.Any("failure", failure))
 	}

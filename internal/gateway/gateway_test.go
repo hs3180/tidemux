@@ -239,6 +239,7 @@ func TestMappedProviderErrorsUseClientProtocolAndHideProviderMessages(t *testing
 				c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "p")
 				provider := c.Providers["p"]
 				provider.Protocol = providerProtocol
+				provider.ForwardErrorMessages = new(false)
 				provider.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "balance_low", HTTPStatus: 402, Category: adapter.ProviderErrorInsufficientBalance}}
 				c.Providers["p"] = provider
 				h, closeDB, err := NewHandler(c, upstream.Client())
@@ -291,6 +292,7 @@ func TestProviderErrorMappingsDoNotCrossProviderProfiles(t *testing.T) {
 
 	c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "mapped")
 	mapped := c.Providers["mapped"]
+	mapped.ForwardErrorMessages = new(false)
 	mapped.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "balance_low", HTTPStatus: 402, Category: adapter.ProviderErrorInsufficientBalance}}
 	c.Providers["mapped"] = mapped
 	other := mapped
@@ -412,6 +414,7 @@ func TestMappedProviderStreamErrorsUseNativeClientEnvelopeAfterOutput(t *testing
 				c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "p")
 				provider := c.Providers["p"]
 				provider.Protocol = providerProtocol
+				provider.ForwardErrorMessages = new(false)
 				provider.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: "balance_low", Category: adapter.ProviderErrorInsufficientBalance}}
 				c.Providers["p"] = provider
 				var logs bytes.Buffer

@@ -40,7 +40,7 @@ func TestProviderRetryAfterSeparatesPauseFromAlternateRetry(t *testing.T) {
 						if ref == "a" {
 							w.Header().Set("Retry-After", header)
 							w.WriteHeader(status)
-							_, _ = io.WriteString(w, `{"error":{"message":"PRIVATE_PROVIDER_TEXT"}}`)
+							_, _ = io.WriteString(w, `{"error":{"message":"Bearer PRIVATE_PROVIDER_TEXT"}}`)
 							return
 						}
 						var body struct{ Model string }

@@ -194,13 +194,44 @@ a colliding fallback. Terminal events are encoded once and copied unchanged to
 stderr/session files. Known usage uses the Claude-compatible assistant envelope;
 other events add no assistant usage. `event_id` deduplicates copies/replay;
 `requestId` correlates events. SQLite is authoritative for accounting. Logs and
-queries omit credentials, bodies, raw session IDs and provider error messages.
+queries omit credentials, full bodies and raw session IDs. Provider error reasons
+follow the bounded/redacted message policy below.
 Failed calls carry the same normalized `failure` metadata in the audit JSON,
 terminal event and client error. Upstream HTTP status and embedded SSE error
 status are separate from downstream status: a failed open stream can still have
 downstream HTTP 200. HTTP trace phases use bounded names and never retain host,
 address or validation text. Unknown classifications remain unknown. Safe code
 retention and provider request IDs follow the [privacy contract](../PRIVACY.md).
+HTTP and explicit SSE errors retain the provider's bounded reason in the primary
+`error.message`, where SDKs and agents read it. Explicit category mappings have
+priority; otherwise standard API type/code identifiers supply classification.
+Recognized native codes occupy `error.code` with the gateway code separately in
+`gateway_code`; mapped vendor codes retain the category code and `provider_code`.
+Numeric vendor codes alone never imply a category. Unknown identifiers remain
+redacted. The per-provider `forward_error_messages` policy defaults to true;
+false omits text from clients and all persistence. Legacy single-provider configs
+support the same field at the root. Policy reloads retain key/connection identity,
+and admitted calls keep their original policy and credential redaction set.
+
+Known admitted credentials and raw sessions are removed before message bounds;
+credential shapes, control/format characters and terminal escapes are cleaned.
+Reasons contain at most 512 Unicode characters. Explicit, consistent integer token
+comparisons yield request-local `actual_tokens` and `limit_tokens` even when text
+is disabled or truncated. Ambiguous or overflowing counts remain unknown; no
+catalog or configured capability is changed. The [privacy contract](../PRIVACY.md)
+describes residual free-text risk and strict-policy migration.
+
+Each initiated attempt persists an independently assigned `key_label` and
+`backend_id` (the admitted provider connection, not an asserted physical server).
+The selected candidate's real pool slot supplies its existing status label;
+round-robin reordering never substitutes the candidate ordinal. These opaque
+labels do not depend on secrets or optional counters, survive compatible policy
+reloads and reset with the connection/key pool or process. Upstream physical
+backend identity remains unknown unless the provider supplies correlation;
+request IDs support provider-side investigation without copying arbitrary headers.
+The audit JSON can grow these optional fields without altering historical rows
+or migrating SQLite tables. Schema 2 retains the canonical `message.model`.
+
 After health feedback, the gateway freezes its response retry decision before
 the adapter commits the terminal audit. `failure.response_retry_headers` retains
 only the generated retry boolean and bounded second/millisecond waits; the

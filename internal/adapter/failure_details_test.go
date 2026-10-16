@@ -79,3 +79,27 @@ func TestFailureDetailsRedactCredentialEchoesEvenForConfiguredCodes(t *testing.T
 		t.Fatalf("credential echo not redacted: %s", encoded)
 	}
 }
+
+func TestNativeErrorClassificationWithoutVendorNumberGuessing(t *testing.T) {
+	for _, tc := range []struct {
+		body     string
+		status   int
+		category ProviderErrorCategory
+	}{
+		{`{"error":{"code":"context_length_exceeded","type":"invalid_request_error"}}`, 400, ProviderErrorInvalidRequest},
+		{`{"error":{"code":"insufficient_quota","type":"rate_limit_error"}}`, 429, ProviderErrorQuotaExhausted},
+		{`{"error":{"code":"unknown_vendor","type":"authentication_error"}}`, 401, ProviderErrorAuthentication},
+		{`{"error":{"type":"overloaded_error"}}`, 0, ProviderErrorTemporarilyUnavailable},
+		{`{"error":{"type":"api_error"}}`, 400, ""},
+		{`{"error":{"code":"1310"}}`, 429, ""},
+	} {
+		category, _ := resolveErrorCategory([]byte(tc.body), tc.status, nil)
+		if category != tc.category {
+			t.Errorf("%s: got %s want %s", tc.body, category, tc.category)
+		}
+	}
+	category, _ := resolveErrorCategory([]byte(`{"error":{"code":"insufficient_quota","type":"rate_limit_error"}}`), 429, []ProviderErrorMapping{{UpstreamCode: "insufficient_quota", HTTPStatus: 429, Category: ProviderErrorRateLimited}})
+	if category != ProviderErrorRateLimited {
+		t.Fatal("standard semantics overrode explicit provider mapping")
+	}
+}

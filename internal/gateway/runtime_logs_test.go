@@ -53,7 +53,7 @@ func TestRequestRuntimeEventsCorrelateAndExcludeSensitiveData(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusForbidden)
-		_, _ = io.WriteString(w, `{"error":{"code":"provider_denied","message":"upstream-body-sensitive-sentinel"}}`)
+		_, _ = io.WriteString(w, `{"error":{"code":"provider_denied","message":"Bearer upstream-body-sensitive-sentinel"}}`)
 	}))
 	defer upstream.Close()
 

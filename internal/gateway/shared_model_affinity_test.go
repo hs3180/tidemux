@@ -299,7 +299,7 @@ func TestSharedModelAffinityDoesNotFailOverDispatchedRequests(t *testing.T) {
 			h.randomIndex = func(int) int { return 0 }
 			body := fmt.Sprintf(`{"model":"shared-model","stream":%t,"messages":[{"role":"user","content":"hello"}]}`, stream)
 			w := affinityGatewayRequest(h, "openai", "session", body)
-			if strings.Join(paths, ",") != "/a/v1/chat/completions" || strings.Contains(w.Body.String(), "private billing detail") {
+			if strings.Join(paths, ",") != "/a/v1/chat/completions" || !stream && !strings.Contains(w.Body.String(), "private billing detail") {
 				t.Fatalf("request replayed: status=%d paths=%v body=%s", w.Code, paths, w.Body.String())
 			}
 			if stream && (w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "partial") || !strings.Contains(w.Body.String(), "event: error")) {

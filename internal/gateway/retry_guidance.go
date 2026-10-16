@@ -405,6 +405,7 @@ func (h *handler) upstreamErrorPayload(w http.ResponseWriter, r *http.Request, c
 		}
 		payload = h.errorPayload(status, callErr.Code, protocol, callErr.Failure, callErr.Param)
 	}
+	addProviderErrorSemantics(payload["error"].(map[string]any), callErr, protocol)
 	if advice != nil {
 		addRetryAdvice(payload["error"].(map[string]any), advice)
 	}

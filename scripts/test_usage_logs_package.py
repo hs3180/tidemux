@@ -164,7 +164,8 @@ def main():
         for name in ("usd", "eur", "unknown", "partial", "error", "native"):
             providers[name] = {"protocol": "anthropic" if name == "native" else "openai",
                                "base_url": f"http://127.0.0.1:{upstream.server_port}/{name}/v1",
-                               "upstream_keychain": {"service": "test.provider", "account": "local"}, "supported_models": [MODEL]}
+                               "upstream_keychain": {"service": "test.provider", "account": "local"},
+                               "forward_error_messages": False, "supported_models": [MODEL]}
             if name in ("usd", "eur"):
                 providers[name]["prices"] = {MODEL: {"currency": name.upper(), "source": "fixture", "version": "fixture-v1",
                                                     "input_cache_miss_per_million": 1, "input_cache_hit_per_million": .1, "output_per_million": 2}}

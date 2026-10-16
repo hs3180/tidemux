@@ -104,7 +104,7 @@ func TestLateServerWaitUsesCurrentProviderIdentityAndRecoveryRoutes(t *testing.T
 							<-release
 							w.Header().Set("Retry-After", "3600")
 							w.WriteHeader(status)
-							io.WriteString(w, `{"error":{"message":"PRIVATE_PROVIDER_TEXT"}}`)
+							io.WriteString(w, `{"error":{"message":"Bearer PRIVATE_PROVIDER_TEXT"}}`)
 							return
 						}
 						upstreamProtocol := "openai"

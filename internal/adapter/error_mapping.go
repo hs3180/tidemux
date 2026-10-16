@@ -1,9 +1,46 @@
 package adapter
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 )
+
+func resolveErrorCategory(body []byte, status int, mappings []ProviderErrorMapping) (ProviderErrorCategory, bool) {
+	code := providerErrorCode(body)
+	if category, ok := resolveProviderErrorCategory(code, status, mappings); ok {
+		return category, true
+	}
+	var envelope struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+	for _, value := range []string{code, envelope.Error.Type} {
+		switch value {
+		case "insufficient_quota":
+			return ProviderErrorQuotaExhausted, true
+		case "invalid_request_error", "context_length_exceeded", "request_too_large":
+			return ProviderErrorInvalidRequest, true
+		case "rate_limit_error", "rate_limit_exceeded":
+			return ProviderErrorRateLimited, true
+		case "authentication_error", "invalid_api_key":
+			return ProviderErrorAuthentication, true
+		case "permission_error":
+			return ProviderErrorPermissionDenied, true
+		case "not_found_error", "model_not_found":
+			return ProviderErrorModelNotFound, true
+		case "billing_error":
+			return ProviderErrorInsufficientBalance, true
+		case "overloaded_error", "server_error", "api_error", "internal_error", "timeout_error":
+			if status == 0 || status >= 500 {
+				return ProviderErrorTemporarilyUnavailable, true
+			}
+		}
+	}
+	return "", false
+}
 
 // ProviderErrorCategory is a closed set of safe, client-facing upstream
 // classifications. Provider messages and arbitrary upstream strings are never

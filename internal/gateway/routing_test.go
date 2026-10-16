@@ -246,7 +246,7 @@ func TestProviderFailureReturnsWithoutBillingFailover(t *testing.T) {
 			if mapped {
 				wantStatus = http.StatusForbidden
 			}
-			if response.Code != wantStatus || callsA != 1 || callsB != 0 || strings.Contains(response.Body.String(), "private detail") {
+			if response.Code != wantStatus || callsA != 1 || callsB != 0 || !strings.Contains(response.Body.String(), "private detail") {
 				t.Fatalf("status=%d want=%d calls=%d/%d body=%s", response.Code, wantStatus, callsA, callsB, response.Body.String())
 			}
 			rows, err := h.(*handler).ledger.Recent(context.Background(), 10)

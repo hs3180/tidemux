@@ -132,10 +132,7 @@ func providerStreamError(body []byte, stream streamErrorContext) (result *CallEr
 		return &CallError{Status: 502, Code: "upstream_stream_error"}
 	}
 	status := providerErrorHTTPStatus(body)
-	category, ok := resolveProviderErrorCategory(providerCode, status, stream.mappings)
-	if !ok && providerCode == "insufficient_quota" {
-		category, ok = ProviderErrorQuotaExhausted, true
-	}
+	category, ok := resolveErrorCategory(body, status, stream.mappings)
 	if !ok {
 		return &CallError{Status: 502, Code: "upstream_stream_error"}
 	}
@@ -173,7 +170,7 @@ func mappedHTTPStatus(category ProviderErrorCategory, upstreamStatus int) int {
 			return upstreamStatus
 		}
 	case ProviderErrorInvalidRequest:
-		if upstreamStatus == 400 || upstreamStatus == 422 {
+		if upstreamStatus == 400 || upstreamStatus == 413 || upstreamStatus == 422 {
 			return upstreamStatus
 		}
 	case ProviderErrorModelNotFound:
@@ -207,19 +204,18 @@ func mappedProviderError(resp *http.Response, category ProviderErrorCategory, pr
 	return result
 }
 
-// Preserve safe built-in categories without forwarding provider messages, which
-// can contain echoed prompts, credentials, or account details. Exact configured
-// error codes can add provider-specific meaning without parsing arbitrary text.
+// Classification uses explicit mappings and standard API identifiers, never
+// arbitrary message text. The attempt owner applies the message/privacy policy.
 func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) (result *CallError) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderErrorBody))
 	defer func() { result.Failure = providerFailure(body, resp, "http_error", mappings) }()
-	if providerCode := providerErrorCode(body); providerCode != "" {
-		if category, ok := resolveProviderErrorCategory(providerCode, resp.StatusCode, mappings); ok {
-			return mappedProviderError(resp, category, providerCode)
+	if category, ok := resolveErrorCategory(body, resp.StatusCode, mappings); ok {
+		if category == ProviderErrorInvalidRequest {
+			if invalid := invalidProviderRequestError(resp, body); invalid.Param != "" {
+				return invalid
+			}
 		}
-		if providerCode == "insufficient_quota" {
-			return mappedProviderError(resp, ProviderErrorQuotaExhausted, providerCode)
-		}
+		return mappedProviderError(resp, category, providerErrorCode(body))
 	}
 	if resp.StatusCode == 429 {
 		result := mappedProviderError(resp, ProviderErrorRateLimited, "")
@@ -239,9 +235,13 @@ func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) (resul
 		}
 		return result
 	}
-	if resp.StatusCode != 400 && resp.StatusCode != 422 {
+	if resp.StatusCode != 400 && resp.StatusCode != 413 && resp.StatusCode != 422 {
 		return &CallError{Status: 502, Code: "upstream_error", UpstreamStatus: resp.StatusCode}
 	}
+	return invalidProviderRequestError(resp, body)
+}
+
+func invalidProviderRequestError(resp *http.Response, body []byte) *CallError {
 	code := "upstream_invalid_request"
 	param := ""
 	var envelope struct {

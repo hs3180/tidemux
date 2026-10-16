@@ -140,6 +140,7 @@ func WatchConfig(h http.Handler, path string, original Config, lookup SecretLook
 // Process-wide settings keep their existing startup semantics. Provider,
 // routing and auto-chain data belong to each request's immutable view.
 func runtimeSettings(c Config) Config {
+	c.ForwardErrorMessages = nil
 	c.HealthDiagnostics = nil
 	c.Providers = nil
 	c.Routing = nil
@@ -162,11 +163,11 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 		providerGenerations: map[string]uint64{}, reusedConnections: map[string]bool{}, routingEpoch: previous.routingEpoch + 1}
 	rawProviders := c.Providers
 	if len(rawProviders) == 0 && c.BaseURL != "" {
-		rawProviders = map[string]Provider{"legacy": {Protocol: c.Protocol, BaseURL: c.BaseURL, APIKey: c.APIKey, UpstreamKeychain: c.UpstreamKeychain, APIVersion: c.APIVersion, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices}}
+		rawProviders = map[string]Provider{"legacy": {Protocol: c.Protocol, BaseURL: c.BaseURL, ForwardErrorMessages: c.ForwardErrorMessages, APIKey: c.APIKey, UpstreamKeychain: c.UpstreamKeychain, APIVersion: c.APIVersion, UpstreamID: c.UpstreamID, ModelCapabilities: c.ModelCapabilities, Prices: c.Prices}}
 	}
 	previousProviders := previousRaw.Providers
 	if len(previousProviders) == 0 && previousRaw.BaseURL != "" {
-		previousProviders = map[string]Provider{"legacy": {Protocol: previousRaw.Protocol, BaseURL: previousRaw.BaseURL, APIKey: previousRaw.APIKey, UpstreamKeychain: previousRaw.UpstreamKeychain, APIVersion: previousRaw.APIVersion, UpstreamID: previousRaw.UpstreamID, ModelCapabilities: previousRaw.ModelCapabilities, Prices: previousRaw.Prices}}
+		previousProviders = map[string]Provider{"legacy": {Protocol: previousRaw.Protocol, BaseURL: previousRaw.BaseURL, ForwardErrorMessages: previousRaw.ForwardErrorMessages, APIKey: previousRaw.APIKey, UpstreamKeychain: previousRaw.UpstreamKeychain, APIVersion: previousRaw.APIVersion, UpstreamID: previousRaw.UpstreamID, ModelCapabilities: previousRaw.ModelCapabilities, Prices: previousRaw.Prices}}
 	}
 	for name, raw := range rawProviders {
 		if before, ok := previousProviders[name]; ok && reflect.DeepEqual(raw, before) && previous.clients[name] != nil {
@@ -242,6 +243,7 @@ func (root *handler) prepareConfigView(ctx context.Context, c, previousRaw Confi
 		}
 		view.keyPools[name] = pool
 		view.clients[name] = &adapter.Client{Protocol: p.Protocol, BaseURL: p.BaseURL, APIKey: p.APIKey, APIVersion: p.APIVersion, Upstream: p.UpstreamID, ProviderRef: name, Logger: root.logger, UsageLog: root.usageLog, Prices: p.Prices, ErrorCodeMappings: p.ErrorCodeMappings, PromptCache: root.cache, CacheNamespace: providerCacheNamespace(view.providerGenerations[name]), Limits: c.Limits, MaxOutputTokens: p.ModelCapabilities.MaxOutputTokens, ModelOutputLimits: providerOutputLimits(p, catalog), HTTP: client, Ledger: root.ledger, Gate: root.gate}
+		configureProviderErrors(view.clients[name], p, pool, c)
 		view.capabilityWarnings = append(view.capabilityWarnings, name)
 	}
 	if len(c.Providers) > 0 {

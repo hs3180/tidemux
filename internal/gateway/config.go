@@ -21,20 +21,21 @@ type KeychainReference struct {
 // Provider is a named, single-protocol upstream API profile. APIKey is
 // populated only after resolving its Keychain reference and is never serialized.
 type Provider struct {
-	Protocol          string                         `json:"protocol"`
-	BaseURL           string                         `json:"base_url"`
-	UpstreamKeychain  KeychainReference              `json:"upstream_keychain,omitempty,omitzero"` // legacy one-key form
-	UpstreamKeychains []KeychainReference            `json:"upstream_keychains,omitempty"`
-	APIVersion        string                         `json:"anthropic_version,omitempty"`
-	SupportedModels   []string                       `json:"supported_models,omitempty"`
-	UpstreamID        string                         `json:"upstream_id,omitempty"`
-	ModelCapabilities ModelCapabilities              `json:"model_capabilities,omitempty"`
-	ErrorCodeMappings []adapter.ProviderErrorMapping `json:"error_code_mappings,omitempty"`
-	Prices            map[string]adapter.Price       `json:"prices,omitempty"`
-	Budget            *ledger.BudgetPolicy           `json:"budget,omitempty"`
-	MaxActiveSessions int                            `json:"max_active_sessions,omitempty"`
-	APIKey            string                         `json:"-"`
-	APIKeys           []string                       `json:"-"`
+	Protocol             string                         `json:"protocol"`
+	BaseURL              string                         `json:"base_url"`
+	UpstreamKeychain     KeychainReference              `json:"upstream_keychain,omitempty,omitzero"` // legacy one-key form
+	UpstreamKeychains    []KeychainReference            `json:"upstream_keychains,omitempty"`
+	APIVersion           string                         `json:"anthropic_version,omitempty"`
+	SupportedModels      []string                       `json:"supported_models,omitempty"`
+	UpstreamID           string                         `json:"upstream_id,omitempty"`
+	ModelCapabilities    ModelCapabilities              `json:"model_capabilities,omitempty"`
+	ErrorCodeMappings    []adapter.ProviderErrorMapping `json:"error_code_mappings,omitempty"`
+	ForwardErrorMessages *bool                          `json:"forward_error_messages,omitempty"`
+	Prices               map[string]adapter.Price       `json:"prices,omitempty"`
+	Budget               *ledger.BudgetPolicy           `json:"budget,omitempty"`
+	MaxActiveSessions    int                            `json:"max_active_sessions,omitempty"`
+	APIKey               string                         `json:"-"`
+	APIKeys              []string                       `json:"-"`
 }
 
 type RoutingConfig struct {
@@ -115,6 +116,7 @@ type Config struct {
 	ListenAddr                      string                   `json:"listen_addr"`
 	Protocol                        string                   `json:"protocol,omitempty"` // resolved provider protocol; empty/auto means detect; legacy values remain supported
 	BaseURL                         string                   `json:"base_url,omitempty"`
+	ForwardErrorMessages            *bool                    `json:"forward_error_messages,omitempty"` // legacy single-provider policy
 	Providers                       map[string]Provider      `json:"providers,omitempty"`
 	Routing                         *RoutingConfig           `json:"routing,omitempty"`
 	AutoChain                       []AutoChainEntry         `json:"auto_chain,omitempty"`
@@ -163,6 +165,9 @@ func decodeConfig(data []byte) (Config, error) {
 	return c, nil
 }
 func (c Config) Validate() error {
+	if len(c.Providers) > 0 && c.ForwardErrorMessages != nil {
+		return errors.New("forward_error_messages belongs inside each named provider")
+	}
 	if err := c.Reconciliation.Validate(); err != nil {
 		return err
 	}
