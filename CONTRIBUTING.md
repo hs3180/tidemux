@@ -35,7 +35,10 @@ Keep each PR focused, explain its behavior, validation and limits, and use the
 per-PR merge authorization. New commits need renewed review.
 
 Put user instructions in `docs/guide.md` and architectural contracts in
-`docs/design.md`. Prefer CLI help for option lists. Merge repeated explanations;
+`docs/design.md`. A behavior rule has one normative home: the guide keeps an
+operator summary and a link instead of copying the rule or its bounds. Do not
+add the same complete specification to both manuals. Prefer CLI help for option
+lists. Merge repeated explanations;
 keep task progress, review notes, test evidence and release transactions in
 issue/PR attachments or a private workspace outside the source tree.
 Update dependency notices through `scripts/licenses.py`; preserve license,
