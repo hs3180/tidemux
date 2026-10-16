@@ -43,7 +43,7 @@ func TestCooldownGuidanceUsesRealEarliestRouteDeadline(t *testing.T) {
 		t.Run(strategy, func(t *testing.T) {
 			f := newRoutingAvailabilityFixture(t, strategy == "auto")
 			h := f.h
-			h.serviceVersion = "0.3.4-test"
+			h.serviceVersion = "0.3.5-test"
 			model := "shared-model"
 			if strategy == "auto" {
 				model = "auto"
@@ -81,7 +81,7 @@ func TestCooldownGuidanceUsesRealEarliestRouteDeadline(t *testing.T) {
 						body := fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"fixture"}]}`, target.model)
 						w := affinityGatewayRequest(h, protocol, session, body)
 						payload := decodeRetryError(t, w)
-						if w.Header().Get("Retry-After") != fmt.Sprint(target.seconds) || payload.Error.Retry.AfterSeconds == nil || *payload.Error.Retry.AfterSeconds != target.seconds || w.Header().Get("X-TideMux-Version") != "0.3.4-test" {
+						if w.Header().Get("Retry-After") != fmt.Sprint(target.seconds) || payload.Error.Retry.AfterSeconds == nil || *payload.Error.Retry.AfterSeconds != target.seconds || w.Header().Get("X-TideMux-Version") != "0.3.5-test" {
 							t.Fatalf("target=%s lost max-gate/min-route/ceiling deadline: headers=%v advice=%+v", target.model, w.Header(), payload.Error.Retry)
 						}
 					}
