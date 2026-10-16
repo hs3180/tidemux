@@ -551,6 +551,9 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 			}
 		}
 		f.Category = SafeFailureClass(callErr)
+		if callErr.Category.ProviderScopedTerminal() {
+			f.CooldownScope = "provider"
+		}
 		if f.Category == "upstream_error" {
 			f.Category = "unknown"
 		}

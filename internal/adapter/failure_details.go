@@ -58,6 +58,9 @@ func providerRequestID(header http.Header) string {
 }
 
 func failureRetryability(e *CallError) string {
+	if e.Category.ProviderScopedTerminal() {
+		return "terminal"
+	}
 	if e.Code == "request_canceled" || e.Code == "server_shutting_down" || e.Code == "downstream_write_error" {
 		return "terminal"
 	}

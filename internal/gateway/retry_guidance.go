@@ -46,14 +46,16 @@ type retryAdvice struct {
 	WaitSource                     string    `json:"wait_source"`
 	AlternativeCount               int       `json:"alternative_count"`
 	hasCooldown                    bool
-	quotaBlocked                   bool
+	terminalProviderBlocked        bool
+	terminalCategory               adapter.ProviderErrorCategory
 }
 
 type routeWait struct {
 	blocked, unknown bool
 	retryAt          time.Time
 	temporary        bool
-	quota            bool
+	terminal         bool
+	terminalCategory adapter.ProviderErrorCategory
 }
 
 func (w *routeWait) add(until time.Time, unknown bool) {
@@ -82,7 +84,11 @@ func (h *handler) routeWaitLocked(route routeStep, now time.Time) routeWait {
 			entry := s.entries[availabilityTarget{route.provider, model, h.providerGenerations[route.provider]}]
 			if entry != nil && !entry.eligible(now) {
 				wait.add(entry.retryAt, entry.probing)
-				wait.quota = wait.quota || entry.reason == "quota_exhausted"
+				switch category := adapter.ProviderErrorCategory(entry.reason); category {
+				case adapter.ProviderErrorQuotaExhausted, adapter.ProviderErrorAccessDenied, adapter.ProviderErrorFairUseThrottled:
+					wait.terminal = true
+					wait.terminalCategory = category
+				}
 			}
 		}
 	}
@@ -166,10 +172,18 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 	var earliest time.Time
 	unknown := len(routes) == 0
 	ready := false
-	quotaOnly := len(routes) > 0
+	terminalOnly := len(routes) > 0
+	var terminalCategory adapter.ProviderErrorCategory
+	mixedTerminal := false
 	for _, route := range routes {
 		wait := h.routeWaitLocked(route, now)
-		quotaOnly = quotaOnly && wait.quota
+		terminalOnly = terminalOnly && wait.terminal
+		if wait.terminal {
+			if terminalCategory != "" && terminalCategory != wait.terminalCategory {
+				mixedTerminal = true
+			}
+			terminalCategory = wait.terminalCategory
+		}
 		advice.hasCooldown = advice.hasCooldown || wait.temporary
 		if !wait.blocked {
 			ready = true
@@ -182,7 +196,10 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 			earliest = wait.retryAt
 		}
 	}
-	advice.quotaBlocked = !ready && quotaOnly
+	advice.terminalProviderBlocked = !ready && terminalOnly
+	if !mixedTerminal {
+		advice.terminalCategory = terminalCategory
+	}
 	for _, route := range manual {
 		if !h.routeWaitLocked(route, now).blocked {
 			advice.Alternatives = append(advice.Alternatives, route.provider+"/"+route.model)
@@ -344,11 +361,11 @@ func (h *handler) prepareRetryResponse(w http.ResponseWriter, r *http.Request, c
 	case adapter.ProviderErrorAuthentication, adapter.ProviderErrorPermissionDenied, adapter.ProviderErrorPolicyDenied, adapter.ProviderErrorInvalidRequest:
 		mayRetry, signal = false, "false"
 	}
-	if callErr.Category == adapter.ProviderErrorModelNotFound || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorQuotaExhausted {
+	if callErr.Category == adapter.ProviderErrorModelNotFound || callErr.Category.ProviderScopedTerminal() {
 		mayRetry = advice.ReselectProvider && len(advice.Alternatives) > 0
 		signal = "false"
 	}
-	if advice.quotaBlocked {
+	if advice.terminalProviderBlocked {
 		mayRetry, signal = false, "false"
 	}
 	manualCheck := callErr.Code == "audit_failed_do_not_retry_blindly" || callErr.Code == "audit_unavailable" || h.ledger.AuditUnavailable()
@@ -358,7 +375,7 @@ func (h *handler) prepareRetryResponse(w http.ResponseWriter, r *http.Request, c
 	}
 	if mayRetry {
 		signal = "true"
-		if advice.AfterSeconds != nil && *advice.AfterSeconds == 0 && (callErr.RetryProvided || callErr.Category == adapter.ProviderErrorRateLimited || callErr.Category == adapter.ProviderErrorQuotaExhausted || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorModelNotFound) {
+		if advice.AfterSeconds != nil && *advice.AfterSeconds == 0 && (callErr.RetryProvided || callErr.Category == adapter.ProviderErrorRateLimited || callErr.Category.ProviderScopedTerminal() || callErr.Category == adapter.ProviderErrorModelNotFound) {
 			short := int64(2)
 			advice.AfterSeconds = &short
 		}

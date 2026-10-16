@@ -192,6 +192,54 @@ The standard `insufficient_quota` code is recognized directly; numeric vendor
 codes are not inferred globally. Without a server reset time, quota health uses
 a five-minute initial local recovery wait, not a claimed subscription reset.
 
+For a Z.ai / BigModel deployment, first confirm that `REF` is that provider,
+then install the four explicit mappings below (use your usual `--config` path):
+
+```sh
+tidemux provider error-map add REF --code 1308 --status 429 --category quota_exhausted
+tidemux provider error-map add REF --code 1310 --status 429 --category quota_exhausted
+tidemux provider error-map add REF --code 1311 --status 429 --category provider_access_denied
+tidemux provider error-map add REF --code 1313 --status 429 --category fair_use_throttled
+tidemux provider error-map list REF
+```
+
+These commands are an explicit deployment choice; they are not installed for
+other providers, guessed from domains or applied globally to numeric codes.
+Save a config backup and confirm the gateway's applied reload revision. Existing
+credentials and model/capability settings do not change.
+
+| Z.ai code | Meaning and client semantics | Recovery |
+| --- | --- | --- |
+| 1308 | Usage-window quota; terminal `quota_exhausted`, HTTP 429 | Wait for the provider's actual reset or use an eligible alternative. |
+| 1310 | Weekly/monthly quota; terminal `quota_exhausted`, HTTP 429 | Check the subscription quota/reset in the account center. |
+| 1311 | Subscription entitlement; terminal `provider_access_denied`, HTTP 403 with `permission_error` | Enable the required model entitlement or choose a permitted model/provider. |
+| 1313 | Terminal `fair_use_throttled`, HTTP 429 with `rate_limit_error` | Check account activity and request manual removal in the account center. If unexpected load is not yours, investigate possible key exposure and rotate the provider key. |
+
+The [official error reference](https://docs.bigmodel.cn/cn/faq/api-code) describes
+1311 as access to the named model. Mapping it to `provider_access_denied`
+intentionally pauses **all models and keys of this provider**, on the operator's
+assumption that they share the subscription. It does not assert that the vendor
+revoked every key/model. Do not use that provider-wide mapping for independent
+entitlements; restrict the configured model scope instead.
+
+All four configured failures pause the provider immediately. The failed request
+returns its error after one generation dispatch. A shared/auto client may retry
+as a new request to an eligible compatible alternative; an explicit provider and
+routes all blocked by these restrictions send `x-should-retry: false`, with no
+retry wait. Local provider-gate rejections use HTTP 429 and retain a distinct
+cooldown code; fair-use rejections keep the generated manual-recovery guidance.
+
+Without a valid upstream `Retry-After`, the initial request-driven recovery wait
+is five minutes with jitter; repeated failed probes back off to 30 minutes plus
+jitter. After the wait, one real request may probe the provider; success restores
+eligibility. These are local probe bounds, **not predicted quota reset or fair-use
+unlock times**. No timer or background inference declares the account healthy.
+A valid upstream wait is preserved in full. Reset dates in free text do not become
+trusted deadlines. Code 1313 alone does not establish key compromise, and its
+recovery time remains unknown. Its fixed conditional guidance is included even
+when provider message forwarding is disabled or a forwarded reason is present.
+Set `forward_error_messages: false` for strict exclusion of upstream free text.
+
 Provider error reasons are forwarded by default in the primary `error.message`
 for both HTTP and terminal SSE errors. Standard API types/codes keep their meaning
 across protocols; a recognized native code uses `error.code` and the generated

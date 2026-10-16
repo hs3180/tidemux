@@ -263,8 +263,8 @@ func availabilityFailure(err error, ctxErr error, handled bool) (modelScope bool
 		return true, "temporarily_unavailable", callErr.Cooldown
 	case adapter.ProviderErrorInsufficientBalance:
 		return false, "insufficient_balance", callErr.Cooldown
-	case adapter.ProviderErrorQuotaExhausted:
-		return false, "quota_exhausted", callErr.Cooldown
+	case adapter.ProviderErrorQuotaExhausted, adapter.ProviderErrorAccessDenied, adapter.ProviderErrorFairUseThrottled:
+		return false, string(callErr.Category), callErr.Cooldown
 	}
 	// An unknown upstream error frame is failure evidence for this model,
 	// without proving a provider-wide outage or a retryable error category.
@@ -313,7 +313,7 @@ func boundedRecoveryBackoff(reason string, failures uint16, upstream time.Durati
 		return 24 * time.Hour
 	}
 	base := routeRecoveryCooldown
-	if reason == "insufficient_balance" || reason == "quota_exhausted" {
+	if adapter.ProviderErrorCategory(reason).ProviderScopedTerminal() {
 		base = billingExhaustionCooldown
 	}
 	if reason != "unclassified_stream_error" {

@@ -25,7 +25,7 @@ func (f *routeFailure) eligible(now time.Time) bool {
 func recoveryCooldown(callErr *adapter.CallError) time.Duration {
 	delay := routeRecoveryCooldown
 	if callErr != nil {
-		if callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorQuotaExhausted {
+		if callErr.Category.ProviderScopedTerminal() {
 			delay = billingExhaustionCooldown
 		}
 		if callErr.Cooldown > delay {
