@@ -283,8 +283,10 @@ All four configured failures pause the provider immediately. The failed request
 returns its error after one generation dispatch. A shared/auto client may retry
 as a new request to an eligible compatible alternative; an explicit provider and
 routes all blocked by these restrictions send `x-should-retry: false`, with no
-retry wait. Local provider-gate rejections use HTTP 429 and retain a distinct
-cooldown code; fair-use rejections keep the generated manual-recovery guidance.
+retry wait. Local provider-gate rejections retain the terminal category's status,
+type and guidance, with a distinct cooldown code: entitlement remains HTTP 403,
+insufficient balance uses HTTP 402, and quota/fair-use remain HTTP 429. Fair-use
+rejections keep the generated manual-recovery guidance.
 
 Without a valid upstream `Retry-After`, the initial request-driven recovery wait
 is five minutes with jitter; repeated failed probes back off to 30 minutes plus

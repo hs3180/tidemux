@@ -2,6 +2,9 @@
 
 ## 0.3.5 — Unreleased
 
+- Preserve terminal provider status, type and guidance in local cooldown
+  rejections, including HTTP 403 permission errors for subscription entitlement.
+
 - Add a remaining-cooldown switch threshold, default 60 seconds with global,
   provider and model overrides. Keep short-wait random/auto affinity, switch long
   waits only on a new request to a healthy compatible provider, and preserve

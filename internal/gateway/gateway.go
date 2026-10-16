@@ -250,9 +250,13 @@ func (h *handler) errorPayload(status int, code, protocol string, failure *diagn
 	addFailureDetails(detail, failure)
 	switch code {
 	case "provider_fair_use_throttled_cooling_down":
-		_, _, detail["message"], _ = adapter.ProviderErrorFairUseThrottled.ClientError(protocol)
+		_, _, detail["message"], detail["type"] = adapter.ProviderErrorFairUseThrottled.ClientError(protocol)
 	case "provider_access_denied_cooling_down":
-		_, _, detail["message"], _ = adapter.ProviderErrorAccessDenied.ClientError(protocol)
+		_, _, detail["message"], detail["type"] = adapter.ProviderErrorAccessDenied.ClientError(protocol)
+	case "provider_insufficient_balance_cooling_down":
+		_, _, detail["message"], detail["type"] = adapter.ProviderErrorInsufficientBalance.ClientError(protocol)
+	case "provider_quota_exhausted_cooling_down":
+		_, _, detail["message"], detail["type"] = adapter.ProviderErrorQuotaExhausted.ClientError(protocol)
 	case "request_too_large":
 		limit := h.config.Limits.Effective().RequestBytes
 		detail["message"] = fmt.Sprintf("request_too_large: body exceeds gateway limit of %d bytes; configure limits.request_bytes to change it", limit)
@@ -801,7 +805,8 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 			if advice.terminalProviderBlocked {
 				code = "provider_restriction_cooling_down"
 				if advice.terminalCategory != "" {
-					_, canonical, _, _ := advice.terminalCategory.ClientError(protocol)
+					var canonical string
+					status, canonical, _, _ = advice.terminalCategory.ClientError(protocol)
 					code = canonical + "_cooling_down"
 				}
 				advice = nil

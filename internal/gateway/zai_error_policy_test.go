@@ -168,8 +168,23 @@ func TestZaiConfiguredErrorsPauseProviderAndRecoverOnlyOnNewRequests(t *testing.
 								t.Fatalf("provider did not enter bounded request-driven recovery: %+v", entry)
 							}
 							other := affinityGatewayRequest(h, cp, "different-session", `{"model":"a/two","max_tokens":16,"messages":[{"role":"user","content":"fixture"}]}`)
-							if other.Code != 429 || other.Header().Get("x-should-retry") != "false" || other.Header().Get("Retry-After") != "" || a.Load() != 1 {
+							localStatus, localCode, localMessage, localType := mapping.Category.ClientError(cp)
+							var localEnvelope struct {
+								Error struct{ Code, Type, Message string }
+							}
+							if err := json.Unmarshal(other.Body.Bytes(), &localEnvelope); err != nil {
+								t.Fatal(err)
+							}
+							if other.Code != localStatus || localEnvelope.Error.Code != localCode+"_cooling_down" || localEnvelope.Error.Type != localType || localEnvelope.Error.Message != localMessage || other.Header().Get("x-should-retry") != "false" || other.Header().Get("Retry-After") != "" || a.Load() != 1 {
 								t.Fatalf("cooling provider or another key/model was dispatched: %s", other.Body.String())
+							}
+							locals, err := h.ledger.RecentDiagnostics(context.Background(), 10)
+							if err != nil || len(locals) != 1 || locals[0].Status != localStatus || locals[0].ErrorCode != localCode+"_cooling_down" {
+								t.Fatalf("local terminal SQLite outcome differs: %+v %v", locals, err)
+							}
+							localEvent := findRuntimeEvent(decodeRuntimeEvents(t, logs.Bytes()), "local_rejection", locals[0].ID)
+							if localEvent == nil || localEvent["http_status"] != float64(localStatus) || localEvent["error_code"] != localCode+"_cooling_down" {
+								t.Fatalf("local terminal JSONL outcome differs: %+v", localEvent)
 							}
 							if mapping.Category == adapter.ProviderErrorFairUseThrottled && !strings.Contains(other.Body.String(), "manual removal") {
 								t.Fatal("local fair-use rejection lost recovery instructions")

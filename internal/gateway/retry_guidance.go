@@ -84,8 +84,7 @@ func (h *handler) routeWaitLocked(route routeStep, now time.Time) routeWait {
 			entry := s.entries[availabilityTarget{route.provider, model, h.providerGenerations[route.provider]}]
 			if entry != nil && !entry.eligible(now) {
 				wait.add(entry.retryAt, entry.probing)
-				switch category := adapter.ProviderErrorCategory(entry.reason); category {
-				case adapter.ProviderErrorQuotaExhausted, adapter.ProviderErrorAccessDenied, adapter.ProviderErrorFairUseThrottled:
+				if category := adapter.ProviderErrorCategory(entry.reason); category.ProviderScopedTerminal() {
 					wait.terminal = true
 					wait.terminalCategory = category
 				}

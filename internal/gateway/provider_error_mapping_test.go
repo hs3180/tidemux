@@ -92,6 +92,19 @@ func TestMappedProviderFailureCategoriesStayDistinctForClientProtocols(t *testin
 					if strings.TrimSpace(payload.Error.Message) == "" {
 						t.Fatalf("missing actionable message: %s", out.Body.String())
 					}
+					if test.category.ProviderScopedTerminal() {
+						next := httptest.NewRequest(http.MethodPost, path, strings.NewReader(requestBodyFor(clientProtocol, "p", "custom-model")))
+						next.Header = req.Header.Clone()
+						local := httptest.NewRecorder()
+						h.ServeHTTP(local, next)
+						localStatus, localCode, localMessage, localType := test.category.ClientError(clientProtocol)
+						if err := json.Unmarshal(local.Body.Bytes(), &payload); err != nil {
+							t.Fatal(err)
+						}
+						if local.Code != localStatus || payload.Error.Code != localCode+"_cooling_down" || payload.Error.Message != localMessage || payload.Error.Type != localType || local.Header().Get("x-should-retry") != "false" || local.Header().Get("Retry-After") != "" {
+							t.Fatalf("local terminal category was changed: %d %s", local.Code, local.Body.String())
+						}
+					}
 				})
 			}
 		})
