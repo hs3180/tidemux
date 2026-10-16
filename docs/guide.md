@@ -27,6 +27,31 @@ standalone users remove only their installed `tidemux` executable.
 Configuration, Keychain entries, ledger, logs, statements and reports are
 retained for reinstallation. Source builds are in [CONTRIBUTING](https://github.com/hs3180/tidemux/blob/main/CONTRIBUTING.md#development).
 
+### Agent-assisted setup
+
+Use the same workflow with any coding agent. For example:
+
+> Install or update TideMux from the latest stable release. Configure my chosen
+> provider URL, protocol and model scope using the TideMux CLI. Let me enter
+> credentials in Terminal, preserve other settings, and verify the local gateway.
+
+1. Check `uname -s`, `uname -m`, `sw_vers -productVersion` and, when installed,
+   `tidemux version`. Check the [latest stable release](https://github.com/hs3180/tidemux/releases/latest)
+   and use its version-matched README, guide and installer. Pin standalone
+   downloads to that release tag; use Homebrew for an existing Homebrew install.
+2. Inspect `tidemux provider list` and `tidemux provider show REF` before editing.
+   Reuse an existing matching provider with `provider update REF`; use
+   `provider add` for a new one. Apply only the requested provider/model scope.
+   Rerunning the workflow must preserve unrelated providers and settings.
+3. Hand hidden credential prompts to the user in Terminal. Never ask for keys in
+   chat or put them in arguments, transcripts or generated files. Use the CLI's
+   Keychain workflow. Ask the user to choose any unspecified provider/model and
+   before replacing configuration or enabling a non-loopback listener.
+4. Run `tidemux doctor`, inspect the provider/model scope and run
+   `tidemux gateway check` after the local gateway starts. Use `--config PATH`
+   consistently for another profile. Report actionable errors without secrets,
+   then summarize the installed version, endpoint, selected model and next step.
+
 ## Providers
 
 Each provider reference groups one API root, protocol, model scope and key pool.
