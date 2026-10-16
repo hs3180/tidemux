@@ -14,55 +14,26 @@ jobs:
         with:
           go-version: '1.27.1'
           cache: true
-      - name: Format, test, vet and race
+      - name: Core unit tests and static checks
         run: |
           test -z "$(gofmt -l cmd internal)"
           CGO_ENABLED=0 go test ./...
           CGO_ENABLED=0 go vet ./...
           go test -race ./...
-          python3 scripts/test_provider_add_pty.py
-          python3 -m py_compile scripts/test_client_recovery_package.py
           sh -n scripts/install.sh
           python3 scripts/test_install.py
-          python3 scripts/test_client_commands.py
       - name: Build candidate
         run: python3 scripts/release.py --build-id commit
-      - name: Verify packaged routing, budgets and logs
+      - name: Offline package smoke
         run: |
-          python3 - <<'PY'
+          python3 - <<'PYTHON'
           from pathlib import Path
-          import subprocess, tarfile, tempfile
+          import subprocess
           archives = list(Path("dist").glob("*/*.tar.gz"))
           if len(archives) != 1:
               raise SystemExit("Expected one immutable candidate archive")
-          with tempfile.TemporaryDirectory(prefix="tidemux-package-ci.") as temporary:
-              with tarfile.open(archives[0]) as archive:
-                  if any("/examples/" in member.name or "/scripts/" in member.name for member in archive.getmembers()):
-                      raise SystemExit("Test fixtures and example directories must not ship")
-                  archive.extractall(temporary)
-              binary, = Path(temporary).glob("tidemux-*/tidemux")
-              subprocess.run(["python3", "scripts/test_install_package.py", "--directory", str(archives[0].parent)], check=True)
-              for script in ["test_anthropic_server_tools_package.py",
-                             "test_tool_history_package.py",
-                             "test_glm_tool_results_package.py",
-                             "test_shared_model_affinity_package.py",
-                             "test_shared_model_launch_package.py",
-                             "test_auto_chain_package.py",
-                             "test_route_recovery_package.py",
-                             "test_availability_package.py",
-                             "test_key_diagnostics_package.py",
-                             "test_hot_reload_package.py",
-                             "test_routing_reload_package.py",
-                             "test_provider_sessions_package.py",
-                             "test_budget_recovery_package.py",
-                             "test_budget_reservation_package.py",
-                             "test_report_budget_package.py",
-                             "test_client_reliability_package.py",
-                             "test_startup_logs_package.py",
-                             "test_usage_logs_package.py",
-                             "test_runtime_logs_package.py"]:
-                  subprocess.run(["python3", "scripts/" + script, "--binary", str(binary)], check=True)
-          PY
+          subprocess.run(["python3", "scripts/smoke.py", "--directory", str(archives[0].parent)], check=True)
+          PYTHON
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: candidate-darwin-arm64

@@ -36,7 +36,9 @@ secrets, full bodies, raw sessions and private paths from diagnostics. Provider
 error reasons follow the bounded/redacted message policy in PRIVACY.md.
 Keep unknown usage/cost and currencies distinct; counters never replace SQLite.
 
-Run focused meaningful tests, required Go test/vet/race and affected package gates.
+Keep core contract unit tests and the offline smoke entry; avoid adding one-off
+package/client acceptance suites. Run focused meaningful tests, required Go
+test/vet/race, installer unit tests and `scripts/smoke.py` for package acceptance.
 Final delivery uses one clean extracted archive with source/binary/archive hashes
 and actual tool versions; follow [release checks](CONTRIBUTING.md#releases).
 Update generated notices via `scripts/licenses.py`; preserve privacy, security,
