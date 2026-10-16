@@ -377,7 +377,8 @@ content-free summary. CLI help covers delivery/retry and other adapters.
 
 ## Logs and collection
 
-Runtime stderr and terminal-request files use the same schema-2 JSONL records.
+Runtime stderr and terminal-request files use the same
+[schema-2 runtime records](design.md#runtime-identity-and-usage-records).
 Session files live at `logs/projects/tidemux/*.jsonl` beside the ledger.
 Each event has `timestamp`, `event`, `service` (name/version/process instance)
 and a unique persisted `event_id`. Requests also have `requestId`, outcome,
@@ -494,8 +495,8 @@ first. Correlate failures with the JSON event's request ID and safe error code.
 | Upstream stream/response error | Check the `request_terminal` event's `outcome` and `error_code`; HTTP 200 can still end in failure. |
 | `upstream_timeout` | Check `error.failure.phase` and the effective upstream protocol. Defaults are 60 seconds for non-streaming and ten minutes for streaming; a fast model-list query does not establish inference health. |
 
-Partial output is not a completed turn. TideMux never replays output that may
-have reached the client; client retries create new requests. After correcting
+Partial output is not a completed turn. Follow the
+[single-dispatch recovery contract](design.md#single-dispatch). After correcting
 a malformed response, use the client's new-conversation mode without
 `--continue`/`--resume`, then resume only a successful history. Share timestamps,
 request IDs and safe codes, after checking the metadata for private information.
