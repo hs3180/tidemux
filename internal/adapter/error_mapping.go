@@ -12,6 +12,7 @@ type ProviderErrorCategory string
 
 const (
 	ProviderErrorInsufficientBalance    ProviderErrorCategory = "insufficient_balance"
+	ProviderErrorQuotaExhausted         ProviderErrorCategory = "quota_exhausted"
 	ProviderErrorRateLimited            ProviderErrorCategory = "rate_limited"
 	ProviderErrorAuthentication         ProviderErrorCategory = "authentication"
 	ProviderErrorPermissionDenied       ProviderErrorCategory = "permission_denied"
@@ -37,10 +38,10 @@ func (m ProviderErrorMapping) Validate() error {
 		return errors.New("http_status must be 400..599 when supplied")
 	}
 	switch m.Category {
-	case ProviderErrorInsufficientBalance, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound, ProviderErrorTemporarilyUnavailable:
+	case ProviderErrorInsufficientBalance, ProviderErrorQuotaExhausted, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound, ProviderErrorTemporarilyUnavailable:
 		return nil
 	default:
-		return errors.New("category must be insufficient_balance, rate_limited, authentication, permission_denied, policy_denied, invalid_request, model_not_found or temporarily_unavailable")
+		return errors.New("category must be insufficient_balance, quota_exhausted, rate_limited, authentication, permission_denied, policy_denied, invalid_request, model_not_found or temporarily_unavailable")
 	}
 }
 
@@ -95,6 +96,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 	switch c {
 	case ProviderErrorInsufficientBalance:
 		code = "provider_insufficient_balance"
+	case ProviderErrorQuotaExhausted:
+		code = "provider_quota_exhausted"
 	case ProviderErrorRateLimited:
 		code = "upstream_rate_limited"
 	case ProviderErrorAuthentication:
@@ -115,6 +118,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 	switch c {
 	case ProviderErrorInsufficientBalance:
 		message = "The provider reports insufficient balance. Check its account balance or billing status, then retry."
+	case ProviderErrorQuotaExhausted:
+		message = "The provider reports an exhausted quota. Wait for its quota reset or select an eligible alternative provider."
 	case ProviderErrorRateLimited:
 		message = "The provider is rate limiting requests. Wait for the indicated interval before retrying."
 	case ProviderErrorAuthentication:
@@ -136,7 +141,7 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		switch c {
 		case ProviderErrorInsufficientBalance:
 			kind = "billing_error"
-		case ProviderErrorRateLimited:
+		case ProviderErrorRateLimited, ProviderErrorQuotaExhausted:
 			kind = "rate_limit_error"
 		case ProviderErrorAuthentication:
 			kind = "authentication_error"
@@ -154,6 +159,8 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 	} else {
 		switch c {
 		case ProviderErrorInsufficientBalance:
+			kind = "insufficient_quota"
+		case ProviderErrorQuotaExhausted:
 			kind = "insufficient_quota"
 		case ProviderErrorRateLimited:
 			kind = "rate_limit_error"
@@ -176,7 +183,7 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 	switch c {
 	case ProviderErrorInsufficientBalance:
 		status = 402
-	case ProviderErrorRateLimited:
+	case ProviderErrorRateLimited, ProviderErrorQuotaExhausted:
 		status = 429
 	case ProviderErrorAuthentication:
 		status = 502

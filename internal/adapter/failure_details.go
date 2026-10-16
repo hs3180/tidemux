@@ -53,7 +53,7 @@ func failureRetryability(e *CallError) string {
 	switch e.Category {
 	case ProviderErrorRateLimited, ProviderErrorTemporarilyUnavailable:
 		return "retryable"
-	case ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound, ProviderErrorInsufficientBalance:
+	case ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound, ProviderErrorInsufficientBalance, ProviderErrorQuotaExhausted:
 		return "terminal"
 	}
 	status := e.UpstreamStatus

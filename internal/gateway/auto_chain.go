@@ -181,7 +181,7 @@ func autoChainFailureAdvances(callErr *adapter.CallError, ctxErr error, delivere
 	if callErr.Code == "upstream_transport_error" && callErr.UpstreamNotAttempted {
 		return !delivered
 	}
-	return callErr.Category == adapter.ProviderErrorModelNotFound || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorTemporarilyUnavailable
+	return callErr.Category == adapter.ProviderErrorModelNotFound || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorQuotaExhausted || callErr.Category == adapter.ProviderErrorTemporarilyUnavailable
 }
 
 func (s *autoChainState) selectRoute(key *sharedModelSessionKey) (routeStep, bool) {

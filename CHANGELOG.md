@@ -20,6 +20,10 @@
   Put mid-stream recovery guidance and correlation in
   terminal SSE events. Expose standard SDK request-ID headers and the running
   TideMux version, plus health scope, waits and alternatives in availability.
+- Send explicit SDK retry signals and matching bounded second/millisecond
+  waits; record the response retry headers in safe failure metadata. Distinguish
+  confirmed quota exhaustion from billing errors, allowing automatic recovery
+  only through an eligible shared/auto alternative and preserving explicit routes.
 - Route new client retry requests away from failed streams, upstream 5xx and
   timeouts while keeping healthy bindings and explicit provider choices. An
   undispatched queued route can reselect without duplicate audits or lost timing.

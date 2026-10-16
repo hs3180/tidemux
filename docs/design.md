@@ -63,6 +63,11 @@ Authentication retains key scope. A 429 without a valid server wait cools its
 key and leaves healthy peers eligible. A valid upstream `Retry-After` on a
 retryable failure pauses the entire provider, across all keys and models.
 Once all keys are cooling, the provider also becomes ineligible.
+An exact `quota_exhausted` mapping (or the standard `insufficient_quota` code)
+keeps quota exhaustion distinct from balance errors and temporary rate limits.
+It retains HTTP 429, provider scope and any full server wait; absent a wait,
+request-driven recovery starts after five minutes with bounded backoff.
+Numeric vendor codes have no global meaning and require a provider mapping.
 Local rejection, cancellation, terminal client errors and conversion failures
 do not create upstream failure evidence. Upstream 5xx, interrupted streams and
 upstream timeouts affect only the provider/model. An explicit unclassified SSE
@@ -128,6 +133,11 @@ state and is rechecked after queueing, before any HTTP attempt. An active probe
 makes its completion time unknown and never supplies a synthetic countdown.
 Errors distinguish the wait source, bounded client retry advice and eligible
 model/protocol/health alternatives. A new request rechecks admission and budgets.
+Recoverable HTTP errors send `x-should-retry: true`; bounded integer
+`Retry-After` and `retry-after-ms` describe the same client cadence. Known
+terminal errors send `false` without a wait. Confirmed quota exhaustion allows
+automatic retry only when the requested shared/auto route has an eligible
+alternative; explicit selection and routes all blocked by quota stay terminal.
 After SSE headers are committed, guidance and request IDs belong in the terminal
 error event. Client SDKs may ignore custom retry fields or replace the message.
 
@@ -174,3 +184,9 @@ status are separate from downstream status: a failed open stream can still have
 downstream HTTP 200. HTTP trace phases use bounded names and never retain host,
 address or validation text. Unknown classifications remain unknown. Safe code
 retention and provider request IDs follow the [privacy contract](../PRIVACY.md).
+After health feedback, the gateway freezes its response retry decision before
+the adapter commits the terminal audit. `failure.response_retry_headers` retains
+only the generated retry boolean and bounded second/millisecond waits; the
+response, audit and terminal event use that same snapshot. An empty object
+records absent retry headers, including an already-open SSE response. Later
+requests still use current routing state. Arbitrary upstream headers are excluded.

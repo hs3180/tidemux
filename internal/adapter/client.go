@@ -97,6 +97,9 @@ type KeyCandidateCallbacks struct {
 	Completed        func(index int, err error)              // upstream result, before releasing the dispatch gate
 	Ready            func(index int) (bool, time.Duration)
 	Failed           func(index int, callErr *CallError)
+	// PrepareFailure runs after health completion/cancellation classification and
+	// before persistence. The owner can freeze content-free response guidance.
+	PrepareFailure func(callErr *CallError)
 }
 
 type observedReader struct {
@@ -240,6 +243,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 			}
 			var terminal *CallError
 			if errors.As(err, &terminal) {
+				if callbacks.PrepareFailure != nil {
+					callbacks.PrepareFailure(terminal)
+				}
 				a.Failure = terminal.Failure.Normalize()
 			}
 		}

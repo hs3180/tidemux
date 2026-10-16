@@ -23,6 +23,9 @@ values echoed in these fields are removed. Provider error bodies, messages,
 account details and network addresses are never copied into failure metadata.
 The same metadata is returned in client errors; request IDs may allow the
 configured provider to locate its own request record.
+Failure metadata also records generated downstream retry signals: a boolean
+header value and optional bounded waits in seconds/milliseconds. No arbitrary
+upstream header values are copied into this response snapshot.
 
 [Usage logging](docs/guide.md#logs-and-collection) runs by default and writes ccusage-compatible
 JSONL directly when a request ends. It records model and token/cache counts;
