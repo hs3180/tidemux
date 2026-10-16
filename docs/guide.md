@@ -105,7 +105,7 @@ this guide to install and configure TideMux.
 
 When upgrading from 0.3.3 or earlier, remove `routing.billing_exhaustion_failover` from an old
 configuration, including a value of `false`. The field is no longer accepted.
-Each client retry is a new request; the gateway dispatches at most once for it.
+Recovery uses a new client request; see the [single-dispatch contract](design.md#single-dispatch).
 
 | Model | Selection |
 | --- | --- |
@@ -119,56 +119,36 @@ tidemux auto-chain set --entries REF_A/MODEL_A,REF_B/MODEL_B
 tidemux provider update REF --max-active-sessions 5
 ```
 
-Shared selection is off by default. `random` retains a healthy binding when
-the caller supplies a stable `X-TideMux-Session-ID` (or Anthropic
-`metadata.user_id`); without one, selection is per request. `price_priority`
-chooses the lowest sum of the three token rates and requires comparable prices
-in one currency. It has no session affinity. Shared-model launchers preserve
-the bare ID and omit any one candidate's context/output-limit declarations.
-Use `--shared-model-strategy off` to restore explicit ambiguity checks.
+Use `random` or `price_priority` for shared selection, or
+`--shared-model-strategy off` to restore explicit ambiguity checks. For a stable
+conversation, supply `X-TideMux-Session-ID` (or Anthropic `metadata.user_id`).
+The [route-selection contract](design.md#route-selection) defines eligibility,
+affinity and comparable pricing; the [switching contract](design.md#cooldown-switching)
+defines subsequent recovery choices.
 
-`/v1/models`, `/models` and model-detail responses expose each qualified model's
-known `context_length` and `max_output_tokens`. Named providers discover these
-from their model catalog. The cache lasts for the connection: endpoint, protocol,
-API-version or credential changes fetch it again; restart to refresh an unchanged
-upstream catalog. This performs no generation requests. Kilo/Hermes launchers
-use the running gateway's per-model limits; shared bare models keep limits unset.
-
-If the catalog omits limits, or supplies invalid/conflicting values, those values
-remain unknown and startup logs warn with `model_capabilities_unknown` or
-`model_capabilities_invalid`. Nonzero `providers.REF.model_capabilities` settings
-(`context_tokens`, `max_output_tokens`) override discovered fields; a disagreement
-produces `model_capabilities_conflict`. Verify values with the provider before
-configuring them. The override applies to the entire provider, so use a dedicated
-scope for models with the same limits. Model names and overflow error text are
-not used to guess a window. A missing field still means unknown.
+Inspect `/v1/models`, `/models` or a model-detail response for each qualified
+model's known `context_length` and `max_output_tokens`. Startup warnings
+`model_capabilities_unknown`, `model_capabilities_invalid` and
+`model_capabilities_conflict` identify metadata to investigate. The
+[catalog contract](design.md#model-capability-catalog) defines refresh, override
+precedence, unknown values and launcher propagation. Verify limits with the
+provider before configuring an override; use separate provider scopes for models
+that need different overrides.
 
 Set a verified provider-wide context override with
 `tidemux provider update REF --context-tokens 1000000` (one million tokens).
 `tidemux provider show REF` displays the configured override. Set it to `0` to
-clear the override and use catalog discovery again; missing catalog metadata
-still means unknown. This preserves the configured output limit and other
-provider settings. The running gateway applies the saved configuration through
-its normal reload process.
+clear the override without changing the configured output limit or other
+provider settings. Confirm the saved configuration is applied; effective limits
+follow the [catalog contract](design.md#model-capability-catalog).
 
-Auto-chain failures affect later eligible requests; the dispatched request is
-not replayed. After dispatch, TideMux does not wait for a retry, retry a 429,
-switch keys, fail over to another provider, or change the requested model. It
-returns the mapped result and bounded gateway retry advice to the caller; the
-client owns retry timing and sends a new request. Configure error mappings with
-`provider error-map --help`.
+Clients own recovery requests; see the [dispatch contract](design.md#single-dispatch).
+Configure provider error mappings with `provider error-map --help`.
 
-A stable random/auto session keeps its provider during a short cooldown. On the
-next request, TideMux compares the **remaining** wait with
-`routing.provider_switch_threshold` (default **60 seconds**). A known remaining
-wait strictly greater than the threshold switches to a healthy compatible
-alternative; equality or a shorter wait retains the binding and returns a local
-429 with a bounded wait, without generating upstream. Price priority applies the
-same comparison to its lowest-price compatible provider. It still has no session
-affinity: after recovery, later price-priority requests follow normal price order.
-Fresh random/auto conversations keep normal eligible-route selection.
-
-Set or inspect the global threshold:
+Use `provider_switch_threshold` to control when a later request can choose
+another provider. The [switching contract](design.md#cooldown-switching) owns
+comparison boundaries, precedence, affinity, unknown waits and switchback.
+Set or inspect the routing-level threshold:
 
 ```sh
 tidemux routing set --provider-switch-threshold 60
@@ -176,10 +156,8 @@ tidemux routing show
 tidemux routing set --provider-switch-threshold default
 ```
 
-Values are integer seconds in `0..86400`. Zero explicitly selects the previous
-immediate eligible-route recovery policy. Global, provider and exact upstream
-model overrides are hot reloadable; precedence is model, then provider, then
-global, then 60 seconds. Add these optional fields to an existing provider object:
+For provider/model overrides, add these optional fields to the intended provider
+object (illustrative values, not defaults):
 
 ```json
 {
@@ -188,42 +166,23 @@ global, then 60 seconds. Add these optional fields to an existing provider objec
 }
 ```
 
-Confirm the saved revision is applied. Already admitted requests keep their own
-threshold/configuration snapshot. The comparison includes the maximum independent
-provider, model and key gate; it never shortens a full server pause to the client
-retry cadence. An active probe has unknown completion time. Unless a known lower
-bound already exceeds the threshold, the default retains that binding with
-bounded backoff rather than inventing a countdown. Without a healthy compatible
-alternative, the binding stays in place. Explicit `PROVIDER/MODEL` never switches.
-Alternatives still pass request-feature, capacity and budget admission checks.
+Save provider edits atomically and confirm the revision is applied. To select
+the earlier immediate-recovery policy, use
+`tidemux routing set --provider-switch-threshold 0`; the
+[switching contract](design.md#cooldown-switching) defines zero and omitted values.
 
-After a long-wait switch, healthy random/auto bindings stay on their new provider;
-there is no active migration back. A fresh conversation can probe an earlier
-eligible route, and successful recovery restores it for normal new selection.
-Auto chains keep their configured permitted model order; only bare shared models
-require the identical model across providers. A partial reply is never replayed.
-For the older immediate recovery behavior during migration, configure threshold
-zero explicitly; omitting the field now enables the 60-second policy.
+The `routing_decision` metadata in terminal JSONL/SQLite exposes `from_provider`,
+`to_provider`, `model`, `action`, `reason`, `threshold_ms`, optional `remaining_ms`
+and `cooldown_until_ms`. `wait_unknown` marks a reported wait as only a known
+lower bound; optional `to_model` identifies an allowed auto-chain model change.
+Storage/accounting and timing rules are defined by the
+[decision-record contract](design.md#routing-decision-records). Back up the
+complete SQLite database before upgrading, including its decision metadata.
 
-The `routing_decision` metadata in terminal JSONL/SQLite identifies the actual
-source/destination provider, model, action, reason, threshold, known remaining
-wait and cooldown deadline. Millisecond remainders round upward; `wait_unknown`
-means any recorded wait is only a known lower bound. An optional `to_model`
-identifies an allowed auto-chain model change. Local waits have one correlated
-`local_diagnostics` row and optional `local_routing_decisions` details, committed
-together; these are not generation/cost records. Historical rows and the old
-diagnostic table's write shape remain readable/usable. Back up the complete
-SQLite database before upgrading, including this additive metadata table.
-
-The `routing.billing_exhaustion_failover` field has been removed. Delete it from
-existing configuration files before upgrading; configuration validation rejects
-unknown fields.
-
-Global upstream request concurrency is unlimited in new configurations.
-Use `tidemux gateway configure --max-in-flight 0` to disable the limit in an
-existing configuration, then restart the gateway. Existing positive values
-still cap simultaneous upstream requests across all providers; this setting
-does not hot reload.
+Configure upstream request concurrency with
+`tidemux gateway configure --max-in-flight 0`, then restart the gateway. The
+[capacity contract](design.md#session-capacity) distinguishes execution
+concurrency from logical sessions and defines the default and restart behavior.
 
 Only providers limit logical sessions. Inspect a cap with `provider show REF`
 or authenticated `GET /tidemux/session-status`, whose `providers` object contains
@@ -236,9 +195,8 @@ Remove the obsolete top-level `max_active_sessions` field before upgrading,
 including a value of `0`; validation rejects it with removal guidance. Configure
 each intended cap using `provider update REF --max-active-sessions N` instead.
 There is no gateway-wide session option, prompt or status counter.
-Listener mode defaults
-to authenticated loopback; `0.0.0.0` exposes plain HTTP on the LAN and needs
-network protection. Use `gateway configure --help` for global settings.
+Listener mode defaults to authenticated loopback; `0.0.0.0` exposes plain HTTP on
+the LAN and needs network protection. Use `gateway configure --help` for global settings.
 
 ## Health
 
@@ -253,40 +211,30 @@ inference evidence; `available` records success; `cooling` remembers a failure;
 `probing` has one real request testing recovery. `retry_at` is eligibility to
 try again. Without traffic, recovery stays unconfirmed.
 
-Local cooldowns return HTTP 429 with the protocol's `rate_limit_error`.
-A valid upstream `Retry-After` on a rate-limit or temporary server failure
-pauses the whole provider, across keys and models, until its real deadline.
-This pause is independent of client retry timing and can exceed 24 hours.
-When another compatible route is eligible, the client receives a two-second
-wait and new-request routing advice. Otherwise, known waits are capped at 30
-seconds for the client; a retry only rechecks routing and never dispatches to a
-still-paused provider. An active probe has no known finish time and recommends
-bounded exponential backoff with jitter. Retry advice is limited to three attempts.
+Local cooldowns return HTTP 429 with the protocol's `rate_limit_error`. Inspect
+`error.retry` for `strategy`, optional `after_seconds`, `wait_source`,
+`reselect_provider` and qualified alternatives. `eligible_after_seconds` reports
+known route eligibility separately; `provider_retry_at` is the upstream error's
+provider deadline. These may differ from the client's suggested wait; the
+[retry-advice contract](design.md#retry-advice) defines the bounds and unknowns.
+For a listed qualified alternative, select its `PROVIDER/MODEL` explicitly if
+appropriate; each new request still undergoes admission.
 
-A new shared-model or `auto` request can select another healthy provider.
-An explicit `PROVIDER/MODEL` keeps that choice; the error may list qualified
-alternatives that require changing the model. Alternatives describe model,
-protocol and health; features, session capacity and budgets are checked again
-when a request is sent. `error.retry` supplies `strategy`, optional
-`after_seconds`, `wait_source`, `reselect_provider` and these alternatives.
-`eligible_after_seconds` separately reports known route eligibility and
-`provider_retry_at` retains the provider deadline on the upstream error.
-For example, A can stay paused for one hour while a new request after two
-seconds selects B. A long upstream header is not forwarded to freeze the agent.
-Clients choose their own retry policy.
+`x-should-retry` reports the mapped retry signal. When supplied, `Retry-After`
+and `retry-after-ms` expose matching second/millisecond cadence. A client retains
+its own retry budget and may ignore these signals; see the
+[HTTP/SSE recovery rules](design.md#retry-advice).
 
-Recoverable HTTP errors include `x-should-retry: true`. `retry-after-ms`, when
-present, matches the bounded `Retry-After` in milliseconds. Known terminal
-errors use `x-should-retry: false` without a wait; a header does not override a
-client's retry budget or guarantee that its agent loop will retry.
-For confirmed provider quota exhaustion, shared/auto requests can recover through
-an eligible alternative; explicit requests and routes all blocked by quota send
-the terminal retry signal. Quota errors retain HTTP 429 and their full server pause.
-Map a verified vendor quota code for that provider with
-`tidemux provider error-map add REF --code CODE --status 429 --category quota_exhausted`.
-The standard `insufficient_quota` code is recognized directly; numeric vendor
-codes are not inferred globally. Without a server reset time, quota health uses
-a five-minute initial local recovery wait, not a claimed subscription reset.
+For a verified vendor quota code, configure the intended provider explicitly:
+
+```sh
+tidemux provider error-map add REF --code CODE --status 429 --category quota_exhausted
+```
+
+Use the [failure-recovery contract](design.md#provider-failure-recovery) to
+interpret classification, provider pauses and quota recovery. Verify actual
+subscription/reset information with the provider rather than reading a local
+probe deadline as a subscription reset.
 
 Client retry budgets remain client settings. In loopback acceptance, Claude Code
 2.1.263/2.1.283 and the official OpenAI/Anthropic SDKs consume the terminal signal;
@@ -335,23 +283,12 @@ assumption that they share the subscription. It does not assert that the vendor
 revoked every key/model. Do not use that provider-wide mapping for independent
 entitlements; restrict the configured model scope instead.
 
-All four configured failures pause the provider immediately. The failed request
-returns its error after one generation dispatch. A shared/auto client may retry
-as a new request to an eligible compatible alternative; an explicit provider and
-routes all blocked by these restrictions send `x-should-retry: false`, with no
-retry wait. Local provider-gate rejections use HTTP 429 and retain a distinct
-cooldown code; fair-use rejections keep the generated manual-recovery guidance.
-
-Without a valid upstream `Retry-After`, the initial request-driven recovery wait
-is five minutes with jitter; repeated failed probes back off to 30 minutes plus
-jitter. After the wait, one real request may probe the provider; success restores
-eligibility. These are local probe bounds, **not predicted quota reset or fair-use
-unlock times**. No timer or background inference declares the account healthy.
-A valid upstream wait is preserved in full. Reset dates in free text do not become
-trusted deadlines. Code 1313 alone does not establish key compromise, and its
-recovery time remains unknown. Its fixed conditional guidance is included even
-when provider message forwarding is disabled or a forwarded reason is present.
-Set `forward_error_messages: false` for strict exclusion of upstream free text.
+The [provider-recovery contract](design.md#provider-failure-recovery) defines
+provider-wide pauses, probe timing and the fixed conditional fair-use guidance;
+the [retry-advice contract](design.md#retry-advice) defines what clients receive.
+Use the account-center actions above to resolve restrictions. A local cooldown
+or a code alone does not establish compromise or predict an unlock time. For
+upstream text handling, use [provider error messages](#provider-error-messages).
 
 ### Provider error messages
 
@@ -390,31 +327,18 @@ up to 16 alternatives for an observed model. Omitted wait means no exact time
 is known; a zero wait means a real recovery probe can be attempted now. The CLI
 shows the wait, reason and model-health alternatives without sending inference.
 
-Key labels are opaque. `requests` counts adapter calls using a key;
-`http_attempts` counts actual HTTP attempts. Each downstream generation request
-initiates at most one such attempt.
-Success, failure, cancellation, timeout and in-flight counts are separate.
-Skipped keys and local rejections add no attempts. These counters are not billing.
-Compatible reloads preserve them; credential/connection changes or restart reset
-the counters. A server pause survives policy reload and credential rotation on
-the same provider endpoint/protocol, even when its response arrives after the
-reload. It also protects requests already queued under an older configuration.
-Changing the endpoint/protocol, removing and re-adding the provider, or restarting
-the process resets it. Recovery advice uses the current available routes.
-Toggling diagnostics clears counters/history while preserving routing
-and cooldowns. See [recovery bounds](design.md#routing-and-recovery).
+In authenticated key status, `requests` counts adapter calls and `http_attempts`
+counts initiated HTTP calls. Success, failure, cancellation, timeout and in-flight
+counts are separate; use SQLite billing for accounting. See the
+[counter contract](design.md#key-counters) for counting and reset rules.
 
-`consecutive_rate_limits` on each key and pool is operational health state and
-remains visible with diagnostics disabled. The pool also reports
-`rate_limit_retry_at`, `provider_retry_at`, `last_rate_limit_at` and
-`recovery_in_progress` when relevant. Without a server-supplied provider pause,
-one limited key leaves other ready keys usable. If all keys are cooling, later
-requests wait for the earliest eligible key; only one request tests recovery.
-Without a valid upstream wait, consecutive 429s back off from 30 seconds to
-30 minutes with jitter. The 11th failure silences the affected key for 24 hours;
-if the provider streak exceeds ten with no ready keys, the provider is silenced
-for 24 hours. Success resets the applicable streaks. This is local failure
-recovery, not a measurement of remaining subscription quota.
+`consecutive_rate_limits` stays visible with diagnostics disabled. Inspect it
+alongside `rate_limit_retry_at`, `provider_retry_at`, `last_rate_limit_at` and
+`recovery_in_progress` when investigating a rate limit. These describe local
+health, not subscription quota.
+The [rate-limit contract](design.md#rate-limit-recovery) owns backoff, silence and
+streak rules; [server-wait continuity](design.md#server-wait-continuity) owns
+cross-reload/rotation behavior and recovery claims.
 
 ## Billing and budgets
 
@@ -540,7 +464,8 @@ tools, thinking and context-management controls require an Anthropic upstream;
 unsupported request features fail before dispatch. Native blocks/history remain
 provider-owned. TideMux carries tool calls and never executes client tools.
 Responses API, audio, embeddings and IDE integrations are outside the supported
-interface. Full interactive/dsh/Codex workflows are outside release acceptance.
+interface. Validation and optional client investigations belong to
+[CONTRIBUTING](https://github.com/hs3180/tidemux/blob/main/CONTRIBUTING.md#releases).
 
 GLM's native server search can return provider-specific names, assistant
 `tool_result` blocks with string content, and a reported search counter of zero.
