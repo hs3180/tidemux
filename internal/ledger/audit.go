@@ -11,13 +11,16 @@ import (
 )
 
 // Audit is one terminal attempt. Nil counts and cost mean unknown, never free.
-// Request and event data are committed atomically. No content or credentials belong here.
+// Request and event data are committed atomically. Provider error reasons follow
+// the configured message policy; full request/response bodies are excluded.
 type Audit struct {
 	ID               string               `json:"id"`
 	TimestampMS      int64                `json:"timestamp_ms"`
 	Protocol         string               `json:"protocol"`
 	Upstream         string               `json:"upstream"`
 	ProviderRef      string               `json:"provider_ref,omitempty"`
+	KeyLabel         string               `json:"key_label,omitempty"`
+	BackendID        string               `json:"backend_id,omitempty"`
 	Model            string               `json:"model"`
 	Status           string               `json:"status"`
 	ErrorCode        string               `json:"error_code,omitempty"`
@@ -73,6 +76,7 @@ func (l *Ledger) AppendAudit(a Audit) (err error) {
 		return errors.New("invalid audit cost")
 	}
 	a.Failure = a.Failure.Normalize()
+	a.KeyLabel, a.BackendID = diagnostics.KeyLabel(a.KeyLabel), diagnostics.KeyLabel(a.BackendID)
 	data, err := json.Marshal(a)
 	if err != nil {
 		return err

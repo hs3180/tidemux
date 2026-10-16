@@ -12,6 +12,7 @@ import (
 // keeps each attempted key bound for that attempt and never switches after
 // downstream stream output begins.
 type providerKeyPool struct {
+	backendID         string // independently assigned connection identity
 	labels            []string
 	failureClasses    []string
 	failureTimes      []time.Time
@@ -43,7 +44,7 @@ func newProviderKeyPool(keys []string) *providerKeyPool {
 	if len(keys) == 0 {
 		return nil
 	}
-	pool := &providerKeyPool{keys: append([]string(nil), keys...), cooldowns: make([]time.Time, len(keys)),
+	pool := &providerKeyPool{backendID: assignedKeyLabel(), keys: append([]string(nil), keys...), cooldowns: make([]time.Time, len(keys)),
 		rateFailures: make([]uint16, len(keys)), rateVersions: make([]uint64, len(keys)), jitter: recoveryJitter,
 		providerRetry: &providerRetryState{}}
 	pool.initializeDiagnostics()

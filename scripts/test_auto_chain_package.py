@@ -46,7 +46,7 @@ class AutoUpstream(BaseHTTPRequestHandler):
         if body.get("stream"):
             self.reply(200, b'data: {"model":"provider-alias","choices":[{"index":0,"delta":{"content":"partial"}}]}\n\nevent: error\ndata: {"error":{"code":"missing_model","status":404}}\n\n', "text/event-stream")
         elif provider == "a":
-            self.reply(404, {"error": {"code": "missing_model", "message": "private_auto_provider_error"}})
+            self.reply(404, {"error": {"code": "missing_model", "message": "Bearer private_auto_provider_error"}})
         else:
             self.reply(200, {
                 "id": "chatcmpl-auto", "object": "chat.completion", "model": "provider-alias",

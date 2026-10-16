@@ -32,7 +32,7 @@ func TestUpstreamFailureDetailsJoinClientLogAndAudit(t *testing.T) {
 						w.Header().Set("request-id", "req_fixture12345678")
 						if mode == "http_400" {
 							w.WriteHeader(400)
-							io.WriteString(w, `{"error":{"code":1210,"param":"/private/parameter","message":"PRIVATE_UPSTREAM_DETAILS"}}`)
+							io.WriteString(w, `{"error":{"code":1210,"param":"/private/parameter","message":"Bearer PRIVATE_UPSTREAM_DETAILS"}}`)
 							return
 						}
 						w.Header().Set("Content-Type", "text/event-stream")
@@ -46,7 +46,7 @@ func TestUpstreamFailureDetailsJoinClientLogAndAudit(t *testing.T) {
 						if mode == "stream_redacted" {
 							code = "private_account_identifier"
 						}
-						data, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]any{"code": code, "status": 503, "message": "PRIVATE_UPSTREAM_DETAILS"}})
+						data, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]any{"code": code, "status": 503, "message": "Bearer PRIVATE_UPSTREAM_DETAILS"}})
 						io.WriteString(w, "event: error\ndata: "+string(data)+"\n\n")
 					}))
 					defer upstream.Close()

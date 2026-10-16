@@ -30,7 +30,7 @@ func TestStreamingGatewayAudit(t *testing.T) {
 					io.WriteString(w, start)
 					w.(http.Flusher).Flush()
 					if scenario == "error" {
-						io.WriteString(w, "event: error\ndata: {\"error\":{\"message\":\"secret upstream body\"}}\n\n")
+						io.WriteString(w, "event: error\ndata: {\"error\":{\"message\":\"Bearer secret-upstream-body\"}}\n\n")
 						return
 					}
 					if scenario != "truncated" {
@@ -57,7 +57,7 @@ func TestStreamingGatewayAudit(t *testing.T) {
 				if w.Code != 200 || w.Header().Get("Content-Type") != "text/event-stream" || !w.Flushed {
 					t.Fatalf("%d %v", w.Code, w.Header())
 				}
-				if strings.Contains(w.Body.String(), "secret upstream body") {
+				if strings.Contains(w.Body.String(), "secret-upstream-body") {
 					t.Fatal("leaked error")
 				}
 				if scenario == "ok" {

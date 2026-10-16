@@ -239,6 +239,7 @@ func TestProviderNameGenerationDoesNotRequireUserLabel(t *testing.T) {
 
 func TestLegacyProviderMigrationPreservesGatewaySettings(t *testing.T) {
 	c := gateway.Config{ListenAddr: "0.0.0.0:4000", Protocol: "openai", BaseURL: "https://provider.example/v1", Model: "model-a", UpstreamID: "primary", UpstreamKeychain: gateway.KeychainReference{Service: "provider", Account: "old"}, AccessTokenKeychain: gateway.KeychainReference{Service: "gateway", Account: "local"}, MaxInFlight: 5, MaxActiveSessions: 12, ActiveSessionIdleTimeoutSeconds: 120, LedgerPath: "ledger.db"}
+	c.ForwardErrorMessages = new(false)
 	got, err := migrateLegacyProvider(c, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +249,9 @@ func TestLegacyProviderMigrationPreservesGatewaySettings(t *testing.T) {
 	}
 	if len(got.Providers) != 1 || got.Providers["provider"].UpstreamKeychain != c.UpstreamKeychain || got.Providers["provider"].BaseURL != c.BaseURL {
 		t.Fatalf("migration lost provider: %+v", got)
+	}
+	if got.ForwardErrorMessages != nil || got.Providers["provider"].ForwardErrorMessages == nil || *got.Providers["provider"].ForwardErrorMessages {
+		t.Fatal("migration lost strict error-message policy")
 	}
 	if err := got.Validate(); err != nil {
 		t.Fatal(err)

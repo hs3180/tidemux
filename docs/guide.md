@@ -192,6 +192,34 @@ The standard `insufficient_quota` code is recognized directly; numeric vendor
 codes are not inferred globally. Without a server reset time, quota health uses
 a five-minute initial local recovery wait, not a claimed subscription reset.
 
+Provider error reasons are forwarded by default in the primary `error.message`
+for both HTTP and terminal SSE errors. Standard API types/codes keep their meaning
+across protocols; a recognized native code uses `error.code` and the generated
+code moves to `gateway_code`. Specific unsupported-parameter diagnostics retain
+their gateway code. Configured vendor mappings keep their category code
+and expose the retained original as `provider_code`. No numeric vendor code is
+classified globally. Clients can still choose their own recovery behavior.
+
+For a provider whose errors can echo sensitive account or prompt details, set
+`"forward_error_messages": false` in its `providers.REF` JSON object. Omitted or
+true enables forwarding. Legacy single-provider configuration uses the same
+field at the root. Save atomically; confirm the config reload applied before
+sending new requests. Already admitted requests retain their original policy.
+This switch removes text from client errors, SQLite and JSONL. The enabled policy
+removes known credentials/sessions and common credential/account shapes, cleans
+controls and terminal escapes, and limits reasons to 512 Unicode characters.
+It cannot recognize every sensitive free-text value; see [privacy](../PRIVACY.md).
+
+Unambiguous explicit token comparisons retain `actual_tokens` and `limit_tokens`
+in `error` and `error.failure` even with forwarding disabled. They describe that
+rejected request, not the model's permanent window or every key in a pool.
+Contradictory, missing and overflowing facts stay unknown. Model overrides and
+catalog metadata remain unchanged. Before upgrading from 0.3.4, set false for
+providers that require the previous text-free behavior; keep a config/ledger
+backup. New optional audit JSON fields need no SQLite table migration, and old
+rows remain readable. The existing legacy billing-failover field must still be
+removed according to the migration guidance above.
+
 If a stream fails after partial output, its terminal SSE error carries the
 same recovery guidance and a gateway `request_id`. The ID also appears in the
 error message for retry guidance, the response header and the corresponding
@@ -283,13 +311,18 @@ Runtime stderr and terminal-request files use the same schema-2 JSONL records.
 Session files live at `logs/projects/tidemux/*.jsonl` beside the ledger.
 Each event has `timestamp`, `event`, `service` (name/version/process instance)
 and a unique persisted `event_id`. Requests also have `requestId`, outcome,
-model and known usage. Bodies, credentials, raw sessions and provider error messages
-are omitted; [privacy](../PRIVACY.md) covers retained metadata.
+model and known usage. Full bodies, credentials and raw sessions
+are omitted; provider error reasons follow the configured policy; [privacy](../PRIVACY.md) covers retained metadata.
 
 For a failed call, compare the request ID in the response header or terminal SSE
 error with `requestId` in the log. `failure` records upstream HTTP/embedded error
 status, source/phase, a safe provider code or its redaction state, provider request
-ID when valid, category and retryability. An HTTP 200 stream can end with an error;
+ID when valid, category and retryability, plus the redacted reason when enabled
+and explicit token facts. Terminal records also carry `key_label` and `backend_id`;
+use the authenticated key status to match the actual pool slot. Labels survive
+policy reloads but reset with the process or connection/key pool. `backend_id`
+identifies that gateway connection, not a known physical upstream server. The
+canonical schema 2 model remains `message.model`. An HTTP 200 stream can end with an error;
 use `outcome` and the terminal error. `unknown` means the cause was not established,
 not a confirmed quota, policy or context-limit failure. Preserve the provider
 request ID when asking that provider to investigate; review metadata before sharing.

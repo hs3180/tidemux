@@ -32,7 +32,8 @@ These rules apply to the repository and its worktrees, alongside workspace rules
 Preserve admitted request views, session/capacity/budget semantics, reload epoch
 and connection-generation fences. Recheck health after queuing; never replay
 output that may have reached a client. Credentials stay in Keychain. Exclude
-secrets, bodies, raw sessions, private paths and provider error messages from diagnostics.
+secrets, full bodies, raw sessions and private paths from diagnostics. Provider
+error reasons follow the bounded/redacted message policy in PRIVACY.md.
 Keep unknown usage/cost and currencies distinct; counters never replace SQLite.
 
 Run focused meaningful tests, required Go test/vet/race and affected package gates.

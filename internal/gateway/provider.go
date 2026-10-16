@@ -119,13 +119,14 @@ func resolveProvidersPartial(c Config, httpClient *http.Client) (map[string]Prov
 	}
 	name := "legacy"
 	provider := Provider{
-		Protocol:          protocol,
-		BaseURL:           c.BaseURL,
-		APIVersion:        apiVersion,
-		APIKey:            c.APIKey,
-		UpstreamID:        c.UpstreamID,
-		ModelCapabilities: c.ModelCapabilities,
-		Prices:            c.Prices,
+		Protocol:             protocol,
+		BaseURL:              c.BaseURL,
+		ForwardErrorMessages: c.ForwardErrorMessages,
+		APIVersion:           apiVersion,
+		APIKey:               c.APIKey,
+		UpstreamID:           c.UpstreamID,
+		ModelCapabilities:    c.ModelCapabilities,
+		Prices:               c.Prices,
 	}
 	return map[string]Provider{name: provider}, nil, nil
 }

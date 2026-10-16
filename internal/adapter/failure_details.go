@@ -15,6 +15,15 @@ func providerFailure(body []byte, response *http.Response, source string, mappin
 		f.ProviderRequestID = providerRequestID(response.Header)
 	}
 	f.ErrorStatus = providerErrorHTTPStatus(body)
+	var detail struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &detail) == nil {
+		f.ProviderType, f.ProviderMessage = detail.Error.Type, detail.Error.Message
+	}
 	code := providerErrorCode(body)
 	if code != "" {
 		f.ProviderCode = code
@@ -33,7 +42,9 @@ func providerFailure(body []byte, response *http.Response, source string, mappin
 			f.CodeState = "redacted"
 		}
 	}
-	return f.Normalize()
+	// The attempt owner removes known credentials and sessions before
+	// normalizing/truncating this text or exposing it outside the adapter.
+	return f
 }
 
 func providerRequestID(header http.Header) string {

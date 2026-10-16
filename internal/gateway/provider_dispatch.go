@@ -129,6 +129,12 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		}
 		observations := make([]rateLimitObservation, len(candidates))
 		callbacks := adapter.KeyCandidateCallbacks{
+			KeyLabel: func(index int) string {
+				if pool == nil || index < 0 || index >= len(candidates) {
+					return ""
+				}
+				return pool.labels[candidates[index].index]
+			},
 			YieldUnavailable: route.dynamic || route.sessionKey != nil || route.autoChainIndex != nil,
 			PrepareFailure: func(callErr *adapter.CallError) {
 				h.prepareRetryResponse(w, r, callErr)

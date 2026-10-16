@@ -40,6 +40,7 @@ func TestMappedProviderFailureCategoriesStayDistinctForClientProtocols(t *testin
 			c := namedProviderConfig(testConfig(filepath.Join(t.TempDir(), "ledger.db"), upstream.URL+"/v1"), "p")
 			provider := c.Providers["p"]
 			provider.Protocol = "openai"
+			provider.ForwardErrorMessages = new(false)
 			provider.ErrorCodeMappings = []adapter.ProviderErrorMapping{{UpstreamCode: test.upstreamCode, HTTPStatus: test.upstreamHTTP, Category: test.category}}
 			c.Providers["p"] = provider
 			for _, clientProtocol := range []string{"openai", "anthropic"} {

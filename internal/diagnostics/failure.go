@@ -1,4 +1,4 @@
-// Package diagnostics defines content-free upstream failure metadata.
+// Package diagnostics defines bounded upstream failure metadata.
 package diagnostics
 
 import (
@@ -9,7 +9,8 @@ import (
 var (
 	codePattern        = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	numericCodePattern = regexp.MustCompile(`^[0-9]{1,8}$`)
-	requestIDPattern   = regexp.MustCompile(`^(req_[A-Za-z0-9_-]{8,80}|[A-Fa-f0-9]{16,64}|[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12})$`)
+	requestIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`)
+	keyLabelPattern    = regexp.MustCompile(`^key-([a-f0-9]{32}|local-[a-f0-9]+)$`)
 )
 
 // Failure is shared by the client error, terminal log and existing audit JSON.
@@ -24,6 +25,12 @@ type Failure struct {
 	CodeState               string        `json:"provider_code_state"`
 	ConfiguredCode          bool          `json:"provider_code_configured,omitempty"`
 	ProviderRequestID       string        `json:"provider_request_id,omitempty"`
+	ProviderType            string        `json:"provider_type,omitempty"`
+	ProviderMessage         string        `json:"provider_message,omitempty"`
+	ActualTokens            int64         `json:"actual_tokens,omitempty"`
+	LimitTokens             int64         `json:"limit_tokens,omitempty"`
+	KeyLabel                string        `json:"key_label,omitempty"`
+	BackendID               string        `json:"backend_id,omitempty"`
 	Category                string        `json:"category"`
 	Retryability            string        `json:"retryability"`
 	CooldownScope           string        `json:"cooldown_scope,omitempty"`
@@ -82,7 +89,7 @@ func (f *Failure) Normalize() *Failure {
 	}
 	n.CodeState = enum(n.CodeState, "missing", "retained", "redacted", "invalid")
 	if n.ProviderCode != "" {
-		if codePattern.MatchString(n.ProviderCode) && (n.ConfiguredCode || numericCodePattern.MatchString(n.ProviderCode) || standardCode(n.ProviderCode)) {
+		if codePattern.MatchString(n.ProviderCode) && (n.ConfiguredCode || numericCodePattern.MatchString(n.ProviderCode) || StandardErrorCode(n.ProviderCode)) {
 			n.CodeState = "retained"
 		} else {
 			n.ProviderCode, n.CodeState, n.ConfiguredCode = "", "redacted", false
@@ -96,6 +103,20 @@ func (f *Failure) Normalize() *Failure {
 	if !requestIDPattern.MatchString(n.ProviderRequestID) {
 		n.ProviderRequestID = ""
 	}
+	if !StandardErrorCode(n.ProviderType) {
+		n.ProviderType = ""
+	}
+	if credentialShaped(n.ProviderCode) {
+		n.ProviderCode, n.CodeState, n.ConfiguredCode = "", "redacted", false
+	}
+	if strings.HasPrefix(strings.ToLower(n.ProviderRequestID), "sk-") || credentialPatterns[3].MatchString(n.ProviderRequestID) {
+		n.ProviderRequestID = ""
+	}
+	n.ProviderMessage = cleanMessage(n.ProviderMessage)
+	if n.ActualTokens <= n.LimitTokens || n.LimitTokens <= 0 {
+		n.ActualTokens, n.LimitTokens = 0, 0
+	}
+	n.KeyLabel, n.BackendID = KeyLabel(n.KeyLabel), KeyLabel(n.BackendID)
 	n.Category = enum(n.Category, "insufficient_balance", "quota_exhausted", "rate_limited", "authentication", "permission_denied", "policy_denied", "invalid_request", "model_not_found", "temporarily_unavailable", "transport_error", "invalid_response", "downstream_error", "timeout", "canceled", "upstream_error")
 	n.Retryability = enum(n.Retryability, "retryable", "terminal")
 	if n.CooldownScope != "" {
@@ -114,10 +135,10 @@ func (f *Failure) Normalize() *Failure {
 // Redact excludes a credential or raw session even if an upstream echoes it in
 // a syntactically valid code or request-id field. Values never leave the caller.
 func (f *Failure) Redact(values ...string) *Failure {
-	n := f.Normalize()
-	if n == nil {
+	if f == nil {
 		return nil
 	}
+	n := *f
 	for _, value := range values {
 		if value == "" {
 			continue
@@ -128,13 +149,28 @@ func (f *Failure) Redact(values ...string) *Failure {
 		if strings.Contains(n.ProviderRequestID, value) {
 			n.ProviderRequestID = ""
 		}
+		if strings.Contains(n.ProviderType, value) {
+			n.ProviderType = ""
+		}
+		n.ProviderMessage = strings.ReplaceAll(n.ProviderMessage, value, "[redacted]")
 	}
-	return n
+	n.ProviderMessage = redactMessageShapes(n.ProviderMessage)
+	n.ActualTokens, n.LimitTokens = TokenFacts(n.ProviderMessage)
+	return n.Normalize()
 }
 
-func standardCode(value string) bool {
+// KeyLabel accepts only independently assigned labels, never secret hashes.
+func KeyLabel(value string) string {
+	if keyLabelPattern.MatchString(value) {
+		return value
+	}
+	return ""
+}
+
+// StandardErrorCode reports an explicitly recognized API identifier.
+func StandardErrorCode(value string) bool {
 	switch value {
-	case "api_error", "internal_error", "server_error", "overloaded_error", "rate_limit_error", "invalid_request_error", "authentication_error", "permission_error", "not_found_error", "billing_error", "timeout_error", "insufficient_quota":
+	case "api_error", "internal_error", "server_error", "overloaded_error", "rate_limit_error", "invalid_request_error", "authentication_error", "permission_error", "not_found_error", "billing_error", "timeout_error", "insufficient_quota", "context_length_exceeded", "rate_limit_exceeded", "invalid_api_key", "model_not_found", "request_too_large":
 		return true
 	}
 	return false

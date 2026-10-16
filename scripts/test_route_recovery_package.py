@@ -46,7 +46,7 @@ class RecoveryUpstream(BaseHTTPRequestHandler):
             self.server.routes.append(provider)
             failed = provider in self.server.failed
         if failed:
-            self.reply(404, {"error": {"code": "missing_model", "message": "private-recovery-error"}})
+            self.reply(404, {"error": {"code": "missing_model", "message": "Bearer private-recovery-error"}})
             return
         if provider == "a" and self.server.hold:
             self.server.started.set()

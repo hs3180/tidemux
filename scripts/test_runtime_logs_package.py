@@ -147,6 +147,7 @@ def main():
                     "base_url": f"http://127.0.0.1:{upstream.server_port}/{name}/v1",
                     "upstream_id": name,
                     "upstream_keychain": {"service": "test.provider", "account": "local"},
+                    "forward_error_messages": False,
                     "supported_models": ["custom-model"],
                 } for name in ("mock", "success", "stream")},
             }

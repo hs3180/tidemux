@@ -17,6 +17,7 @@ func TestSafeUpstreamParameterErrors(t *testing.T) {
 		retryAfter string
 	}{
 		{status: 400, body: `{"error":{"message":"response_format is not supported. SECRET prompt detail"}}`, code: "unsupported_parameter_response_format"},
+		{status: 400, body: `{"error":{"type":"invalid_request_error","message":"response_format is not supported. SECRET prompt detail"}}`, code: "unsupported_parameter_response_format"},
 		{status: 422, body: `{"error":{"message":"Extra inputs are not permitted for output_config. SECRET"}}`, code: "unsupported_parameter_output_config"},
 		{status: 400, body: `{"error":{"message":"private account SECRET"}}`, code: "upstream_invalid_request"},
 		{status: 401, body: `{"error":{"message":"SECRET key rejected"}}`, code: "upstream_error", cooldown: 30 * time.Second},

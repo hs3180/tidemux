@@ -45,7 +45,7 @@ func TestStreamFailureNewRequestRebindsWithoutReplayingOutput(t *testing.T) {
 								io.WriteString(w, "data: "+`{"id":"fixture","object":"chat.completion.chunk","created":1,"model":"one","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}`+"\n\n")
 							}
 							w.(http.Flusher).Flush()
-							io.WriteString(w, "event: error\ndata: "+`{"error":{"code":"1999","message":"PRIVATE_UPSTREAM_MESSAGE"}}`+"\n\n")
+							io.WriteString(w, "event: error\ndata: "+`{"error":{"code":"1999","message":"Bearer PRIVATE_UPSTREAM_MESSAGE"}}`+"\n\n")
 							return
 						}
 						if providerProtocol == "openai" {

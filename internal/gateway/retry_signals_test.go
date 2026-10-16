@@ -60,7 +60,7 @@ func TestRetrySignalsMatchRecoveryAndPersistedResponse(t *testing.T) {
 						w.Header().Set("Retry-After", tc.wait)
 					}
 					w.WriteHeader(tc.status)
-					fmt.Fprintf(w, `{"error":{"code":%q,"message":"PRIVATE_ERROR_TEXT"}}`, tc.code)
+					fmt.Fprintf(w, `{"error":{"code":%q,"message":"Bearer PRIVATE_ERROR_TEXT"}}`, tc.code)
 				}))
 				defer upstream.Close()
 				c := routingTestConfig(filepath.Join(t.TempDir(), "ledger.db"))

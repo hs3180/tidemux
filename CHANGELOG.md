@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.5 — Unreleased
+
+- Forward bounded, redacted provider error reasons in client-consumed HTTP/SSE
+  messages by default, with a per-provider `forward_error_messages: false`
+  policy. Preserve standard error identifiers and explicit token-limit facts
+  across both protocols, SQLite and JSONL without inferring model capabilities.
+- Record the actual selected key label and admitted provider connection identity
+  on terminal audits and logs, including when optional key counters are off.
+  Accept bounded opaque provider request IDs for upstream investigation.
+
 ## 0.3.4 — 2026-10-16
 
 - Discover and cache per-model context/output limits from provider catalogs,
