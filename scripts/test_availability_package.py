@@ -40,7 +40,7 @@ class Upstream(BaseHTTPRequestHandler):
         with self.server.lock:
             self.server.posts += 1
         if provider == "a" and body["model"] == "one":
-            self.reply(404, {"error": {"code": "missing_model", "message": "private-upstream-error"}})
+            self.reply(404, {"error": {"code": "missing_model", "message": "Bearer private-upstream-error"}})
             return
         if self.path.endswith("/messages"):
             self.reply(200, {"id": "fixture", "type": "message", "role": "assistant", "model": body["model"],

@@ -41,9 +41,9 @@ class Upstream(BaseHTTPRequestHandler):
         if self.server.mode == "429":
             if key != FIRST:
                 raise RuntimeError("One request changed credentials after a 429")
-            self.reply(429, {"error": {"message": "private diagnostic upstream detail"}})
+            self.reply(429, {"error": {"message": "Bearer private diagnostic upstream detail"}})
         elif self.server.mode == "auth" and key == FIRST:
-            self.reply(401, {"error": {"message": "private diagnostic upstream detail"}})
+            self.reply(401, {"error": {"message": "Bearer private diagnostic upstream detail"}})
         elif self.path.endswith("/messages"):
             self.reply(200, {"id": "fixture", "type": "message", "role": "assistant", "model": body["model"],
                              "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",

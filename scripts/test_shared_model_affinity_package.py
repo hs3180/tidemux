@@ -49,7 +49,7 @@ class UpstreamHandler(BaseHTTPRequestHandler):
             self.server.posts.append((provider, payload["model"], self.headers.get("X-TideMux-Session-ID", "")))
             exhausted = provider in self.server.exhausted
         if exhausted:
-            self.write_payload(403, {"error": {"code": "credits_empty", "message": "private_provider_billing_detail"}})
+            self.write_payload(403, {"error": {"code": "credits_empty", "message": "Bearer private_provider_billing_detail"}})
             return
         if payload.get("stream"):
             data = (
