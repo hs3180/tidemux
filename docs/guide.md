@@ -324,6 +324,8 @@ stream-completion ordering.
 [SDK HTTP retries and mid-stream errors have different handling](https://platform.claude.com/docs/en/api/errors),
 so a client may need an explicit new request after resolving the failure.
 
+### Status fields
+
 Availability JSON includes failure `scope`, optional `retry_after_seconds` and
 up to 16 alternatives for an observed model. Omitted wait means no exact time
 is known; a zero wait means a real recovery probe can be attempted now. The CLI
