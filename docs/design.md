@@ -22,7 +22,8 @@ Setup atomically saves validated configuration with Keychain references. The
 watcher resolves credentials and prepares a complete provider/routing view;
 failed validation keeps the previous view. Saved intent and applied state differ.
 Admitted requests retain their endpoint, credentials, protocol, prices and budget
-snapshot while queued or in flight.
+snapshot while queued or in flight. Listener, ledger, request-concurrency and
+session-idle-timeout changes require a gateway restart.
 
 Compatible policy reloads reuse connections, key pools and eligible bindings.
 Endpoint/protocol/API-version/key changes and removal/re-addition create a new
@@ -31,6 +32,8 @@ settlement but cannot overwrite current health or routing. A compatible active
 probe keeps its claim until the old request ends; its old result only releases
 ownership. Local prompt-prefix estimates use the admitted generation, are bounded
 to 256 entries/16 MiB with five-minute idle expiry, and reset on restart.
+
+### Model capability catalog
 
 Named providers cache per-model token limits from their bounded, redirect-free
 `GET /models` catalog at startup. Connection changes fetch a new catalog;
@@ -52,12 +55,18 @@ explicit configured defaults and caller-supplied output budgets retain priority.
 
 ## Routing and recovery
 
+### Route selection
+
 Explicit routes, ordered auto chains and shared random/price selection use the
 same eligibility state and recheck it after the concurrency queue. Healthy
 bindings survive when their provider/model stays eligible. Random/auto affinity
 requires a stable caller/protocol/session identity; random also includes the
 bare model. Bindings retain hashes, expire after 24 idle hours and reset on
-restart. Price priority has no affinity. Capacity is an admission check.
+restart. Shared selection is opt-in. Price priority orders the sum of input
+cache-hit, input cache-miss and output token rates, requires comparable prices
+in one currency, and has no affinity. Capacity is an admission check.
+
+### Provider failure recovery
 
 Model-not-found and temporary unavailability affect a provider/model (30-second
 initial cooldown). Insufficient balance affects a provider (five minutes);
@@ -74,12 +83,16 @@ request-driven recovery starts after five minutes with bounded backoff.
 provider-scoped terminal mappings. The former translates subscription access
 rejection to permission semantics; the latter remains distinct from quota and
 rate-limit recovery and always carries conditional account/key investigation
-and manual-unlock guidance. Both reuse the five-minute provider recovery and
-bounded failed-probe backoff. Shared/auto recovery can only select a healthy
-alternative on a new request; explicit and fully restricted routes stay terminal.
+and manual-unlock guidance. Without a valid server wait, both reuse five-minute
+provider recovery with jitter and bounded failed-probe backoff. Fixed fair-use
+guidance remains present when message forwarding is disabled or a forwarded
+reason is available; classification alone never establishes credential compromise.
+Shared/auto recovery can only select a healthy alternative on a new request;
+explicit and fully restricted routes stay terminal.
 Local gates retain distinct restriction codes, rather than relabeling fair use
 or entitlement as quota. Mixed terminal restrictions use a generic restriction
 code without a fabricated cause. This policy never infers a reset/unlock time.
+Reset dates in free text do not become trusted server-wait deadlines.
 Numeric vendor codes have no global meaning and require a provider mapping.
 Local rejection, cancellation, terminal client errors and conversion failures
 do not create upstream failure evidence. Upstream 5xx, interrupted streams and
@@ -95,6 +108,8 @@ Success restores eligibility for later requests. There is no background
 inference or timer declaring health. Observations are capped at 4,096 targets,
 24-hour idle retention and 128-byte ASCII model labels; active probes are retained.
 
+### Rate-limit recovery
+
 Rate limits without a valid upstream wait start at 30 seconds and double to
 30 minutes plus 0–20% jitter. A valid upstream `Retry-After` supplies an absolute
 provider-wide pause, independent of key backoff and client retry cadence. An
@@ -105,6 +120,9 @@ exceeds ten while every key is cooling, all keys enter a 24-hour silence.
 A successful request resets its key streak and, when no newer provider failure
 has occurred, the provider streak. Older successes and old routing epochs cannot
 erase newer failures. Operational streaks do not depend on optional telemetry.
+
+### Server-wait continuity
+
 Server-supplied provider waits have a separate identity: a continuously
 configured provider name with the same resolved protocol and endpoint shares
 its deadline, observation version and recovery claim across credential changes
@@ -137,11 +155,11 @@ Logical sessions are separate from concurrent request execution. The optional
 global request gate is disabled when
 `max_in_flight` is zero or omitted; new configurations default to zero. Positive
 values share a single gate across providers and queue until a slot is available
-or the caller cancels. Changing this process-wide setting requires a restart.
+or the caller cancels. The configuration contract above owns restart behavior.
 Session admission, budgets, cancellation and terminal accounting still apply
 with the request gate disabled.
 
-### Dispatch and recovery
+### Single dispatch
 
 TideMux dispatches at most one upstream generation request for each downstream
 generation request. After dispatch, it does not wait for a retry, retry a 429,
@@ -149,6 +167,11 @@ switch keys, or fail over to another provider. It returns the mapped upstream
 result with bounded gateway retry advice; the downstream client owns
 retry timing and submits each retry as a new request. Key and route health can
 influence selection for later requests, but never replay the current request.
+
+### Cooldown switching
+
+Thresholds are integer seconds in `0..86400`. Routing, provider and model overrides
+hot reload; admitted requests retain their configuration snapshot.
 For stable shared-random/auto bindings, the next request compares the remaining
 maximum independent cooldown against an admitted threshold: model override,
 provider override, routing override, then 60 seconds. Known waits strictly above
@@ -156,21 +179,24 @@ the threshold can select a healthy compatible alternative; short/equal waits and
 unknown probe completion retain affinity. A known lower bound can justify a
 switch despite another unknown gate. No eligible alternative retains the binding;
 zero explicitly requests the earlier immediate eligible-route policy. Price
-priority applies the comparison to its ordered preference without adding affinity.
+priority applies the comparison to its ordered preference.
 Fresh random/auto sessions retain ordinary eligible selection. Auto retains its
 configured model choices; bare shared routing keeps the same model. A healthy
 binding remains stable. An explicitly qualified provider stays explicit; without
 an eligible alternative, cooldown is reported rather than bypassed.
 
+### Retry advice
+
 Local temporary cooldowns use HTTP 429 and native rate-limit error types.
 Route eligibility is the maximum independent gate for each route, then the
 minimum across compatible routes. This is reported separately from client wait.
-When policy permits reselection, an eligible alternative yields a two-second client wait; otherwise known client
-waits are capped at 30 seconds. The full server deadline remains in provider
+When policy permits reselection, an eligible alternative yields a two-second
+client wait; otherwise known client waits are capped at 30 seconds. The full server deadline remains in provider
 state and is rechecked after queueing, before any HTTP attempt. An active probe
 makes its completion time unknown and never supplies a synthetic countdown.
-Errors distinguish the wait source, bounded client retry advice and eligible
-model/protocol/health alternatives. A new request rechecks admission and budgets.
+Generated retry budgets are bounded to three attempts. Errors distinguish the
+wait source, bounded client retry advice and eligible model/protocol/health
+alternatives. A new request rechecks admission and budgets.
 Recoverable HTTP errors send `x-should-retry: true`; bounded integer
 `Retry-After` and `retry-after-ms` describe the same client cadence. Known
 terminal errors send `false` without a wait. Confirmed quota exhaustion allows
@@ -187,12 +213,18 @@ not promise immediate reselection. The post-queue yield path re-evaluates health
 and thresholds without adding an attempt/audit; a retained cooldown exits locally.
 Healthy random/auto sessions are not moved back by another provider's recovery.
 
+### Routing decision records
+
 Routing decisions contain only bounded provider/model references, action/reason,
 threshold and known wait/deadline. Terminal audit JSON and JSONL share the same
-normalized snapshot. Local rejection plus optional decision details commit in one
-transaction using an additive `local_routing_decisions` table; the historical
+normalized snapshot. Remaining waits round upward to whole milliseconds. Known
+lower bounds never predict an active probe's completion. Local rejection plus
+optional decision details commit in one transaction using an additive
+`local_routing_decisions` table; the historical
 local-diagnostic table shape is unchanged. Read-only inspection also handles old
 databases without the optional table. Decisions add no generated usage or cost.
+
+### Queued reselection
 
 If a route becomes unavailable while queued, the adapter can yield before
 initiating HTTP. The gateway releases that route's resources and reselects within
@@ -200,6 +232,8 @@ the configured-provider bound. This internal step emits no separate audit or ID;
 the final attempt keeps the original start and accumulated queue time. An
 exhausted request has one local diagnostic; queue cancellation keeps its terminal
 adapter audit. A request that may have dispatched upstream never takes this path.
+
+### Availability observations
 
 Availability shows provider/model scope, remaining known wait and model-health
 alternatives; request-specific features and admission remain request checks.
@@ -246,7 +280,8 @@ are assigned independently of secrets. One state slot exists per configured key;
 legacy failover history is bounded to 32 records per provider for one hour. The
 single-attempt policy does not create in-request key failover records. Generation
 or telemetry-epoch changes fence old completions; disabling counters preserves
-operational routing/cooldowns. Status queries are authenticated and read-only.
+operational routing/cooldowns. Toggling diagnostics clears counters/history while
+preserving routing and cooldown state. Status queries are authenticated and read-only.
 
 ### Runtime identity and usage records
 
