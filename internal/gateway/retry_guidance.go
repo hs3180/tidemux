@@ -240,6 +240,9 @@ func retryDelaySeconds(delay time.Duration) int64 {
 }
 
 func retryMessage(advice *retryAdvice) string {
+	if advice.Strategy == "manual_check" {
+		return "Audit persistence failed and a provider request may already have completed. Do not retry automatically; reconcile the failed request's accounting, repair storage and restart the gateway before resubmitting."
+	}
 	message := "Retry as a new request"
 	if advice.AfterSeconds == nil {
 		message = "Recovery time is unknown. Retry as a new request with bounded exponential backoff and jitter (up to 30 seconds)"
@@ -255,6 +258,11 @@ func retryMessage(advice *retryAdvice) string {
 		message += fmt.Sprintf("; the selected routes remain paused for %d seconds, and this shorter retry only rechecks routing", *advice.EligibleAfterSeconds)
 	}
 	return message + ". Limit retries to 3 attempts; request features, capacity and budgets are rechecked."
+}
+
+func manualAuditAdvice() *retryAdvice {
+	return &retryAdvice{Strategy: "manual_check", MaxAttempts: 0, NewRequestRequired: true,
+		Alternatives: []string{}, AlternativesScope: "none", WaitSource: "audit_persistence"}
 }
 
 func addRequestID(payload map[string]any, id string) {
@@ -343,6 +351,11 @@ func (h *handler) prepareRetryResponse(w http.ResponseWriter, r *http.Request, c
 	if advice.quotaBlocked {
 		mayRetry, signal = false, "false"
 	}
+	manualCheck := callErr.Code == "audit_failed_do_not_retry_blindly" || callErr.Code == "audit_unavailable" || h.ledger.AuditUnavailable()
+	if manualCheck {
+		mayRetry, signal = false, "false"
+		advice = manualAuditAdvice()
+	}
 	if mayRetry {
 		signal = "true"
 		if advice.AfterSeconds != nil && *advice.AfterSeconds == 0 && (callErr.RetryProvided || callErr.Category == adapter.ProviderErrorRateLimited || callErr.Category == adapter.ProviderErrorQuotaExhausted || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorModelNotFound) {
@@ -358,7 +371,7 @@ func (h *handler) prepareRetryResponse(w http.ResponseWriter, r *http.Request, c
 				advice.InitialDelaySeconds, advice.MaxDelaySeconds = 0, 0
 			}
 		}
-	} else {
+	} else if !manualCheck {
 		advice = nil
 	}
 	headers := &diagnostics.RetryHeaders{ShouldRetry: signal}

@@ -400,6 +400,32 @@ func TestQueuedCancellationIsAuditedWithoutSending(t *testing.T) {
 		t.Fatalf("rows %+v err %v", rows, err)
 	}
 }
+
+func TestAuditFailureAfterReadinessPreventsDispatch(t *testing.T) {
+	posts := 0
+	c, l := newCandidateTestClient(t, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		posts++
+		return nil, errors.New("unexpected dispatch")
+	})})
+	defer l.Close()
+	completed := false
+	_, id, err := c.CallFromKeyCandidates("openai", context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"fixture"}]}`), "m", nil, CallOptions{}, []string{"key"}, KeyCandidateCallbacks{
+		Ready: func(int) (bool, time.Duration) {
+			// Simulate another request discovering a storage failure while this
+			// admitted call was waiting for its dispatch slot/readiness check.
+			l.Close()
+			if l.AppendAudit(ledger.Audit{ID: "other", TimestampMS: 1, Protocol: "openai", Upstream: "test", Model: "m", Status: "ok"}) == nil {
+				t.Fatal("expected a real storage failure")
+			}
+			return true, 0
+		},
+		Completed: func(int, error) { completed = true },
+	})
+	var callErr *CallError
+	if !errors.As(err, &callErr) || callErr.Code != "audit_unavailable" || !callErr.UpstreamNotAttempted || id != "" || posts != 0 || completed {
+		t.Fatalf("storage failure bypassed the final dispatch guard: id=%s err=%+v posts=%d completed=%t", id, err, posts, completed)
+	}
+}
 func TestSuccessfulQueueAndAuditFailure(t *testing.T) {
 	l, err := ledger.Open(filepath.Join(t.TempDir(), "l.db"))
 	if err != nil {

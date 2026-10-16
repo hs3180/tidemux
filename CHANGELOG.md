@@ -24,6 +24,12 @@
   waits; record the response retry headers in safe failure metadata. Distinguish
   confirmed quota exhaustion from billing errors, allowing automatic recovery
   only through an eligible shared/auto alternative and preserving explicit routes.
+- Stop automatic HTTP retries after audit persistence fails and provide manual
+  request/accounting checks. Report the failed terminal outcome accurately while
+  retaining known usage/cost, original upstream evidence and safe stream errors.
+  Hold stream completion signals until audit commits; reject new generation
+  requests after audit failure, including across reloads, until accounting and
+  storage are repaired and the gateway restarts.
 - Route new client retry requests away from failed streams, upstream 5xx and
   timeouts while keeping healthy bindings and explicit provider choices. An
   undispatched queued route can reselect without duplicate audits or lost timing.

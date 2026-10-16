@@ -188,6 +188,17 @@ If a stream fails after partial output, its terminal SSE error carries the
 same recovery guidance and a gateway `request_id`. The ID also appears in the
 error message for retry guidance, the response header and the corresponding
 audit/log. Use the new request to recover; the partial reply can be incomplete.
+For `audit_failed_do_not_retry_blindly`, the provider may already have completed
+the request. `error.retry.strategy=manual_check` and `max_attempts=0` require
+checking the request ID and accounting state before deciding to resubmit. HTTP
+errors send `x-should-retry: false`; an already-open stream can only carry this
+guidance in its terminal error. The gateway holds successful stop/finish signals
+until the audit commits. After an audit failure, new generation requests are
+rejected locally with `audit_unavailable`, including after a config reload;
+client retries cannot keep generating upstream work. Already-dispatched calls
+may still finish. Reconcile the failed request's accounting, repair storage,
+then restart the gateway to resume. A successful later write does not clear
+this guard. Model discovery remains available.
 [SDK HTTP retries and mid-stream errors have different handling](https://platform.claude.com/docs/en/api/errors),
 so a client may need an explicit retry even when a compatible provider is ready.
 SDK-standard `request-id` and `x-request-id` headers carry the same gateway ID

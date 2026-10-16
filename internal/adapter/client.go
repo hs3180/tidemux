@@ -152,6 +152,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	if err := options.Validate(clientProtocol); err != nil {
 		return nil, "", &CallError{Status: 400, Code: err.Error(), Param: ValidationParameter(err), UpstreamNotAttempted: true}
 	}
+	if c.Ledger.AuditUnavailable() {
+		return nil, "", &CallError{Status: 503, Code: "audit_unavailable", UpstreamNotAttempted: true}
+	}
 	if len(keys) == 0 {
 		keys = []string{c.APIKey}
 	}
@@ -183,7 +186,7 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 	selectedCandidate := -1
 	delivered := false
 	auditPersisted := false
-	yielded := false
+	yielded := false // an undispatched rejection belongs to the gateway's local diagnostic
 	localEstimate := func(response []byte) {
 		if !priced || a.EstimatedCost != nil {
 			return
@@ -257,12 +260,19 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 				slog.String("failure_code", "audit_write_failed"),
 			)
 			response = nil
-			callErr := &CallError{Status: 500, Code: "audit_failed_do_not_retry_blindly"}
+			callErr := &CallError{Status: 500, Code: "audit_failed_do_not_retry_blindly", Failure: a.Failure.Normalize()}
 			if a.EstimatedCost != nil {
 				cost := *a.EstimatedCost
 				callErr.BudgetCost = &cost
 			}
 			err = callErr
+			// The provider may have completed, but the gateway operation failed.
+			// Replace any earlier retry decision before emitting the terminal log.
+			a.Status, a.ErrorCode = "error", callErr.Code
+			if callbacks.PrepareFailure != nil {
+				callbacks.PrepareFailure(callErr)
+			}
+			a.Failure = callErr.Failure.Normalize()
 		} else {
 			auditPersisted = true
 		}
@@ -377,6 +387,12 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 				}
 				continue
 			}
+		}
+		// Recheck after the dispatch queue and readiness callbacks. A failure in
+		// another request must not let queued/new SDK retries generate more work.
+		if c.Ledger.AuditUnavailable() {
+			yielded, id = true, ""
+			return nil, "", &CallError{Status: 503, Code: "audit_unavailable", UpstreamNotAttempted: true}
 		}
 		attempted = true
 		selectedCandidate = candidateIndex
@@ -591,6 +607,7 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 		}
 		advance(7)
 		translator := newStreamTranslator(c.Protocol, clientProtocol, model)
+		var completion bytes.Buffer
 		usage, data, err := readStreamWithLimits(c.Protocol, recordedBody, limits, func(frame []byte) error {
 			if translator != nil {
 				var translateErr error
@@ -608,6 +625,15 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 				frame = setStreamResponseModel(clientProtocol, frame, options.ResponseModel)
 			}
 			if len(frame) == 0 {
+				return nil
+			}
+			if completion.Len() > 0 || streamSignalsCompletion(clientProtocol, frame) {
+				if int64(completion.Len())+int64(len(frame)) > limits.StreamBytes {
+					return &CallError{Status: 502, Code: "upstream_response_too_large"}
+				}
+				// A stop reason can complete the client's turn before [DONE] or
+				// message_stop. Hold it and the ordered tail under the stream limit.
+				completion.Write(frame)
 				return nil
 			}
 			// Treat even a failing sink as potentially having written bytes. Once
@@ -634,6 +660,10 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 			}
 			return nil, TokenUsage{}, err
 		}
+		if int64(completion.Len())+int64(len(data)) > limits.StreamBytes {
+			return nil, TokenUsage{}, &CallError{Status: 502, Code: "upstream_response_too_large"}
+		}
+		data = append(completion.Bytes(), data...)
 		return data, usage, nil
 	}
 	data, err := io.ReadAll(io.LimitReader(recordedBody, limits.ResponseBytes+1))

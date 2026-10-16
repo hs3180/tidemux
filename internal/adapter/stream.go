@@ -10,9 +10,43 @@ import (
 	"strings"
 )
 
-// StreamSink receives validated SSE frames before the terminal frame. The
-// terminal frame is returned to the caller and sent only after audit commits.
+// StreamSink receives validated SSE content. Completion-signalling frames are
+// returned to the caller and sent only after audit commits.
 type StreamSink func(id string, frame []byte) error
+
+// Check the downstream representation: translators may emit several SSE events
+// at once. Parsing is only for gating; original bytes and line endings survive.
+func streamSignalsCompletion(protocol string, frames []byte) bool {
+	for _, frame := range strings.Split(strings.ReplaceAll(string(frames), "\r\n", "\n"), "\n\n") {
+		_, data, _ := parseSSEFrame([]byte(frame))
+		if protocol == "openai" && data == "[DONE]" {
+			return true
+		}
+		var value struct {
+			Type  string `json:"type"`
+			Delta struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(data), &value) != nil {
+			continue // upstream validation/translation already owns malformed data
+		}
+		if protocol == "anthropic" && (value.Type == "message_stop" || value.Type == "message_delta" && value.Delta.StopReason != "") {
+			return true
+		}
+		if protocol == "openai" {
+			for _, choice := range value.Choices {
+				if choice.FinishReason != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
 
 type streamErrorContext struct {
 	response *http.Response
