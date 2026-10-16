@@ -36,8 +36,8 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(command, env, success=True):
-    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+def run(command, env, success=True, timeout=15):
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=timeout)
     check((result.returncode == 0) == success, "Unexpected CLI result: " + " ".join(map(str, command[:3])))
     return result.stdout
 
@@ -255,7 +255,10 @@ cp "$SMOKE_ASSETS/${url##*/}" "$dest"
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
-    run([sys.executable, str(ROOT / "scripts/smoke_provider_setup.py")], dict(env, TIDEMUX_TEST_BINARY=str(binary)))
+    # Four PTY cases each have a 20-second deadline; allow their bounded total
+    # on hosted runners instead of applying a single CLI call's timeout.
+    run([sys.executable, str(ROOT / "scripts/smoke_provider_setup.py")],
+        dict(env, TIDEMUX_TEST_BINARY=str(binary)), timeout=90)
     return {"passed": True, "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
             "archive_sha256": digest(archive), "binary_sha256": digest(extracted), "version": version,
             "generation_posts": len(ids), "external_clients_or_services": False}
