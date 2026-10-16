@@ -169,6 +169,13 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 		}
 		now = s.now()
 	}
+	if chosen, ok := r.Context().Value(routingChoiceContextKey{}).(routeStep); ok && !explicit && (chosen.sessionKey != nil || h.config.EffectiveRouting().SharedModelStrategy == "price_priority") {
+		if _, retain := h.cooldownChoiceLocked(chosen, routes, now); retain {
+			routes = []routeStep{chosen}
+			manual = nil
+			advice.ReselectProvider = false
+		}
+	}
 	var earliest time.Time
 	unknown := len(routes) == 0
 	ready := false

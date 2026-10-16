@@ -227,3 +227,21 @@ func (a *sharedModelAffinity) finishRecovery(epoch uint64, route sharedModelRout
 		delete(a.failedRoutes, route)
 	}
 }
+
+// boundRoute observes an existing semantic binding without discarding it solely
+// for a temporary cooldown. The selector still owns replacement under its lock.
+func (a *sharedModelAffinity) boundRoute(key sharedModelSessionKey, model string, epoch uint64, candidates []string, generations map[string]uint64) (routeStep, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	if a.now != nil {
+		now = a.now()
+	}
+	binding, ok := a.bindings[key]
+	if !ok || a.activeEpoch != epoch || now.Sub(binding.lastUsed) >= sharedModelSessionIdleTTL || binding.model != model || binding.generation != generations[binding.provider] || !containsModel(candidates, binding.provider) {
+		return routeStep{}, false
+	}
+	binding.lastUsed = now
+	a.bindings[key] = binding
+	return routeStep{provider: binding.provider, model: model, sessionKey: &key, dynamic: true}, true
+}

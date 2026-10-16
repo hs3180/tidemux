@@ -84,6 +84,7 @@ def main():
             ledger = root / "ledger.db"
             config = {
                 "listen_addr": f"127.0.0.1:{port}", "max_in_flight": 2, "ledger_path": str(ledger),
+                "routing": {"provider_switch_threshold": 0},
                 "access_token_keychain": {"service": "test.gateway", "account": "local"},
                 "providers": {
                     ref: {

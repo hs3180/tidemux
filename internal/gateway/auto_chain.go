@@ -201,7 +201,7 @@ func (s *autoChainState) selectRouteAvailable(key *sharedModelSessionKey, availa
 	return routeStep{provider: selection.provider, model: selection.model, autoChainIndex: &index}, true
 }
 
-func (s *autoChainState) recordFailure(index, _ int, callErr *adapter.CallError, ctxErr error, delivered bool) {
+func (s *autoChainState) recordFailure(index, _ int, callErr *adapter.CallError, ctxErr error, delivered bool, retainBindings ...bool) {
 	if s == nil || !autoChainFailureAdvances(callErr, ctxErr, delivered) {
 		return
 	}
@@ -216,7 +216,7 @@ func (s *autoChainState) recordFailure(index, _ int, callErr *adapter.CallError,
 	}
 	s.failed[index] = &routeFailure{retryAt: now.Add(recoveryCooldown(callErr))}
 	for key, binding := range s.sessions {
-		if binding.index == index {
+		if binding.index == index && (len(retainBindings) == 0 || !retainBindings[0]) {
 			delete(s.sessions, key)
 		}
 	}
@@ -270,4 +270,25 @@ func autoChainFailureCanAdvance(callErr *adapter.CallError, ctxErr error, delive
 func hashAutoChainSessionID(sessionID string) string {
 	digest := sha256.Sum256([]byte(sessionID))
 	return hex.EncodeToString(digest[:])
+}
+
+func (s *autoChainState) boundRoute(key *sharedModelSessionKey) (routeStep, bool) {
+	if s == nil || key == nil {
+		return routeStep{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	binding, ok := s.sessions[hashAutoChainSessionID(hex.EncodeToString(key[:]))]
+	if !ok || now.Sub(binding.lastTouch) >= s.ttl || binding.index < 0 || binding.index >= len(s.entries) {
+		return routeStep{}, false
+	}
+	binding.lastTouch = now
+	s.sessions[hashAutoChainSessionID(hex.EncodeToString(key[:]))] = binding
+	index := binding.index
+	entry := s.entries[index]
+	return routeStep{provider: entry.Provider, model: entry.Model, autoChainIndex: &index, sessionKey: key, dynamic: true}, true
 }

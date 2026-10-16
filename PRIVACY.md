@@ -41,6 +41,12 @@ text exclusion. Review logs/ledger exports and downstream access accordingly.
 Unambiguous explicit token comparisons survive independently of the text switch;
 these request-local facts never change configured or discovered model windows.
 
+Routing decisions also record bounded provider/model labels, retention/switch
+reason, threshold, known wait/deadline and whether completion time is unknown.
+Terminal JSONL/audit JSON share this metadata. Local rejections and optional
+SQLite decision details commit together without becoming generation/cost rows.
+No raw session IDs, request content or credentials belong in these decisions.
+
 Terminal audits/logs also retain independently assigned key and connection labels,
 not credentials or secret-derived hashes. They correlate the actual selected key
 with authenticated runtime status within a pool/process and can reveal usage

@@ -38,7 +38,7 @@ def configure(config, strategy):
             prices={MODEL: {"currency": "USD", "source": "fixture", "version": "1",
                            "input_cache_hit_per_million": cost, "input_cache_miss_per_million": cost,
                            "output_per_million": cost}})
-    config["routing"] = {"shared_model_strategy": strategy}
+    config["routing"] = {"shared_model_strategy": strategy, "provider_switch_threshold": 0}
 
 
 class Provider(Upstream):

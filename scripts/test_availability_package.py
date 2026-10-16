@@ -79,7 +79,7 @@ def main():
                         prices={"one": {"currency": "USD", "source": "fixture", "version": "1",
                                          "input_cache_hit_per_million": cost, "input_cache_miss_per_million": cost, "output_per_million": cost}})
                         for ref, cost in (("a", 1), ("b", 2))}
-                    config["routing"] = {"shared_model_strategy": strategy}
+                    config["routing"] = {"shared_model_strategy": strategy, "provider_switch_threshold": 0}
                     config["auto_chain"] = [{"provider": ref, "model": "one"} for ref in ("a", "b")]
 
                 with running_gateway(binary, upstream_handler=Upstream, configure=configure) as gateway:

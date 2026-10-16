@@ -218,6 +218,7 @@ type RequestSummary struct {
 	CacheReadTokens   *int64
 	CacheWriteTokens  *int64
 	UsageLog          *UsageLog
+	RoutingDecision   *diagnostics.RoutingDecision
 	Failure           *diagnostics.Failure
 }
 
@@ -268,6 +269,9 @@ func (e RequestSummary) Log(logger *slog.Logger) {
 		slog.Bool("record_persisted", e.RecordPersisted),
 	}
 	group := ""
+	if decision := e.RoutingDecision.Normalize(); decision != nil {
+		attrs = append(attrs, slog.Any("routing_decision", decision))
+	}
 	if label := diagnostics.KeyLabel(e.KeyLabel); label != "" {
 		attrs = append(attrs, slog.String("key_label", label))
 	}

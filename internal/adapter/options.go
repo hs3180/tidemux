@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"github.com/hs3180/tidemux/internal/diagnostics"
 	"strings"
 	"time"
 )
@@ -21,6 +22,7 @@ type CallOptions struct {
 	// Internal timing carried across an undispatched route re-selection.
 	RequestStartedAt time.Time
 	PriorQueueMS     int64
+	RoutingDecision  *diagnostics.RoutingDecision
 }
 
 func (o CallOptions) Validate(protocol string) error {
