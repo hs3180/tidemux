@@ -171,6 +171,19 @@ For example, A can stay paused for one hour while a new request after two
 seconds selects B. A long upstream header is not forwarded to freeze the agent.
 Clients choose their own retry policy.
 
+Recoverable HTTP errors include `x-should-retry: true`. `retry-after-ms`, when
+present, matches the bounded `Retry-After` in milliseconds. Known terminal
+errors use `x-should-retry: false` without a wait; a header does not override a
+client's retry budget or guarantee that its agent loop will retry.
+For confirmed provider quota exhaustion, shared/auto requests can recover through
+an eligible alternative; explicit requests and routes all blocked by quota stop
+automatic retries. Quota errors retain HTTP 429 and their full server pause.
+Map a verified vendor quota code for that provider with
+`tidemux provider error-map add REF --code CODE --status 429 --category quota_exhausted`.
+The standard `insufficient_quota` code is recognized directly; numeric vendor
+codes are not inferred globally. Without a server reset time, quota health uses
+a five-minute initial local recovery wait, not a claimed subscription reset.
+
 If a stream fails after partial output, its terminal SSE error carries the
 same recovery guidance and a gateway `request_id`. The ID also appears in the
 error message for retry guidance, the response header and the corresponding
@@ -261,6 +274,11 @@ ID when valid, category and retryability. An HTTP 200 stream can end with an err
 use `outcome` and the terminal error. `unknown` means the cause was not established,
 not a confirmed quota, policy or context-limit failure. Preserve the provider
 request ID when asking that provider to investigate; review metadata before sharing.
+`failure.response_retry_headers` records the generated `x_should_retry`, optional
+`retry_after_seconds` and matching `retry_after_ms`. An empty object means retry
+headers were absent, including an error after SSE headers were sent. This
+content-free snapshot is shared by the response, terminal log and SQLite audit;
+it does not copy arbitrary provider response headers.
 
 Point an independently installed [ccusage](https://github.com/ccusage/ccusage)
 at the `logs/` directory:

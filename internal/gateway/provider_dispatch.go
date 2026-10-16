@@ -130,6 +130,9 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		observations := make([]rateLimitObservation, len(candidates))
 		callbacks := adapter.KeyCandidateCallbacks{
 			YieldUnavailable: route.dynamic || route.sessionKey != nil || route.autoChainIndex != nil,
+			PrepareFailure: func(callErr *adapter.CallError) {
+				h.prepareRetryResponse(w, r, callErr)
+			},
 			Completed: func(candidateIndex int, err error) {
 				staleRate := false
 				current := h.availability.withCurrent(h.routingEpoch, route.provider, h.providerGenerations[route.provider], func() {

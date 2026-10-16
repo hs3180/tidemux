@@ -9,9 +9,16 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/diagnostics"
 )
 
 type recoveryRequestKey struct{}
+type retryResponseKey struct{}
+type retryResponse struct {
+	callErr *adapter.CallError
+	advice  *retryAdvice
+	headers *diagnostics.RetryHeaders
+}
 type recoveryRequest struct {
 	model    string
 	protocol string
@@ -19,7 +26,8 @@ type recoveryRequest struct {
 }
 
 func withRecoveryRequest(r *http.Request, model, protocol string, body []byte) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), recoveryRequestKey{}, recoveryRequest{model, protocol, body}))
+	ctx := context.WithValue(r.Context(), recoveryRequestKey{}, recoveryRequest{model, protocol, body})
+	return r.WithContext(context.WithValue(ctx, retryResponseKey{}, &retryResponse{}))
 }
 
 type retryAdvice struct {
@@ -38,12 +46,14 @@ type retryAdvice struct {
 	WaitSource                     string    `json:"wait_source"`
 	AlternativeCount               int       `json:"alternative_count"`
 	hasCooldown                    bool
+	quotaBlocked                   bool
 }
 
 type routeWait struct {
 	blocked, unknown bool
 	retryAt          time.Time
 	temporary        bool
+	quota            bool
 }
 
 func (w *routeWait) add(until time.Time, unknown bool) {
@@ -72,6 +82,7 @@ func (h *handler) routeWaitLocked(route routeStep, now time.Time) routeWait {
 			entry := s.entries[availabilityTarget{route.provider, model, h.providerGenerations[route.provider]}]
 			if entry != nil && !entry.eligible(now) {
 				wait.add(entry.retryAt, entry.probing)
+				wait.quota = wait.quota || entry.reason == "quota_exhausted"
 			}
 		}
 	}
@@ -155,8 +166,10 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 	var earliest time.Time
 	unknown := len(routes) == 0
 	ready := false
+	quotaOnly := len(routes) > 0
 	for _, route := range routes {
 		wait := h.routeWaitLocked(route, now)
+		quotaOnly = quotaOnly && wait.quota
 		advice.hasCooldown = advice.hasCooldown || wait.temporary
 		if !wait.blocked {
 			ready = true
@@ -169,6 +182,7 @@ func (h *handler) retryAdviceFor(r *http.Request) *retryAdvice {
 			earliest = wait.retryAt
 		}
 	}
+	advice.quotaBlocked = !ready && quotaOnly
 	for _, route := range manual {
 		if !h.routeWaitLocked(route, now).blocked {
 			advice.Alternatives = append(advice.Alternatives, route.provider+"/"+route.model)
@@ -268,41 +282,75 @@ func addRetryAdvice(detail map[string]any, advice *retryAdvice) {
 }
 
 func applyRetryHeader(w http.ResponseWriter, advice *retryAdvice) {
+	headers := &diagnostics.RetryHeaders{ShouldRetry: "true"}
+	if advice.AfterSeconds != nil && *advice.AfterSeconds > 0 {
+		seconds := *advice.AfterSeconds
+		milliseconds := seconds * 1000
+		headers.RetryAfterSeconds, headers.RetryAfterMS = &seconds, &milliseconds
+	}
+	writeRetryHeaders(w, headers)
+}
+
+func writeRetryHeaders(w http.ResponseWriter, headers *diagnostics.RetryHeaders) {
 	if tracked, ok := w.(*trackedResponseWriter); ok && tracked.wroteHeader {
 		return
 	}
-	if advice.AfterSeconds != nil && *advice.AfterSeconds > 0 {
-		w.Header().Set("Retry-After", strconv.FormatInt(*advice.AfterSeconds, 10))
-	} else {
-		w.Header().Del("Retry-After")
+	for _, name := range []string{"x-should-retry", "Retry-After", "retry-after-ms"} {
+		w.Header().Del(name)
+	}
+	headers = headers.Normalize()
+	if headers == nil {
+		return
+	}
+	if headers.ShouldRetry != "" {
+		w.Header().Set("x-should-retry", headers.ShouldRetry)
+	}
+	if headers.RetryAfterSeconds != nil {
+		w.Header().Set("Retry-After", strconv.FormatInt(*headers.RetryAfterSeconds, 10))
+	}
+	if headers.RetryAfterMS != nil {
+		w.Header().Set("retry-after-ms", strconv.FormatInt(*headers.RetryAfterMS, 10))
 	}
 }
 
-func (h *handler) upstreamErrorPayload(w http.ResponseWriter, r *http.Request, callErr *adapter.CallError, protocol string) map[string]any {
-	payload := mappedUpstreamErrorPayload(callErr, protocol)
-	localCooldown := isAvailabilityError(callErr.Code)
-	if callErr.Category == "" {
-		status := callErr.Status
-		if localCooldown {
-			status = http.StatusTooManyRequests
-		}
-		payload = h.errorPayload(status, callErr.Code, protocol, callErr.Failure, callErr.Param)
+// Freeze routing advice after health feedback and before the terminal audit.
+// Rendering uses this same decision, even if another request/reload changes
+// eligibility between persistence and response. New requests still recheck it.
+func (h *handler) prepareRetryResponse(w http.ResponseWriter, r *http.Request, callErr *adapter.CallError) *retryAdvice {
+	prepared, _ := r.Context().Value(retryResponseKey{}).(*retryResponse)
+	if prepared != nil && prepared.callErr == callErr {
+		writeRetryHeaders(w, prepared.headers)
+		return prepared.advice
 	}
+	localCooldown := isAvailabilityError(callErr.Code)
 	mayRetry := localCooldown || callErr.Category == adapter.ProviderErrorRateLimited || callErr.Category == adapter.ProviderErrorTemporarilyUnavailable
+	signal := ""
 	if f := callErr.Failure; f != nil {
 		mayRetry = mayRetry || f.Retryability == "retryable" || f.Source == "stream_error" && f.Retryability == "unknown"
+		if f.Retryability == "terminal" {
+			signal = "false"
+		}
 	}
 	advice := h.retryAdviceFor(r)
-	if callErr.Category == adapter.ProviderErrorModelNotFound || callErr.Category == adapter.ProviderErrorInsufficientBalance {
+	switch callErr.Category {
+	case adapter.ProviderErrorAuthentication, adapter.ProviderErrorPermissionDenied, adapter.ProviderErrorPolicyDenied, adapter.ProviderErrorInvalidRequest:
+		mayRetry, signal = false, "false"
+	}
+	if callErr.Category == adapter.ProviderErrorModelNotFound || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorQuotaExhausted {
 		mayRetry = advice.ReselectProvider && len(advice.Alternatives) > 0
+		signal = "false"
+	}
+	if advice.quotaBlocked {
+		mayRetry, signal = false, "false"
 	}
 	if mayRetry {
+		signal = "true"
+		if advice.AfterSeconds != nil && *advice.AfterSeconds == 0 && (callErr.RetryProvided || callErr.Category == adapter.ProviderErrorRateLimited || callErr.Category == adapter.ProviderErrorQuotaExhausted || callErr.Category == adapter.ProviderErrorInsufficientBalance || callErr.Category == adapter.ProviderErrorModelNotFound) {
+			short := int64(2)
+			advice.AfterSeconds = &short
+		}
 		if callErr.RetryProvided {
 			advice.ProviderRetryAt = callErr.CooldownUntil
-			if advice.AfterSeconds != nil && *advice.AfterSeconds == 0 {
-				short := int64(2)
-				advice.AfterSeconds = &short
-			}
 			if advice.AfterSeconds == nil && advice.WaitSource == "unknown" {
 				seconds := min(max(retryDelaySeconds(callErr.Cooldown), 2), 30)
 				advice.AfterSeconds, advice.Strategy = &seconds, "retry_after"
@@ -310,7 +358,41 @@ func (h *handler) upstreamErrorPayload(w http.ResponseWriter, r *http.Request, c
 				advice.InitialDelaySeconds, advice.MaxDelaySeconds = 0, 0
 			}
 		}
-		applyRetryHeader(w, advice)
+	} else {
+		advice = nil
+	}
+	headers := &diagnostics.RetryHeaders{ShouldRetry: signal}
+	if advice != nil && advice.AfterSeconds != nil && *advice.AfterSeconds > 0 {
+		seconds := *advice.AfterSeconds
+		milliseconds := seconds * 1000
+		headers.RetryAfterSeconds, headers.RetryAfterMS = &seconds, &milliseconds
+	}
+	if tracked, ok := w.(*trackedResponseWriter); ok && tracked.wroteHeader {
+		headers = &diagnostics.RetryHeaders{}
+	}
+	headers = headers.Normalize()
+	writeRetryHeaders(w, headers)
+	if callErr.Failure != nil {
+		callErr.Failure = callErr.Failure.Normalize()
+		callErr.Failure.ResponseRetryHeaders = headers
+	}
+	if prepared != nil {
+		prepared.callErr, prepared.advice, prepared.headers = callErr, advice, headers
+	}
+	return advice
+}
+
+func (h *handler) upstreamErrorPayload(w http.ResponseWriter, r *http.Request, callErr *adapter.CallError, protocol string) map[string]any {
+	advice := h.prepareRetryResponse(w, r, callErr)
+	payload := mappedUpstreamErrorPayload(callErr, protocol)
+	if callErr.Category == "" {
+		status := callErr.Status
+		if isAvailabilityError(callErr.Code) {
+			status = http.StatusTooManyRequests
+		}
+		payload = h.errorPayload(status, callErr.Code, protocol, callErr.Failure, callErr.Param)
+	}
+	if advice != nil {
 		addRetryAdvice(payload["error"].(map[string]any), advice)
 	}
 	return payload

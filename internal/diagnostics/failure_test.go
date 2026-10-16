@@ -43,3 +43,27 @@ func TestFailureRetainsOnlyBoundedMetadata(t *testing.T) {
 		t.Fatalf("echoed secrets survived: %+v", f)
 	}
 }
+
+func TestRetryHeaderSnapshotIsBoundedAndCopied(t *testing.T) {
+	seconds, milliseconds := int64(2), int64(2000)
+	original := &Failure{ResponseRetryHeaders: &RetryHeaders{ShouldRetry: "true", RetryAfterSeconds: &seconds, RetryAfterMS: &milliseconds}}
+	normalized := original.Normalize()
+	seconds, milliseconds = 4000, 4000000
+	if *normalized.ResponseRetryHeaders.RetryAfterSeconds != 2 || *normalized.ResponseRetryHeaders.RetryAfterMS != 2000 {
+		t.Fatal("response snapshot retained mutable timing pointers")
+	}
+	invalid := (&Failure{ResponseRetryHeaders: &RetryHeaders{ShouldRetry: "PRIVATE_HEADER", RetryAfterSeconds: &seconds, RetryAfterMS: &milliseconds}}).Normalize()
+	data, _ := json.Marshal(invalid)
+	if strings.Contains(string(data), "PRIVATE_HEADER") || invalid.ResponseRetryHeaders.RetryAfterSeconds != nil || invalid.ResponseRetryHeaders.RetryAfterMS != nil {
+		t.Fatal("unbounded or arbitrary retry header escaped normalization")
+	}
+	seconds, milliseconds = 2, 3000
+	mismatch := (&RetryHeaders{ShouldRetry: "true", RetryAfterSeconds: &seconds, RetryAfterMS: &milliseconds}).Normalize()
+	if mismatch.RetryAfterSeconds == nil || mismatch.RetryAfterMS != nil {
+		t.Fatal("inconsistent millisecond retry wait survived")
+	}
+	terminal := (&RetryHeaders{ShouldRetry: "false", RetryAfterSeconds: &seconds}).Normalize()
+	if terminal.RetryAfterSeconds != nil {
+		t.Fatal("terminal response retained an automatic retry wait")
+	}
+}

@@ -24,6 +24,7 @@ func TestMappedProviderFailureCategoriesStayDistinctForClientProtocols(t *testin
 		messageHint   string
 	}{
 		{name: "billing", upstreamCode: "credit_empty", category: adapter.ProviderErrorInsufficientBalance, upstreamHTTP: 403, wantHTTP: 403, wantCode: "provider_insufficient_balance", openAIType: "insufficient_quota", anthropicType: "billing_error", messageHint: "Check its account balance or billing status"},
+		{name: "quota", upstreamCode: "1310", category: adapter.ProviderErrorQuotaExhausted, upstreamHTTP: 429, wantHTTP: 429, wantCode: "provider_quota_exhausted", openAIType: "insufficient_quota", anthropicType: "rate_limit_error", messageHint: "quota reset"},
 		{name: "policy", upstreamCode: "policy_blocked", category: adapter.ProviderErrorPolicyDenied, upstreamHTTP: 403, wantHTTP: 403, wantCode: "upstream_policy_denied", openAIType: "permission_error", anthropicType: "permission_error", messageHint: "usage or content policy"},
 		{name: "permission", upstreamCode: "model_forbidden", category: adapter.ProviderErrorPermissionDenied, upstreamHTTP: 403, wantHTTP: 403, wantCode: "upstream_permission_denied", openAIType: "permission_error", anthropicType: "permission_error", messageHint: "provider-side permissions"},
 		{name: "model not found", upstreamCode: "model_missing", category: adapter.ProviderErrorModelNotFound, upstreamHTTP: 404, wantHTTP: 404, wantCode: "provider_model_not_found", openAIType: "not_found_error", anthropicType: "not_found_error", messageHint: "selected model"},

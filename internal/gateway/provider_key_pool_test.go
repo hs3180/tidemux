@@ -396,8 +396,12 @@ func TestGatewayRejectsRequestsWhileSingleKeyIsCoolingDown(t *testing.T) {
 		if out.Code != wantStatus {
 			t.Fatalf("request %d status=%d want=%d body=%s", i+1, out.Code, wantStatus, out.Body.String())
 		}
-		if out.Header().Get("Retry-After") == "" {
-			t.Fatalf("request %d missing Retry-After", i+1)
+		if i == 0 {
+			if out.Header().Get("Retry-After") != "" || out.Header().Get("x-should-retry") != "false" {
+				t.Fatal("rejected credentials invited automatic retries")
+			}
+		} else if out.Header().Get("Retry-After") == "" || out.Header().Get("x-should-retry") != "true" {
+			t.Fatal("local cooldown lost its bounded retry guidance")
 		}
 	}
 	if calls != 1 {
@@ -436,7 +440,7 @@ func TestGatewaySelectsOneReadyKeyBeforeDispatch(t *testing.T) {
 	if out.Code != http.StatusBadGateway || strings.Contains(out.Body.String(), "provider_keys_cooling_down") {
 		t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
 	}
-	if out.Header().Get("Retry-After") == "" || calls != 1 {
-		t.Fatalf("Retry-After=%q upstream calls=%d", out.Header().Get("Retry-After"), calls)
+	if out.Header().Get("Retry-After") != "" || out.Header().Get("x-should-retry") != "false" || calls != 1 {
+		t.Fatalf("terminal authentication response invited retries or replayed: upstream calls=%d", calls)
 	}
 }

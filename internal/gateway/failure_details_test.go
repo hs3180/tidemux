@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/hs3180/tidemux/internal/diagnostics"
 	"github.com/hs3180/tidemux/internal/observability"
 )
 
@@ -114,6 +115,9 @@ func TestUpstreamFailureDetailsJoinClientLogAndAudit(t *testing.T) {
 						}
 						if mode == "stream_503" && f.ProviderCode != "1308" || mode == "stream_redacted" && (f.ProviderCode != "" || f.CodeState != "redacted") {
 							t.Fatalf("code retention=%+v", f)
+						}
+						if f.ResponseRetryHeaders == nil || !reflect.DeepEqual(f.ResponseRetryHeaders, &diagnostics.RetryHeaders{}) {
+							t.Fatal("open stream claimed retry headers that were never sent")
 						}
 					}
 					all := logs.String() + string(encoded) + w.Body.String()

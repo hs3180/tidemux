@@ -16,20 +16,52 @@ var (
 // HTTPStatus is the actual upstream HTTP status; ErrorStatus is a status inside
 // an SSE error. Neither is the downstream status of an already-open stream.
 type Failure struct {
-	Source                  string `json:"source"`
-	Phase                   string `json:"phase"`
-	HTTPStatus              int    `json:"http_status,omitempty"`
-	ErrorStatus             int    `json:"error_status,omitempty"`
-	ProviderCode            string `json:"provider_code,omitempty"`
-	CodeState               string `json:"provider_code_state"`
-	ConfiguredCode          bool   `json:"provider_code_configured,omitempty"`
-	ProviderRequestID       string `json:"provider_request_id,omitempty"`
-	Category                string `json:"category"`
-	Retryability            string `json:"retryability"`
-	CooldownScope           string `json:"cooldown_scope,omitempty"`
-	CooldownSeconds         int64  `json:"cooldown_seconds,omitempty"`
-	CooldownUntilMS         int64  `json:"cooldown_until_ms,omitempty"`
-	ProviderRateLimitStreak uint16 `json:"provider_rate_limit_streak,omitempty"`
+	Source                  string        `json:"source"`
+	Phase                   string        `json:"phase"`
+	HTTPStatus              int           `json:"http_status,omitempty"`
+	ErrorStatus             int           `json:"error_status,omitempty"`
+	ProviderCode            string        `json:"provider_code,omitempty"`
+	CodeState               string        `json:"provider_code_state"`
+	ConfiguredCode          bool          `json:"provider_code_configured,omitempty"`
+	ProviderRequestID       string        `json:"provider_request_id,omitempty"`
+	Category                string        `json:"category"`
+	Retryability            string        `json:"retryability"`
+	CooldownScope           string        `json:"cooldown_scope,omitempty"`
+	CooldownSeconds         int64         `json:"cooldown_seconds,omitempty"`
+	CooldownUntilMS         int64         `json:"cooldown_until_ms,omitempty"`
+	ProviderRateLimitStreak uint16        `json:"provider_rate_limit_streak,omitempty"`
+	ResponseRetryHeaders    *RetryHeaders `json:"response_retry_headers,omitempty"`
+}
+
+// RetryHeaders is a generated downstream response snapshot, never a copy of
+// arbitrary provider headers. An empty object means no retry headers were sent
+// (including failures after SSE headers were committed).
+type RetryHeaders struct {
+	ShouldRetry       string `json:"x_should_retry,omitempty"`
+	RetryAfterSeconds *int64 `json:"retry_after_seconds,omitempty"`
+	RetryAfterMS      *int64 `json:"retry_after_ms,omitempty"`
+}
+
+func (h *RetryHeaders) Normalize() *RetryHeaders {
+	if h == nil {
+		return nil
+	}
+	n := &RetryHeaders{}
+	if h.ShouldRetry == "true" || h.ShouldRetry == "false" {
+		n.ShouldRetry = h.ShouldRetry
+	}
+	if h.RetryAfterSeconds != nil && *h.RetryAfterSeconds > 0 && *h.RetryAfterSeconds <= 30 {
+		seconds := *h.RetryAfterSeconds
+		n.RetryAfterSeconds = &seconds
+	}
+	if h.RetryAfterMS != nil && n.RetryAfterSeconds != nil && *h.RetryAfterMS == *n.RetryAfterSeconds*1000 {
+		milliseconds := *h.RetryAfterMS
+		n.RetryAfterMS = &milliseconds
+	}
+	if n.ShouldRetry == "false" {
+		n.RetryAfterSeconds, n.RetryAfterMS = nil, nil
+	}
+	return n
 }
 
 // Normalize accepts numeric provider codes, standard protocol error types, and
@@ -64,7 +96,7 @@ func (f *Failure) Normalize() *Failure {
 	if !requestIDPattern.MatchString(n.ProviderRequestID) {
 		n.ProviderRequestID = ""
 	}
-	n.Category = enum(n.Category, "insufficient_balance", "rate_limited", "authentication", "permission_denied", "policy_denied", "invalid_request", "model_not_found", "temporarily_unavailable", "transport_error", "invalid_response", "downstream_error", "timeout", "canceled", "upstream_error")
+	n.Category = enum(n.Category, "insufficient_balance", "quota_exhausted", "rate_limited", "authentication", "permission_denied", "policy_denied", "invalid_request", "model_not_found", "temporarily_unavailable", "transport_error", "invalid_response", "downstream_error", "timeout", "canceled", "upstream_error")
 	n.Retryability = enum(n.Retryability, "retryable", "terminal")
 	if n.CooldownScope != "" {
 		n.CooldownScope = enum(n.CooldownScope, "key", "provider")
@@ -75,6 +107,7 @@ func (f *Failure) Normalize() *Failure {
 	if n.CooldownUntilMS < 0 || n.CooldownUntilMS > 253402300799999 {
 		n.CooldownUntilMS = 0
 	}
+	n.ResponseRetryHeaders = n.ResponseRetryHeaders.Normalize()
 	return &n
 }
 

@@ -133,6 +133,9 @@ func providerStreamError(body []byte, stream streamErrorContext) (result *CallEr
 	}
 	status := providerErrorHTTPStatus(body)
 	category, ok := resolveProviderErrorCategory(providerCode, status, stream.mappings)
+	if !ok && providerCode == "insufficient_quota" {
+		category, ok = ProviderErrorQuotaExhausted, true
+	}
 	if !ok {
 		return &CallError{Status: 502, Code: "upstream_stream_error"}
 	}
@@ -185,10 +188,10 @@ func mappedProviderError(resp *http.Response, category ProviderErrorCategory, pr
 	_, code, _, _ := category.ClientError("openai")
 	status := mappedHTTPStatus(category, resp.StatusCode)
 	result := &CallError{Status: status, Code: code, ProviderCode: providerCode, Category: category, UpstreamStatus: resp.StatusCode}
-	if category == ProviderErrorInsufficientBalance || category == ProviderErrorModelNotFound || category == ProviderErrorTemporarilyUnavailable {
+	if category == ProviderErrorInsufficientBalance || category == ProviderErrorQuotaExhausted || category == ProviderErrorModelNotFound || category == ProviderErrorTemporarilyUnavailable {
 		result.FailoverSafe = true
 	}
-	if category == ProviderErrorRateLimited || category == ProviderErrorTemporarilyUnavailable {
+	if category == ProviderErrorRateLimited || category == ProviderErrorQuotaExhausted || category == ProviderErrorTemporarilyUnavailable {
 		now := time.Now()
 		until, seconds, provided := retryAfterDeadline(resp, now)
 		result.RetryAfterSecs, result.RetryProvided = seconds, provided
@@ -213,6 +216,9 @@ func upstreamError(resp *http.Response, mappings ...ProviderErrorMapping) (resul
 	if providerCode := providerErrorCode(body); providerCode != "" {
 		if category, ok := resolveProviderErrorCategory(providerCode, resp.StatusCode, mappings); ok {
 			return mappedProviderError(resp, category, providerCode)
+		}
+		if providerCode == "insufficient_quota" {
+			return mappedProviderError(resp, ProviderErrorQuotaExhausted, providerCode)
 		}
 	}
 	if resp.StatusCode == 429 {

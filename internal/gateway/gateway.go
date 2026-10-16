@@ -779,7 +779,12 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		advice = h.retryAdviceFor(r)
 		if isAvailabilityError(code) || advice.hasCooldown {
 			status = http.StatusTooManyRequests
-			applyRetryHeader(w, advice)
+			if advice.quotaBlocked {
+				code, advice = "provider_quota_exhausted_cooling_down", nil
+				writeRetryHeaders(w, &diagnostics.RetryHeaders{ShouldRetry: "false"})
+			} else {
+				applyRetryHeader(w, advice)
+			}
 		} else {
 			advice = nil
 		}
@@ -824,9 +829,16 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		TimestampMS:     timestamp,
 	}.Log(h.logger)
 	if diagnosticErr != nil {
-		w.Header().Del("Retry-After")
+		writeRetryHeaders(w, &diagnostics.RetryHeaders{ShouldRetry: "false"})
 		h.fail(w, status, code, protocol)
 		return
+	}
+	if advice == nil {
+		if code == "active_session_limit" {
+			applyRetryHeader(w, h.retryAdviceFor(r))
+		} else {
+			writeRetryHeaders(w, &diagnostics.RetryHeaders{ShouldRetry: "false"})
+		}
 	}
 	payload := h.errorPayload(status, code, protocol, nil, param...)
 	if advice != nil {
