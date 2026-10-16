@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.5 — Unreleased
+## 0.3.5 — 2026-10-16
 
 - Add a remaining-cooldown switch threshold, default 60 seconds with global,
   provider and model overrides. Keep short-wait random/auto affinity, switch long

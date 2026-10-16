@@ -259,6 +259,12 @@ Bound the client budget with `CLAUDE_CODE_MAX_RETRIES`,
 used in the installed-client comparisons. These limits do not cap every client's
 capability checks or independently admitted auxiliary calls. Inspect request IDs
 and upstream-attempt counts when diagnosing repeated client messages.
+Hermes 0.21.2 can also exhaust this budget when concurrent calls receive the
+1311 HTTP 403 response, then exit despite an eligible shared-route alternative
+and `x-should-retry: true`. Automatic recovery was intermittent in loopback
+comparisons. Start a new request or explicitly choose an eligible provider after
+checking the reported subscription entitlement; increasing a retry budget does
+not guarantee recovery.
 
 For a Z.ai / BigModel deployment, first confirm that `REF` is that provider,
 then install the four explicit mappings below (use your usual `--config` path):
