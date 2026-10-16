@@ -19,6 +19,9 @@ func TestAuditAtomicityAndUnknownValues(t *testing.T) {
 	if l.AppendAudit(a) == nil {
 		t.Fatal("expected event failure")
 	}
+	if !l.AuditUnavailable() {
+		t.Fatal("failed transaction did not block later generation admission")
+	}
 	rows, _ := l.Recent(context.Background(), 10)
 	if len(rows) != 0 {
 		t.Fatal("partial request committed")
@@ -26,6 +29,9 @@ func TestAuditAtomicityAndUnknownValues(t *testing.T) {
 	l.db.Exec(`DROP TRIGGER reject_event`)
 	if err = l.AppendAudit(a); err != nil {
 		t.Fatal(err)
+	}
+	if !l.AuditUnavailable() {
+		t.Fatal("a later write silently cleared the missing-accounting guard")
 	}
 	if l.AppendAudit(a) == nil {
 		t.Fatal("duplicate ID accepted")

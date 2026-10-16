@@ -48,7 +48,16 @@ func (l *Ledger) initAudit(ctx context.Context) error {
 	return err
 }
 
-func (l *Ledger) AppendAudit(a Audit) error {
+// AuditUnavailable latches a failed audit for this ledger's lifetime. A later
+// successful write does not establish that the missing accounting was repaired.
+func (l *Ledger) AuditUnavailable() bool { return l.auditUnavailable.Load() }
+
+func (l *Ledger) AppendAudit(a Audit) (err error) {
+	defer func() {
+		if err != nil {
+			l.auditUnavailable.Store(true)
+		}
+	}()
 	if a.ID == "" || a.TimestampMS <= 0 || (a.Protocol != "openai" && a.Protocol != "anthropic") || a.Upstream == "" || a.Model == "" {
 		return errors.New("invalid audit identity")
 	}

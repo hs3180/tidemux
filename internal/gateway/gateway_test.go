@@ -1352,6 +1352,9 @@ func TestAuditAppendFailureSettlesKnownBudgetCost(t *testing.T) {
 	if first.Code != http.StatusInternalServerError || !strings.Contains(first.Body.String(), "audit_failed_do_not_retry_blindly") {
 		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
 	}
+	if first.Header().Get("x-should-retry") != "false" || first.Header().Get("Retry-After") != "" || !strings.Contains(first.Body.String(), `"strategy":"manual_check"`) {
+		t.Fatal("known-cost audit failure invited another automatic generation")
+	}
 	if !strings.Contains(logs.String(), `"event":"request_audit_write_failure"`) || strings.Contains(logs.String(), "injected audit append failure") || strings.Contains(logs.String(), `"event":"budget_settlement_failure"`) {
 		t.Fatalf("audit failure diagnostics=%s", logs.String())
 	}

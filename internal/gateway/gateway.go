@@ -693,7 +693,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			return nil, id, nil, true
 		}
 		var localStateError *adapter.CallError
-		if id == "" && errors.As(callErr, &localStateError) && localStateError.UpstreamNotAttempted && isAvailabilityError(localStateError.Code) {
+		if id == "" && errors.As(callErr, &localStateError) && localStateError.UpstreamNotAttempted && (isAvailabilityError(localStateError.Code) || localStateError.Code == "audit_unavailable") {
 			setRetryAfterHeader(w, localStateError)
 			h.reject(w, r, protocol, localStateError.Status, localStateError.Code)
 			return nil, "", nil, true
@@ -775,6 +775,13 @@ func newRequestID() (string, error) {
 
 func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string, status int, code string, param ...string) {
 	var advice *retryAdvice
+	if h.ledger.AuditUnavailable() && (isAvailabilityError(code) || code == "auto_chain_exhausted" || code == "active_session_limit") {
+		status, code = http.StatusServiceUnavailable, "audit_unavailable"
+	}
+	if code == "audit_unavailable" {
+		advice = manualAuditAdvice()
+		writeRetryHeaders(w, &diagnostics.RetryHeaders{ShouldRetry: "false"})
+	}
 	if isAvailabilityError(code) || code == "auto_chain_exhausted" {
 		advice = h.retryAdviceFor(r)
 		if isAvailabilityError(code) || advice.hasCooldown {

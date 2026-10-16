@@ -158,11 +158,28 @@ compatible reloads retain that process version.
 Each downstream generation request has one terminal adapter audit and at most
 one initiated upstream generation attempt. Queued cancellation is recorded
 without upstream work. Request/events
-commit together; final SSE completion waits for audit persistence. Budget pending
+commit together; SSE stop/finish reasons and terminal markers wait for audit
+persistence. Ordinary content remains incremental; the ordered completion tail
+uses the configured stream byte limit. Budget pending
 attempts survive crashes as unknown charges, fail closed when unresolved and
 settle against the admitted provider/policy. Operational counts add no usage rows.
 Prices/currencies stay with history; missing usage/cost is unknown, and local
 estimates or supplied statement CSVs are not automatically fetched invoices.
+If audit persistence fails after dispatch, the terminal outcome is error even
+when the upstream completed successfully. Preserve known usage/cost and upstream
+health evidence independently. Before headers are sent, return `x-should-retry:
+false` without a retry wait. The error's `manual_check` strategy permits zero
+automatic attempts; inspect the request ID/accounting state before resubmitting.
+An open SSE response carries that guidance in its terminal error, with no success
+completion or late-header claim. Final response metadata replaces any earlier
+retry decision before the terminal event is logged.
+The shared ledger latches an audit failure for the process lifetime. Later
+generation requests are rejected locally as `audit_unavailable` before dispatch,
+including queued calls and clients created by compatible reloads. Existing
+budget guards retain priority; unattempted calls release their reservations.
+Provider health is independent. Already-dispatched calls can still finish; a
+later successful write does not repair missing accounting or clear the latch.
+Reconcile the failed request and repair storage, then restart to resume work.
 
 Optional key counters observe initiated HTTP calls and complete outcomes; labels
 are assigned independently of secrets. One state slot exists per configured key;

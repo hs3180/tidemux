@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	_ "modernc.org/sqlite"
 )
@@ -54,6 +55,9 @@ type Event struct {
 type Ledger struct {
 	db    *sql.DB
 	owner *os.File
+	// Shared by all provider clients and reload views. Once an audit fails,
+	// an operator must reconcile/repair storage and restart before more work.
+	auditUnavailable atomic.Bool
 }
 
 // Open creates the SQLite schema when necessary and enables settings suitable
