@@ -117,7 +117,7 @@ func (f *Failure) Normalize() *Failure {
 		n.ActualTokens, n.LimitTokens = 0, 0
 	}
 	n.KeyLabel, n.BackendID = KeyLabel(n.KeyLabel), KeyLabel(n.BackendID)
-	n.Category = enum(n.Category, "insufficient_balance", "quota_exhausted", "rate_limited", "authentication", "permission_denied", "policy_denied", "invalid_request", "model_not_found", "temporarily_unavailable", "transport_error", "invalid_response", "downstream_error", "timeout", "canceled", "upstream_error")
+	n.Category = enum(n.Category, "insufficient_balance", "quota_exhausted", "provider_access_denied", "fair_use_throttled", "rate_limited", "authentication", "permission_denied", "policy_denied", "invalid_request", "model_not_found", "temporarily_unavailable", "transport_error", "invalid_response", "downstream_error", "timeout", "canceled", "upstream_error")
 	n.Retryability = enum(n.Retryability, "retryable", "terminal")
 	if n.CooldownScope != "" {
 		n.CooldownScope = enum(n.CooldownScope, "key", "provider")

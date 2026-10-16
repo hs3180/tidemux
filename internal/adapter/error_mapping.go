@@ -50,6 +50,8 @@ type ProviderErrorCategory string
 const (
 	ProviderErrorInsufficientBalance    ProviderErrorCategory = "insufficient_balance"
 	ProviderErrorQuotaExhausted         ProviderErrorCategory = "quota_exhausted"
+	ProviderErrorAccessDenied           ProviderErrorCategory = "provider_access_denied"
+	ProviderErrorFairUseThrottled       ProviderErrorCategory = "fair_use_throttled"
 	ProviderErrorRateLimited            ProviderErrorCategory = "rate_limited"
 	ProviderErrorAuthentication         ProviderErrorCategory = "authentication"
 	ProviderErrorPermissionDenied       ProviderErrorCategory = "permission_denied"
@@ -75,10 +77,10 @@ func (m ProviderErrorMapping) Validate() error {
 		return errors.New("http_status must be 400..599 when supplied")
 	}
 	switch m.Category {
-	case ProviderErrorInsufficientBalance, ProviderErrorQuotaExhausted, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound, ProviderErrorTemporarilyUnavailable:
+	case ProviderErrorInsufficientBalance, ProviderErrorQuotaExhausted, ProviderErrorAccessDenied, ProviderErrorFairUseThrottled, ProviderErrorRateLimited, ProviderErrorAuthentication, ProviderErrorPermissionDenied, ProviderErrorPolicyDenied, ProviderErrorInvalidRequest, ProviderErrorModelNotFound, ProviderErrorTemporarilyUnavailable:
 		return nil
 	default:
-		return errors.New("category must be insufficient_balance, quota_exhausted, rate_limited, authentication, permission_denied, policy_denied, invalid_request, model_not_found or temporarily_unavailable")
+		return errors.New("category must be insufficient_balance, quota_exhausted, provider_access_denied, fair_use_throttled, rate_limited, authentication, permission_denied, policy_denied, invalid_request, model_not_found or temporarily_unavailable")
 	}
 }
 
@@ -135,6 +137,10 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		code = "provider_insufficient_balance"
 	case ProviderErrorQuotaExhausted:
 		code = "provider_quota_exhausted"
+	case ProviderErrorAccessDenied:
+		code = "provider_access_denied"
+	case ProviderErrorFairUseThrottled:
+		code = "provider_fair_use_throttled"
 	case ProviderErrorRateLimited:
 		code = "upstream_rate_limited"
 	case ProviderErrorAuthentication:
@@ -155,6 +161,10 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 	switch c {
 	case ProviderErrorInsufficientBalance:
 		message = "The provider reports insufficient balance. Check its account balance or billing status, then retry."
+	case ProviderErrorAccessDenied:
+		message = "The provider subscription does not permit the selected model. Check the subscription entitlement or select an eligible alternative provider."
+	case ProviderErrorFairUseThrottled:
+		message = "The provider restricted this account under its fair use policy. Check account activity; if the unexpected load is not yours, investigate possible API key exposure and rotate the provider key. Request manual removal of the restriction in the provider account center; recovery time is unknown."
 	case ProviderErrorQuotaExhausted:
 		message = "The provider reports an exhausted quota. Wait for its quota reset or select an eligible alternative provider."
 	case ProviderErrorRateLimited:
@@ -178,11 +188,11 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		switch c {
 		case ProviderErrorInsufficientBalance:
 			kind = "billing_error"
-		case ProviderErrorRateLimited, ProviderErrorQuotaExhausted:
+		case ProviderErrorRateLimited, ProviderErrorQuotaExhausted, ProviderErrorFairUseThrottled:
 			kind = "rate_limit_error"
 		case ProviderErrorAuthentication:
 			kind = "authentication_error"
-		case ProviderErrorPermissionDenied:
+		case ProviderErrorPermissionDenied, ProviderErrorAccessDenied:
 			kind = "permission_error"
 		case ProviderErrorPolicyDenied:
 			kind = "permission_error"
@@ -199,11 +209,11 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 			kind = "insufficient_quota"
 		case ProviderErrorQuotaExhausted:
 			kind = "insufficient_quota"
-		case ProviderErrorRateLimited:
+		case ProviderErrorRateLimited, ProviderErrorFairUseThrottled:
 			kind = "rate_limit_error"
 		case ProviderErrorAuthentication:
 			kind = "authentication_error"
-		case ProviderErrorPermissionDenied:
+		case ProviderErrorPermissionDenied, ProviderErrorAccessDenied:
 			kind = "permission_error"
 		case ProviderErrorPolicyDenied:
 			kind = "permission_error"
@@ -220,12 +230,14 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 	switch c {
 	case ProviderErrorInsufficientBalance:
 		status = 402
-	case ProviderErrorRateLimited, ProviderErrorQuotaExhausted:
+	case ProviderErrorRateLimited, ProviderErrorQuotaExhausted, ProviderErrorFairUseThrottled:
 		status = 429
 	case ProviderErrorAuthentication:
 		status = 502
 	case ProviderErrorPermissionDenied:
 		status = 502
+	case ProviderErrorAccessDenied:
+		status = 403
 	case ProviderErrorPolicyDenied:
 		status = 403
 	case ProviderErrorInvalidRequest:
@@ -238,4 +250,15 @@ func (c ProviderErrorCategory) ClientError(protocol string) (status int, code, m
 		status = 502
 	}
 	return status, code, message, kind
+}
+
+// ProviderScopedTerminal marks operator-confirmed deterministic failures that
+// pause the whole provider. Automatic recovery may select only a healthy
+// alternative on a new shared/auto request; an explicit route stays terminal.
+func (c ProviderErrorCategory) ProviderScopedTerminal() bool {
+	switch c {
+	case ProviderErrorInsufficientBalance, ProviderErrorQuotaExhausted, ProviderErrorAccessDenied, ProviderErrorFairUseThrottled:
+		return true
+	}
+	return false
 }

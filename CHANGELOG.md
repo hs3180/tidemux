@@ -2,6 +2,12 @@
 
 ## 0.3.5 — Unreleased
 
+- Document explicit Z.ai 1308/1310 quota, 1311 provider entitlement and 1313
+  fair-use mappings. Keep permission/fair-use terminal categories distinct,
+  pause the configured provider and recover only through later eligible requests.
+  Include conditional account/key checks and manual-unlock guidance without
+  diagnosing compromise or inventing subscription reset times.
+
 - Forward bounded, redacted provider error reasons in client-consumed HTTP/SSE
   messages by default, with a per-provider `forward_error_messages: false`
   policy. Preserve standard error identifiers and explicit token-limit facts

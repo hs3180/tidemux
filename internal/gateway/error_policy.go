@@ -26,6 +26,10 @@ func addProviderErrorSemantics(detail map[string]any, callErr *adapter.CallError
 	}
 	if f.ProviderMessage != "" {
 		detail["message"] = f.ProviderMessage
+		if callErr.Category == adapter.ProviderErrorFairUseThrottled {
+			_, _, guidance, _ := callErr.Category.ClientError(protocol)
+			detail["message"] = f.ProviderMessage + " " + guidance
+		}
 	}
 	if f.ProviderCode != "" {
 		detail["provider_code"] = f.ProviderCode

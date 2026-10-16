@@ -81,6 +81,20 @@ func TestProviderErrorMapAddListRemove(t *testing.T) {
 	if err := providerErrorMapCommand([]string{"remove", "--code", "policy_blocked", "--status", "403", "--config", path, "p"}, stdout, stderr); err != nil {
 		t.Fatal(err)
 	}
+	for code, category := range map[string]string{"1308": "quota_exhausted", "1310": "quota_exhausted", "1311": "provider_access_denied", "1313": "fair_use_throttled"} {
+		if err := providerErrorMapCommand([]string{"add", "p", "--code", code, "--status", "429", "--category", category, "--config", path}, stdout, stderr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deployed, err := gateway.LoadConfig(path)
+	if err != nil || len(deployed.Providers["p"].ErrorCodeMappings) != 4 {
+		t.Fatalf("four-code deployment failed: %+v %v", deployed, err)
+	}
+	for _, mapping := range deployed.Providers["p"].ErrorCodeMappings {
+		if err := providerErrorMapCommand([]string{"remove", "p", "--code", mapping.UpstreamCode, "--status", "429", "--config", path}, stdout, stderr); err != nil {
+			t.Fatal(err)
+		}
+	}
 	loaded, err = gateway.LoadConfig(path)
 	if err != nil {
 		t.Fatal(err)

@@ -21,7 +21,7 @@ func SafeFailureClass(err error) string {
 		return "upstream_error"
 	}
 	switch failure.Category {
-	case ProviderErrorAuthentication, ProviderErrorRateLimited, ProviderErrorInsufficientBalance, ProviderErrorQuotaExhausted,
+	case ProviderErrorAuthentication, ProviderErrorRateLimited, ProviderErrorInsufficientBalance, ProviderErrorQuotaExhausted, ProviderErrorAccessDenied, ProviderErrorFairUseThrottled,
 		ProviderErrorModelNotFound, ProviderErrorTemporarilyUnavailable, ProviderErrorPermissionDenied,
 		ProviderErrorPolicyDenied, ProviderErrorInvalidRequest:
 		return string(failure.Category)

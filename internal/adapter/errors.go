@@ -128,11 +128,14 @@ func providerStreamError(body []byte, stream streamErrorContext) (result *CallEr
 		result.Failure = providerFailure(body, stream.response, "stream_error", stream.mappings)
 	}()
 	providerCode := providerErrorCode(body)
-	if providerCode == "" {
+	status := providerErrorHTTPStatus(body)
+	if providerCode == "" && status != 429 {
 		return &CallError{Status: 502, Code: "upstream_stream_error"}
 	}
-	status := providerErrorHTTPStatus(body)
 	category, ok := resolveErrorCategory(body, status, stream.mappings)
+	if !ok && status == 429 {
+		category, ok = ProviderErrorRateLimited, true
+	}
 	if !ok {
 		return &CallError{Status: 502, Code: "upstream_stream_error"}
 	}
@@ -161,7 +164,7 @@ func mappedHTTPStatus(category ProviderErrorCategory, upstreamStatus int) int {
 		if upstreamStatus == 401 || upstreamStatus == 403 {
 			return upstreamStatus
 		}
-	case ProviderErrorPermissionDenied:
+	case ProviderErrorPermissionDenied, ProviderErrorAccessDenied:
 		if upstreamStatus == 403 {
 			return upstreamStatus
 		}
@@ -185,10 +188,10 @@ func mappedProviderError(resp *http.Response, category ProviderErrorCategory, pr
 	_, code, _, _ := category.ClientError("openai")
 	status := mappedHTTPStatus(category, resp.StatusCode)
 	result := &CallError{Status: status, Code: code, ProviderCode: providerCode, Category: category, UpstreamStatus: resp.StatusCode}
-	if category == ProviderErrorInsufficientBalance || category == ProviderErrorQuotaExhausted || category == ProviderErrorModelNotFound || category == ProviderErrorTemporarilyUnavailable {
+	if category.ProviderScopedTerminal() || category == ProviderErrorModelNotFound || category == ProviderErrorTemporarilyUnavailable {
 		result.FailoverSafe = true
 	}
-	if category == ProviderErrorRateLimited || category == ProviderErrorQuotaExhausted || category == ProviderErrorTemporarilyUnavailable {
+	if category == ProviderErrorRateLimited || category == ProviderErrorQuotaExhausted || category == ProviderErrorAccessDenied || category == ProviderErrorFairUseThrottled || category == ProviderErrorTemporarilyUnavailable {
 		now := time.Now()
 		until, seconds, provided := retryAfterDeadline(resp, now)
 		result.RetryAfterSecs, result.RetryProvided = seconds, provided

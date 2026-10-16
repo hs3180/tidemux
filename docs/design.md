@@ -67,6 +67,16 @@ An exact `quota_exhausted` mapping (or the standard `insufficient_quota` code)
 keeps quota exhaustion distinct from balance errors and temporary rate limits.
 It retains HTTP 429, provider scope and any full server wait; absent a wait,
 request-driven recovery starts after five minutes with bounded backoff.
+`provider_access_denied` and `fair_use_throttled` are explicit, vendor-neutral
+provider-scoped terminal mappings. The former translates subscription access
+rejection to permission semantics; the latter remains distinct from quota and
+rate-limit recovery and always carries conditional account/key investigation
+and manual-unlock guidance. Both reuse the five-minute provider recovery and
+bounded failed-probe backoff. Shared/auto recovery can only select a healthy
+alternative on a new request; explicit and fully restricted routes stay terminal.
+Local gates retain distinct restriction codes, rather than relabeling fair use
+or entitlement as quota. Mixed terminal restrictions use a generic restriction
+code without a fabricated cause. This policy never infers a reset/unlock time.
 Numeric vendor codes have no global meaning and require a provider mapping.
 Local rejection, cancellation, terminal client errors and conversion failures
 do not create upstream failure evidence. Upstream 5xx, interrupted streams and

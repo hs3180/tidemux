@@ -249,6 +249,10 @@ func (h *handler) errorPayload(status int, code, protocol string, failure *diagn
 	detail := map[string]any{"type": kind, "message": message, "code": code}
 	addFailureDetails(detail, failure)
 	switch code {
+	case "provider_fair_use_throttled_cooling_down":
+		_, _, detail["message"], _ = adapter.ProviderErrorFairUseThrottled.ClientError(protocol)
+	case "provider_access_denied_cooling_down":
+		_, _, detail["message"], _ = adapter.ProviderErrorAccessDenied.ClientError(protocol)
 	case "request_too_large":
 		limit := h.config.Limits.Effective().RequestBytes
 		detail["message"] = fmt.Sprintf("request_too_large: body exceeds gateway limit of %d bytes; configure limits.request_bytes to change it", limit)
@@ -786,8 +790,13 @@ func (h *handler) reject(w http.ResponseWriter, r *http.Request, protocol string
 		advice = h.retryAdviceFor(r)
 		if isAvailabilityError(code) || advice.hasCooldown {
 			status = http.StatusTooManyRequests
-			if advice.quotaBlocked {
-				code, advice = "provider_quota_exhausted_cooling_down", nil
+			if advice.terminalProviderBlocked {
+				code = "provider_restriction_cooling_down"
+				if advice.terminalCategory != "" {
+					_, canonical, _, _ := advice.terminalCategory.ClientError(protocol)
+					code = canonical + "_cooling_down"
+				}
+				advice = nil
 				writeRetryHeaders(w, &diagnostics.RetryHeaders{ShouldRetry: "false"})
 			} else {
 				applyRetryHeader(w, advice)
