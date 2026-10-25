@@ -54,7 +54,7 @@ func httpAttemptResult(ctx context.Context, err error, timedOut bool) HTTPAttemp
 		return HTTPAttemptResult{Outcome: "success"}
 	}
 	class := SafeFailureClass(err)
-	if timedOut || errors.Is(ctx.Err(), context.DeadlineExceeded) || class == "timeout" {
+	if timedOut || errors.Is(context.Cause(ctx), context.DeadlineExceeded) || class == "timeout" {
 		return HTTPAttemptResult{"timeout", "timeout"}
 	}
 	if errors.Is(ctx.Err(), context.Canceled) || class == "canceled" {

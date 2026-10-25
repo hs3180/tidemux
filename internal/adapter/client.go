@@ -339,8 +339,12 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		return nil, id, &CallError{Status: 408, Code: "request_canceled"}
 	}
 	limits := c.Limits.Effective()
-	requestCtx, cancelRequest := context.WithTimeout(ctx, c.Limits.UpstreamTimeout(sink != nil))
-	defer cancelRequest()
+	requestCtx := ctx
+	if timeout := c.Limits.UpstreamTimeout(sink != nil); timeout > 0 {
+		var cancelRequest context.CancelFunc
+		requestCtx, cancelRequest = context.WithTimeout(ctx, timeout)
+		defer cancelRequest()
+	}
 	defer func() {
 		if err != nil && ctx.Err() == nil && requestCtx.Err() == context.DeadlineExceeded {
 			var previous *CallError
@@ -498,6 +502,14 @@ func terminalHTTPStatus(clientProtocol string, delivered bool, err error) int {
 }
 
 func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerBody []byte, model string, sink StreamSink, options CallOptions, limits Limits, id, apiKey string, observed *bytes.Buffer, delivered *bool, observers ...HTTPAttemptObserver) (attemptResponse []byte, attemptUsage TokenUsage, attemptErr error) {
+	parentCtx := ctx
+	var idle *streamIdleTimer
+	if sink != nil && c.Limits.UpstreamTimeoutSeconds == 0 {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(ctx)
+		idle = &streamIdleTimer{cancel: cancel}
+		defer idle.close()
+	}
 	path := "/chat/completions"
 	if c.Protocol == "anthropic" {
 		path = "/messages"
@@ -521,6 +533,14 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 	}
 	var upstreamResponse *http.Response
 	defer func() {
+		if attemptErr != nil && idle != nil && parentCtx.Err() == nil && errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+			var previous *CallError
+			var failure *diagnostics.Failure
+			if errors.As(attemptErr, &previous) {
+				failure = previous.Failure
+			}
+			attemptErr = &CallError{Status: 504, Code: "upstream_timeout", Failure: failure}
+		}
 		var callErr *CallError
 		if !errors.As(attemptErr, &callErr) {
 			return
@@ -602,7 +622,16 @@ func (c *Client) doAttempt(ctx context.Context, clientProtocol string, providerB
 			defer func() { finish(httpAttemptResult(ctx, attemptErr, timedOut)) }()
 		}
 	}
+	if idle != nil {
+		idle.start()
+	}
 	resp, err := client.Do(req)
+	if idle != nil {
+		idle.stop()
+		if resp != nil && resp.Body != nil {
+			resp.Body = streamIdleBody{ReadCloser: resp.Body, idle: idle}
+		}
+	}
 	upstreamResponse = resp
 	if err != nil {
 		var network interface{ Timeout() bool }

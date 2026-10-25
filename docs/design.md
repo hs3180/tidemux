@@ -55,6 +55,24 @@ explicit configured defaults and caller-supplied output budgets retain priority.
 
 ## Routing and recovery
 
+### Upstream timeouts
+
+With `limits.upstream_timeout_seconds` omitted or zero, nonstream requests have
+a 60-second total budget. Streaming requests instead allow ten minutes waiting
+for response headers and ten minutes of inactivity while reading upstream body
+bytes, with no implicit total lifetime. Progress, including SSE heartbeats,
+refreshes the read inactivity budget. Empty reads do not refresh it. Time spent
+processing a frame or writing to the downstream consumer is outside this
+upstream I/O budget; downstream cancellation still ends the request.
+
+A positive `limits.upstream_timeout_seconds` retains its absolute total deadline
+for both modes and replaces the default timeout policy. A downstream deadline
+can end a request earlier. Byte/event limits, concurrency/session admission,
+budgets, single dispatch and terminal auditing remain enforced. An expired
+upstream wait returns `upstream_timeout`; an expired downstream context retains
+the cancellation outcome. Protocol completion is still withheld until the
+terminal audit commits.
+
 ### Route selection
 
 Named providers may declare one-hop `model_aliases` from client names to upstream

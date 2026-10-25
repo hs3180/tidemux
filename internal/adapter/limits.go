@@ -33,11 +33,11 @@ func (l Limits) Effective() Limits {
 	return l
 }
 
-// UpstreamTimeout gives long-running agent streams ten minutes by default.
-// An explicitly configured timeout continues to bound both response modes.
+// UpstreamTimeout returns the total request budget. Default streams instead use
+// an idle timeout around upstream I/O; explicit totals still bound both modes.
 func (l Limits) UpstreamTimeout(stream bool) time.Duration {
 	if stream && l.UpstreamTimeoutSeconds == 0 {
-		return 10 * time.Minute
+		return 0
 	}
 	return time.Duration(l.Effective().UpstreamTimeoutSeconds) * time.Second
 }

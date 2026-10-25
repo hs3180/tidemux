@@ -146,6 +146,12 @@ follow the [catalog contract](design.md#model-capability-catalog).
 Clients own recovery requests; see the [dispatch contract](design.md#single-dispatch).
 Configure provider error mappings with `provider error-map --help`.
 
+Default streaming requests can continue while the upstream makes progress;
+stalled upstream I/O remains bounded. Set `limits.upstream_timeout_seconds` in
+the configuration when an absolute request deadline is required. See the
+[upstream-timeout contract](design.md#upstream-timeouts) for defaults and
+cancellation semantics.
+
 Use `provider_switch_threshold` to control when a later request can choose
 another provider. The [switching contract](design.md#cooldown-switching) owns
 comparison boundaries, precedence, affinity, unknown waits and switchback.
