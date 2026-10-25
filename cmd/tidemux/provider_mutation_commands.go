@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -71,7 +72,7 @@ func deleteUnreferencedProviderKeys(c gateway.Config, references []gateway.Keych
 func providerUpdate(args []string, stdout, stderr *os.File) error {
 	ref, rest := leadingEndpoint(args)
 	if ref == "" {
-		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID[,ID...]|all] [--context-tokens N] [--max-active-sessions N] [--rotate-key] [--config PATH]")
+		return errors.New("usage: tidemux provider update REF [--endpoint URL] [--protocol PROTOCOL] [--model ID[,ID...]|all] [--model-aliases JSON] [--context-tokens N] [--max-active-sessions N] [--rotate-key] [--config PATH]")
 	}
 	flags := flag.NewFlagSet("provider update", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -79,6 +80,7 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	endpoint := flags.String("endpoint", "", "replace API endpoint")
 	protocol := flags.String("protocol", "", "force API protocol: openai or anthropic")
 	model := flags.String("model", "", "replace the comma-separated model allowlist, or 'all'")
+	aliases := flags.String("model-aliases", "", "replace provider-local model aliases with a JSON object mapping client names to upstream IDs; '{}' clears them")
 	contextTokens := flags.Int64("context-tokens", 0, "context limit for all provider models in tokens; 0 clears the configured override")
 	rotateKey := flags.Bool("rotate-key", false, "replace the API key using hidden terminal input")
 	maxSessions := flags.Int("max-active-sessions", 0, "provider's maximum distinct active sessions; zero disables its cap")
@@ -93,13 +95,14 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 		return errors.New("unexpected provider update argument")
 	}
 	modelRequested := flagWasSet(flags, "model")
+	aliasesRequested := flagWasSet(flags, "model-aliases")
 	versionRequested := flagWasSet(flags, "anthropic-version")
 	maxSessionsRequested := flagWasSet(flags, "max-active-sessions")
 	contextRequested := flagWasSet(flags, "context-tokens")
 	if maxSessionsRequested && (*maxSessions < 0 || *maxSessions > 4096) {
 		return errors.New("--max-active-sessions must be 0..4096")
 	}
-	formRequested := *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested && !maxSessionsRequested && !contextRequested
+	formRequested := *endpoint == "" && *protocol == "" && !modelRequested && !aliasesRequested && !*rotateKey && !versionRequested && !maxSessionsRequested && !contextRequested
 	if runtime.GOOS != "darwin" {
 		return errors.New("provider credentials require macOS Keychain")
 	}
@@ -155,7 +158,7 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 			}
 		}
 	}
-	if !formRequested && *endpoint == "" && *protocol == "" && !modelRequested && !*rotateKey && !versionRequested && !maxSessionsRequested && !contextRequested {
+	if !formRequested && *endpoint == "" && *protocol == "" && !modelRequested && !aliasesRequested && !*rotateKey && !versionRequested && !maxSessionsRequested && !contextRequested {
 		return errors.New("provider update requires at least one changed field")
 	}
 	var previousKeyRefs []gateway.KeychainReference
@@ -230,6 +233,13 @@ func providerUpdate(args []string, stdout, stderr *os.File) error {
 	}
 	if modelRequested {
 		p.SupportedModels = append([]string(nil), allowedModels...)
+	}
+	if aliasesRequested {
+		var replacements map[string]string
+		if json.Unmarshal([]byte(*aliases), &replacements) != nil || replacements == nil {
+			return errors.New("--model-aliases must be a JSON object mapping client names to upstream model IDs")
+		}
+		p.ModelAliases = replacements
 	}
 	if maxSessionsRequested {
 		p.MaxActiveSessions = *maxSessions

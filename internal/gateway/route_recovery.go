@@ -108,7 +108,7 @@ func (h *handler) callRouteWithRecovery(w http.ResponseWriter, r *http.Request, 
 	if h.availability == nil {
 		return h.callRouteWithLegacyRecovery(w, r, protocol, route, body, options, sink, delivered)
 	}
-	lease, blocked := h.availability.begin(h.routingEpoch, route.provider, route.model, h.providerGenerations[route.provider])
+	lease, blocked := h.availability.begin(h.routingEpoch, route.provider, h.providers[route.provider].UpstreamModel(route.model), h.providerGenerations[route.provider])
 	if blocked != nil {
 		if !route.dynamic && route.sessionKey == nil && route.autoChainIndex == nil {
 			setRetryAfterHeader(w, blocked)

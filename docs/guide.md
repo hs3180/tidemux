@@ -157,8 +157,24 @@ tidemux routing show
 tidemux routing set --provider-switch-threshold default
 ```
 
+To keep a stable client model name while changing an upstream model, configure
+an alias on the intended provider:
+
+```sh
+tidemux provider update ark-agent-plan --model-aliases '{"kimi-k3":"kimi-k3.1-pro"}'
+```
+
+Clients can keep requesting `kimi-k3` (or `ark-agent-plan/kimi-k3`). Keep that
+client name in `supported_models` when using an allowlist, and configure verified
+prices under the upstream ID `kimi-k3.1-pro`. Inspect the applied revision before
+sending traffic. The flag replaces that provider's complete alias map; pass `{}`
+to clear it. The JSON configuration field is `providers.<ref>.model_aliases`.
+See the [route selection contract](design.md#route-selection) for validation,
+response names, accounting, shared health and reload behavior.
+
 For provider/model overrides, add these optional fields to the intended provider
-object. Model-map keys are exact upstream model IDs. Values below are examples,
+object. Model override keys are client model names (upstream IDs when no alias is
+configured). Values below are examples,
 not defaults:
 
 ```json

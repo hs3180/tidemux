@@ -38,7 +38,7 @@ func (h *handler) activateRouting() {
 	for _, pool := range h.keyPools {
 		pool.setDiagnostics(h.config.HealthDiagnosticsEnabled())
 	}
-	h.availability.activate(h.routingEpoch, h.providerGenerations, h.supportScopeAllows)
+	h.availability.activate(h.routingEpoch, h.providerGenerations, h.upstreamScopeAllows)
 	if prepared := h.preparedRouting; prepared != nil {
 		for _, entry := range h.config.AutoChain {
 			prepared.preserve[entry] = h.supportScopeAllows(entry.Provider, entry.Model) && h.providerBindingPresent(entry.Provider)

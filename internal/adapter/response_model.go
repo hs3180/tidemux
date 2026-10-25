@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -25,7 +26,22 @@ func setResponseModel(response []byte, model string) []byte {
 	return encoded
 }
 
-func setStreamResponseModel(protocol string, frame []byte, model string) []byte {
+func setStreamResponseModel(protocol string, frames []byte, model string) []byte {
+	if model == "" {
+		return frames
+	}
+	// A conversion may emit several complete events for one upstream chunk.
+	// Rewrite each event independently and preserve its original line endings.
+	var result []byte
+	for _, group := range bytes.SplitAfter(frames, []byte("\n\n")) {
+		for _, frame := range bytes.SplitAfter(group, []byte("\r\n\r\n")) {
+			result = append(result, setSingleStreamResponseModel(protocol, frame, model)...)
+		}
+	}
+	return result
+}
+
+func setSingleStreamResponseModel(protocol string, frame []byte, model string) []byte {
 	if model == "" {
 		return frame
 	}

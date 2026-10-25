@@ -80,7 +80,7 @@ func (h *handler) routeWaitLocked(route routeStep, now time.Time) routeWait {
 		return wait
 	}
 	if s := h.availability; s != nil {
-		for _, model := range []string{"", route.model} {
+		for _, model := range []string{"", h.providers[route.provider].UpstreamModel(route.model)} {
 			entry := s.entries[availabilityTarget{route.provider, model, h.providerGenerations[route.provider]}]
 			if entry != nil && !entry.eligible(now) {
 				wait.add(entry.retryAt, entry.probing)

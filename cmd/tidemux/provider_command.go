@@ -559,7 +559,7 @@ func providerList(args []string, stdout, stderr *os.File) error {
 			if p.Budget != nil {
 				budget = p.Budget
 			}
-			items = append(items, map[string]any{"ref": name, "endpoint": p.BaseURL, "protocol": p.Protocol, "supported_models": p.SupportedModels, "key_count": configuredProviderKeyCount(p), "budget": budget})
+			items = append(items, map[string]any{"ref": name, "endpoint": p.BaseURL, "protocol": p.Protocol, "supported_models": p.SupportedModels, "model_aliases": p.ModelAliases, "key_count": configuredProviderKeyCount(p), "budget": budget})
 		}
 		return json.NewEncoder(stdout).Encode(items)
 	}
@@ -626,6 +626,10 @@ func providerShow(args []string, stdout, stderr *os.File) error {
 	}
 	fmt.Fprintf(stdout, "Reference: %s\nProtocol: %s\nEndpoint: %s\nAPI keys: %d\nModel scope: %s\nBudget: %s\nMax active sessions: %d (0 disables provider cap)\n", ref, p.Protocol, p.BaseURL, configuredProviderKeyCount(p), scope, budget, p.MaxActiveSessions)
 	fmt.Fprintf(stdout, "Context token override: %d (0 uses catalog)\n", p.ModelCapabilities.ContextTokens)
+	if len(p.ModelAliases) > 0 {
+		aliases, _ := json.Marshal(p.ModelAliases)
+		fmt.Fprintf(stdout, "Model aliases: %s\n", aliases)
+	}
 	return nil
 }
 

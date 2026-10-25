@@ -88,7 +88,14 @@ func (h *handler) modelsForProvider(providerName string) ([]string, bool) {
 	if provider, ok := h.providers[providerName]; ok && len(provider.SupportedModels) > 0 {
 		return provider.SupportedModels, true
 	}
-	return h.models[providerName], h.modelsKnown[providerName]
+	models := append([]string(nil), h.models[providerName]...)
+	for alias := range h.providers[providerName].ModelAliases {
+		if !containsModel(models, alias) {
+			models = append(models, alias)
+		}
+	}
+	sort.Strings(models)
+	return models, h.modelsKnown[providerName]
 }
 
 func budgetBlockKey(provider, currency string) string { return provider + "\x00" + currency }
@@ -181,7 +188,8 @@ func (h *handler) bareModelCandidates(model string, requireKnownScope bool) []st
 			}
 		} else if requireKnownScope {
 			models, known := h.modelsForProvider(name)
-			if !known || !containsModel(models, model) {
+			_, alias := provider.ModelAliases[model]
+			if !alias && (!known || !containsModel(models, model)) {
 				continue
 			}
 		}

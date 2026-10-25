@@ -115,7 +115,7 @@ func catalogTokenLimit(item map[string]json.RawMessage, fields []string) (int64,
 }
 
 func effectiveModelCapabilities(provider Provider, catalog providerCatalog, model string) (ModelCapabilities, bool) {
-	resolved := catalog.capabilities[model]
+	resolved := catalog.capabilities[provider.UpstreamModel(model)]
 	declared := provider.ModelCapabilities
 	conflict := declared.ContextTokens > 0 && resolved.ContextTokens > 0 && declared.ContextTokens != resolved.ContextTokens ||
 		declared.MaxOutputTokens > 0 && resolved.MaxOutputTokens > 0 && declared.MaxOutputTokens != resolved.MaxOutputTokens

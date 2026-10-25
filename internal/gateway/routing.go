@@ -191,7 +191,8 @@ func (h *handler) routingCandidates(model string, requireKnownScope bool, client
 		}
 		if h.config.EffectiveRouting().SharedModelStrategy != "" && len(body) > 0 && h.clients[name] != nil {
 			client := h.clients[name]
-			if _, _, _, err := adapter.PrepareRequestWithWarnings(clientProtocol, client.Protocol, body, model, client.OutputTokenDefault(model)); err != nil {
+			upstreamModel := h.providers[name].UpstreamModel(model)
+			if _, _, _, err := adapter.PrepareRequestWithWarnings(clientProtocol, client.Protocol, body, upstreamModel, client.OutputTokenDefault(upstreamModel)); err != nil {
 				continue
 			}
 		}
@@ -212,7 +213,8 @@ func (h *handler) routeErrorParameter(model, protocol string, body []byte) strin
 	}
 	for _, ref := range candidates {
 		if client := h.clients[ref]; client != nil {
-			if _, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.OutputTokenDefault(model)); err != nil {
+			upstreamModel := h.providers[ref].UpstreamModel(model)
+			if _, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, upstreamModel, client.OutputTokenDefault(upstreamModel)); err != nil {
 				if field := adapter.ValidationParameter(err); field != "" {
 					return field
 				}
@@ -230,7 +232,8 @@ func (h *handler) routeRequestCompatible(provider, model, protocol string, body 
 	if len(body) == 0 {
 		return true
 	}
-	_, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, model, client.OutputTokenDefault(model))
+	upstreamModel := h.providers[provider].UpstreamModel(model)
+	_, _, _, err := adapter.PrepareRequestWithWarnings(protocol, client.Protocol, body, upstreamModel, client.OutputTokenDefault(upstreamModel))
 	return err == nil
 }
 
@@ -258,9 +261,10 @@ func (h *handler) orderSharedModelProviders(model string, names []string) ([]str
 		currency := ""
 		for _, name := range ordered {
 			provider := h.providers[name]
-			price, ok := provider.Prices[model]
+			upstreamModel := provider.UpstreamModel(model)
+			price, ok := provider.Prices[upstreamModel]
 			if !ok {
-				price, ok = adapter.BuiltInPrice(provider.BaseURL, model, time.Now())
+				price, ok = adapter.BuiltInPrice(provider.BaseURL, upstreamModel, time.Now())
 			}
 			if !ok || price.Validate() != nil || price.InputCacheHit == nil || price.InputCacheMiss == nil || price.Output == nil {
 				return nil, errRoutingPriceUnavailable
