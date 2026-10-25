@@ -37,7 +37,11 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		h.reject(w, r, clientProtocol, http.StatusNotFound, "provider_not_found", "model")
 		return nil, "", nil, true
 	}
-	routeBody, err := replaceRequestModel(body, route.model)
+	upstreamModel := provider.UpstreamModel(route.model)
+	if upstreamModel != route.model {
+		options.ResponseModel = route.model
+	}
+	routeBody, err := replaceRequestModel(body, upstreamModel)
 	if err != nil {
 		h.reject(w, r, clientProtocol, http.StatusBadRequest, "invalid_request", "model")
 		return nil, "", nil, true
@@ -84,9 +88,9 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 	}
 	reservationID := ""
 	if budget != (ledger.BudgetPolicy{}) {
-		price, priced := provider.Prices[route.model]
+		price, priced := provider.Prices[upstreamModel]
 		if !priced {
-			price, priced = adapter.BuiltInPrice(provider.BaseURL, route.model, time.Now())
+			price, priced = adapter.BuiltInPrice(provider.BaseURL, upstreamModel, time.Now())
 		}
 		if !priced || price.Currency != budget.Currency {
 			h.reject(w, r, clientProtocol, http.StatusServiceUnavailable, "budget_pricing_unconfigured")
@@ -249,7 +253,7 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 				}
 			}
 		}
-		return providerClient.CallFromKeyCandidates(clientProtocol, r.Context(), routeBody, route.model, sink, options, keys, callbacks)
+		return providerClient.CallFromKeyCandidates(clientProtocol, r.Context(), routeBody, upstreamModel, sink, options, keys, callbacks)
 	}
 	response, id, callErr := call()
 	keepProvider = callErr == nil

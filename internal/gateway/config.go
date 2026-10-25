@@ -28,6 +28,7 @@ type Provider struct {
 	UpstreamKeychains       []KeychainReference            `json:"upstream_keychains,omitempty"`
 	APIVersion              string                         `json:"anthropic_version,omitempty"`
 	SupportedModels         []string                       `json:"supported_models,omitempty"`
+	ModelAliases            map[string]string              `json:"model_aliases,omitempty"`
 	UpstreamID              string                         `json:"upstream_id,omitempty"`
 	ModelCapabilities       ModelCapabilities              `json:"model_capabilities,omitempty"`
 	ErrorCodeMappings       []adapter.ProviderErrorMapping `json:"error_code_mappings,omitempty"`
@@ -280,6 +281,9 @@ func (c Config) Validate() error {
 					return errors.New("providers." + name + ".supported_models must not contain duplicate model IDs")
 				}
 				seenModels[model] = struct{}{}
+			}
+			if err := provider.validateModelAliases(); err != nil {
+				return errors.New("providers." + name + ".model_aliases: " + err.Error())
 			}
 			if protocol == "openai" && provider.APIVersion != "" {
 				return errors.New("anthropic_version is valid only for the anthropic endpoint")

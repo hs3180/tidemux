@@ -57,6 +57,25 @@ explicit configured defaults and caller-supplied output budgets retain priority.
 
 ### Route selection
 
+Named providers may declare one-hop `model_aliases` from client names to upstream
+model IDs. Aliases are provider-local and obey the ordinary client model
+allowlist; mapping a permitted alias does not also permit its target as a client
+name. With an unrestricted scope, discovery includes the configured aliases.
+Names use ASCII letters, numbers or `._/-:@`, at most 128 bytes; aliases are
+unqualified and neither name may be `auto`. At most 128 entries are accepted.
+Self-maps, chains and cycles are rejected. Mapping is part of each admitted
+immutable view and hot reloads.
+
+Routing affinity and client-visible model names retain the alias. After route
+selection, requests, capability/default-output lookup, prompt-cache identity,
+prices, budget pricing and terminal usage/audit model identities use the upstream
+ID. Prices keyed only by the old alias are not a fallback for the mapped target.
+Both normal and streaming responses expose the client alias. Model health and
+recovery claims use the upstream ID, so aliases of one target share cooldowns;
+changing the target does not carry over the old model's cooldown. Provider/key
+waits remain shared. Epoch fences still prevent an old completion from updating
+the new view; already admitted requests retain their original target and prices.
+
 Explicit routes, ordered auto chains and shared random/price selection use the
 same eligibility state and recheck it after the concurrency queue. Healthy
 bindings survive when their provider/model stays eligible. Random/auto affinity
@@ -174,7 +193,8 @@ Thresholds are integer seconds in `0..86400`. Routing, provider and model overri
 hot reload; admitted requests retain their configuration snapshot.
 For stable shared-random/auto bindings, the next request compares the remaining
 maximum independent cooldown against an admitted threshold: model override,
-provider override, routing override, then 60 seconds. Known waits strictly above
+provider override, routing override, then 60 seconds. Model overrides use client
+model names, including aliases. Known waits strictly above
 the threshold can select a healthy compatible alternative; short/equal waits and
 unknown probe completion retain affinity. A known lower bound can justify a
 switch despite another unknown gate. No eligible alternative retains the binding;

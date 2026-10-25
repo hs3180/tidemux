@@ -130,7 +130,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	for name := range clients {
 		h.warnModelCapabilities(name)
 	}
-	h.availability.activate(h.routingEpoch, h.providerGenerations, h.supportScopeAllows)
+	h.availability.activate(h.routingEpoch, h.providerGenerations, h.upstreamScopeAllows)
 	return h, func() error {
 		stopReconciliation()
 		h.closeProviderSessions()

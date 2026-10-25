@@ -560,7 +560,15 @@ func (h *handler) availabilityReport() AvailabilityReport {
 			if target.provider == ref && target.generation == generation && target.model != "" {
 				status := availabilityStatus(entry, now)
 				status.Scope = "model"
-				provider.Models = append(provider.Models, ModelAvailability{Model: target.model, AvailabilityStatus: status, Alternatives: []string{}})
+				p := h.providers[ref]
+				if p.UpstreamModel(target.model) == target.model && h.supportScopeAllows(ref, target.model) {
+					provider.Models = append(provider.Models, ModelAvailability{Model: target.model, AvailabilityStatus: status, Alternatives: []string{}})
+				}
+				for alias, upstream := range p.ModelAliases {
+					if upstream == target.model && h.supportScopeAllows(ref, alias) {
+						provider.Models = append(provider.Models, ModelAvailability{Model: alias, AvailabilityStatus: status, Alternatives: []string{}})
+					}
+				}
 			}
 		}
 		sort.Slice(provider.Models, func(i, j int) bool { return provider.Models[i].Model < provider.Models[j].Model })
@@ -598,5 +606,5 @@ func availabilityStatusEligible(status AvailabilityStatus) bool {
 }
 
 func (h *handler) modelRouteAvailable(provider, model string) bool {
-	return h.providerRouteAvailable(provider) && h.availability.available(h.routingEpoch, provider, model, h.providerGenerations[provider])
+	return h.providerRouteAvailable(provider) && h.availability.available(h.routingEpoch, provider, h.providers[provider].UpstreamModel(model), h.providerGenerations[provider])
 }

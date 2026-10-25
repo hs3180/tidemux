@@ -18,7 +18,7 @@ type CallOptions struct {
 	AnthropicBeta        string
 	SessionID            string
 	RequestScopedSession bool   // Gateway-generated admission ID; never reuse a prompt prefix.
-	ResponseModel        string // Optional downstream model name override for model:auto.
+	ResponseModel        string // Optional downstream model name for auto routes or provider aliases.
 	// Internal timing carried across an undispatched route re-selection.
 	RequestStartedAt time.Time
 	PriorQueueMS     int64
