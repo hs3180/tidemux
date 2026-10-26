@@ -133,6 +133,12 @@ func (h *handler) callRouteCandidate(w http.ResponseWriter, r *http.Request, cli
 		}
 		observations := make([]rateLimitObservation, len(candidates))
 		callbacks := adapter.KeyCandidateCallbacks{
+			Dispatch: func(id string) {
+				if tracked, ok := w.(*trackedResponseWriter); ok && tracked.content != nil {
+					tracked.content.metadata.RequestID = id
+					tracked.startContent()
+				}
+			},
 			KeyLabel: func(index int) string {
 				if pool == nil || index < 0 || index >= len(candidates) {
 					return ""

@@ -95,6 +95,8 @@ func (e *CallError) Error() string { return e.Code }
 // outcome. A failed upstream attempt is returned to the downstream client;
 // this adapter does not replay it with another key.
 type KeyCandidateCallbacks struct {
+	// Dispatch observes the final request ID after all pre-dispatch yields.
+	Dispatch         func(id string)
 	KeyLabel         func(index int) string
 	YieldUnavailable bool                                    // No audit/ID when yielding an undispatched route to its owner.
 	Attempt          func(index int) func(HTTPAttemptResult) // one actual HTTP initiation/result
@@ -409,6 +411,9 @@ func (c *Client) callWithKeyCandidates(clientProtocol string, ctx context.Contex
 		a.BackendID = diagnostics.KeyLabel(c.BackendID)
 		if callbacks.KeyLabel != nil {
 			a.KeyLabel = diagnostics.KeyLabel(callbacks.KeyLabel(candidateIndex))
+		}
+		if callbacks.Dispatch != nil {
+			callbacks.Dispatch(id)
 		}
 		data, usage, err = c.doAttempt(requestCtx, clientProtocol, providerBody, model, sink, options, limits, id, key, &observed, &delivered, func() func(HTTPAttemptResult) {
 			if callbacks.Attempt == nil {

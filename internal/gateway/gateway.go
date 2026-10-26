@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/contentlog"
 	"github.com/hs3180/tidemux/internal/diagnostics"
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
@@ -51,6 +52,7 @@ type handler struct {
 type handlerRuntime struct {
 	availability           *availabilityState
 	usageLog               *observability.UsageLog
+	contentOutput          *contentlog.Log
 	providerSessionMu      sync.Mutex
 	providerSessions       map[string]*limiter.SessionLimiter
 	budgetMu               sync.RWMutex
@@ -371,8 +373,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-TideMux-Version", serviceVersion)
 	r = withRequestLogDetails(r, "", "")
 	tracked := &trackedResponseWriter{ResponseWriter: w}
+	defer func() { tracked.finishContent(r.Context()) }()
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			tracked.contentSuccess = false
 			if recovered == http.ErrAbortHandler {
 				panic(recovered)
 			}
@@ -403,6 +407,11 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	}
 	if !valid {
 		h.reject(w, r, protocol, 401, "invalid_api_key")
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/tidemux/content-output-status" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"enabled": h.config.ContentOutput.Enabled, "counters": h.contentOutput.Status()})
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/tidemux/availability-status" {
@@ -515,6 +524,9 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.config.Limits.Effective().RequestBytes))
+	if h.config.ContentOutput.Enabled {
+		w.content = &requestContent{log: h.contentOutput, input: data, metadata: contentlog.Metadata{Protocol: protocol}}
+	}
 	if err != nil {
 		var sizeErr *http.MaxBytesError
 		if errors.Is(context.Cause(callCtx), adapter.ErrServerShuttingDown) {
@@ -552,6 +564,9 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		return
 	}
 	persistentSession := strings.TrimSpace(options.SessionID) != ""
+	if w.content != nil {
+		w.content.metadata.SessionID = h.usageLog.SessionID(protocol, options.SessionID, false)
+	}
 	sessionKey := h.sharedSessionKey(qualifiedModel, protocol, options.SessionID)
 	if qualifiedModel == "auto" {
 		sessionKey = h.callerSessionKey("auto", protocol, options.SessionID)
@@ -681,6 +696,11 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 			}
 			r = withRequestLogDetails(r, route.provider, route.model)
 			r = withRoutingChoice(r, route)
+			if w.content != nil {
+				w.content.metadata.Provider = route.provider
+				w.content.metadata.Model = h.providers[route.provider].UpstreamModel(route.model)
+				w.content.metadata.ProviderProtocol = h.providers[route.provider].Protocol
+			}
 			options.RoutingDecision = route.decision
 			response, id, callErr, handled = h.callRouteWithRecovery(w, r, protocol, route, body, options, sink, &delivered)
 			var preDispatchErr *adapter.CallError
@@ -711,6 +731,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 		if callErr == nil {
 			if send(id, terminal) == nil {
 				w.streamComplete = true
+				w.contentSuccess = true
 			}
 			return
 		}
@@ -763,6 +784,7 @@ func (h *handler) serveHTTP(w *trackedResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return
 	}
+	w.contentSuccess = true
 	admission.touchOutput()
 	retainSession = persistentSession && !mode.Stream
 }

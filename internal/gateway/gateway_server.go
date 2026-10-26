@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/contentlog"
 	"github.com/hs3180/tidemux/internal/ledger"
 	"github.com/hs3180/tidemux/internal/limiter"
 	"github.com/hs3180/tidemux/internal/observability"
@@ -98,6 +99,11 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	if err != nil {
 		return nil, nil, startupFailure("ledger", errors.New("cannot open ledger"))
 	}
+	contentOutput, err := contentlog.Open(c.ContentOutput, logger)
+	if err != nil {
+		l.Close()
+		return nil, nil, startupFailure("config", err)
+	}
 	stopReconciliation := startStatementSync(c, l, logger)
 	usageLog := observability.NewUsageLog(filepath.Join(filepath.Dir(c.LedgerPath), "logs"), c.AccessToken)
 	gate, _ := limiter.NewConcurrencyGate(c.MaxInFlight)
@@ -109,7 +115,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 	models := make(map[string][]string, len(providers))
 	modelsKnown := make(map[string]bool, len(providers))
 	catalogs := make(map[string]providerCatalog, len(providers))
-	runtime := &handlerRuntime{availability: newAvailabilityState(logger), usageLog: usageLog, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
+	runtime := &handlerRuntime{availability: newAvailabilityState(logger), usageLog: usageLog, contentOutput: contentOutput, budgetBlocked: map[string]struct{}{}, gate: gate, cache: cache}
 	providerGenerations := make(map[string]uint64, len(providers))
 	for name, provider := range providers {
 		keyPools[name] = newProviderKeyPool(provider.ResolvedAPIKeys())
@@ -135,6 +141,7 @@ func NewHandlerWithLogger(c Config, httpClient *http.Client, logger *slog.Logger
 		stopReconciliation()
 		h.closeProviderSessions()
 		cache.Close()
+		contentOutput.Close()
 		return l.Close()
 	}, nil
 }

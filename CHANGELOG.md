@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add opt-in, private, bounded full-content JSONL output for external collectors.
+  Preserve client request/response bytes with chunk ordering, hashes and explicit
+  completeness, independent of runtime summaries and SQLite. Rotate local files
+  without deleting history; document external Elasticsearch, OSS and HTTP paths.
+  No collector runtime, remote-storage client or SDK is added.
+
 ## 0.3.5 — 2026-10-16
 
 - Keep logical-session limits only at provider scope. Remove the gateway-wide
