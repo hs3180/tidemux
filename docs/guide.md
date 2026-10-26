@@ -483,6 +483,132 @@ references. These examples are deployment guidance; TideMux CI does not certify
 specific collector/Elasticsearch version combinations. TideMux does not ship
 logs itself.
 
+### Optional full-content collection
+
+For full request/reply search in Elasticsearch or external archiving, add an
+explicit `content_output` block to your configuration, then restart `serve`:
+
+```json
+"content_output": {
+  "enabled": true,
+  "directory": "/absolute/private/tidemux-content",
+  "file_bytes": 8388608,
+  "directory_bytes": 268435456,
+  "queue_events": 256
+}
+```
+
+The parent directory must exist; TideMux creates the dedicated child as 0700,
+or requires an existing private directory. Omit this block to keep the default
+off, including upgrades. Once configured, `enabled` reloads for new requests;
+admitted requests finish under their original setting. Other settings require a
+restart. Body output stays separate from stderr, ccusage and SQLite. It may
+contain sensitive business data; read [privacy](../PRIVACY.md) before enabling.
+Check the authenticated `GET /tidemux/content-output-status` for `enabled` and
+`written_events`, `dropped_events`, `write_failures`, `queued_events` in `counters`.
+`content_output_gap` warns of loss. On overflow or disk failure, inference
+continues and content may be incomplete. Remove only closed files whose external
+delivery has been confirmed to free directory capacity. There is no automatic
+retention deletion, upload retry or historical backfill.
+
+The [content contract](design.md#optional-full-content-output) defines byte-exact
+client views, metadata, resource limits, file handoff and reconstruction checks.
+Use `data` for lossless reconstruction and `text` for chunk-level search. Query
+the final `requestId` to collect both input/output chunks, deduplicate event IDs,
+sort by `seq`, decode base64, and verify offsets/counts/SHA-256 against
+`content_end`. Do not call a missing/false end event, broken sequence or failed
+hash a complete response. Visible reasoning/tools and inline media are included;
+URLs do not imply downloaded media. An upstream view is not recorded.
+
+Use a **separate, explicitly configured collector and destination** for bodies.
+Do not add this path to an existing summary pipeline accidentally. For Filebeat,
+adapt the preceding example: use the following input and replace the processor
+field paths with `tidemux_content.timestamp` and `tidemux_content.event_id`, then
+choose a separate index such as `tidemux-content-%{+yyyy.MM.dd}`:
+
+```yaml
+filebeat.inputs:
+  - type: filestream
+    id: tidemux-content
+    paths: ["/absolute/private/tidemux-content/content-*.active",
+            "/absolute/private/tidemux-content/content-*.jsonl"]
+    file_identity.native: ~
+    message_max_bytes: 131072
+    parsers:
+      - ndjson: {target: tidemux_content, add_error_key: true}
+```
+
+Keep its registry across restarts and keep rename tracking enabled. Give the
+collector at least a 128 KiB line budget. Preserve/report parse failures,
+including an interrupted file's partial final line. Before ingestion, install an
+index template with these mappings under `tidemux_content`; map the other
+metadata fields explicitly as in the summary guide:
+
+```json
+{
+  "text": {"type": "text"},
+  "data": {"type": "binary"},
+  "requestId": {"type": "keyword"},
+  "event_id": {"type": "keyword"},
+  "seq": {"type": "long"},
+  "offset": {"type": "long"},
+  "complete": {"type": "boolean"}
+}
+```
+
+Keep base64 bytes in `_source`; avoid dynamic `text.keyword` indexing and never
+expand arbitrary message/tool JSON into mapping fields. Use `match` on
+`tidemux_content.text` for full-text chunk search and `term` on
+`tidemux_content.requestId` for reconstruction. Select an analyzer appropriate to
+your language. A phrase crossing a chunk boundary requires external
+reconstruction. Elasticsearch's [text mapping](https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/text)
+and the [filestream reference](https://www.elastic.co/docs/reference/beats/filebeat/filebeat-input-filestream)
+cover collector-specific settings; validate your own versions and destination.
+
+For OSS file backup, an external job can upload **closed** `.jsonl` files with
+the official [ossutil cp](https://help.aliyun.com/zh/oss/developer-reference/cp-upload-file),
+using its own private credential configuration:
+
+```sh
+for file in /absolute/private/tidemux-content/content-*.jsonl; do
+  [ -f "$file" ] || continue
+  ossutil cp "$file" "oss://YOUR-BUCKET/YOUR-PREFIX/$(basename "$file")" || exit 1
+done
+```
+
+Track confirmed objects and verify remote checksums/read-back externally before
+deleting local closed files. Preserve filenames and avoid remote deletion on
+local rotation. This example deliberately performs no local cleanup.
+
+For real-time forwarding to your own HTTP receiver, an independent Vector
+configuration can use a persistent data directory and bounded disk buffer:
+
+```toml
+data_dir = "/absolute/private/vector-state"
+[sources.content]
+type = "file"
+include = ["/absolute/private/tidemux-content/content-*.active", "/absolute/private/tidemux-content/content-*.jsonl"]
+read_from = "beginning"
+max_line_bytes = 131072
+[sinks.archive]
+type = "http"
+inputs = ["content"]
+uri = "https://archive.example/ingest"
+encoding.codec = "json"
+buffer.type = "disk"
+buffer.max_size = 268435488
+buffer.when_full = "block"
+```
+
+This forwards each original JSONL line in the Vector event's `message`; the
+receiver decodes that outer envelope before consuming the content contract.
+Configure TLS, authentication and acceptance/read-back checks for your receiver
+in the collector, and follow the [file source](https://vector.dev/docs/reference/configuration/sources/file/)
+and [HTTP sink](https://vector.dev/docs/reference/configuration/sinks/http/) references.
+Persistent cursors and bounded buffers do not prove exactly-once or remote
+durability. OSS/S3 authentication compatibility and remote storage services are
+operator concerns; TideMux holds no storage credentials or ES/OSS SDK.
+
 ## Compatibility
 
 Matching client/upstream protocols pass through natively. Conversion supports

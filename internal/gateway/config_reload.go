@@ -140,6 +140,7 @@ func WatchConfig(h http.Handler, path string, original Config, lookup SecretLook
 // Process-wide settings keep their existing startup semantics. Provider,
 // routing and auto-chain data belong to each request's immutable view.
 func runtimeSettings(c Config) Config {
+	c.ContentOutput.Enabled = false
 	c.ForwardErrorMessages = nil
 	c.HealthDiagnostics = nil
 	c.Providers = nil

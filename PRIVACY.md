@@ -66,10 +66,34 @@ credentials are excluded; full request/response content is not recorded, while
 provider error reasons follow the policy above. Groups and token counts can reveal
 activity patterns. Files are private; manage retention under your local log policy.
 
+**Full-content output is separate and defaults to off**, including upgrades.
+When explicitly enabled through `content_output`, authenticated generation
+requests and downstream JSON/SSE response bytes are written in bounded chunks to
+an independently configured private directory. This includes original prompts,
+history, system messages, tool definitions/calls/results, visible reasoning and
+inline media; a media URL is retained as a reference without downloading it.
+Authentication headers, provider transport credentials and arbitrary HTTP
+headers are not captured. The correlation envelope uses a pseudonymous session
+ID. The original body itself is byte-exact: identifiers, credentials or other
+secrets deliberately embedded in a message/metadata/tool payload are **not
+redacted**. `data` and searchable `text` both contain body information. Restrict
+directory/collector/index access accordingly. Summary logs and SQLite do not
+receive these bodies.
+
+TideMux does not ship this content or inherit a destination from summary log
+collection. An independently configured collector can transmit it to destinations
+you select and owns its credentials, retention and confirmed-delivery cleanup.
+Disabling stops new captures after reload, lets admitted captures finish, and
+does not erase existing files or stop that collector. Directory capacity is
+bounded without automatic deletion; overflow can lose content. Read the
+[operator setup](docs/guide.md#optional-full-content-collection) and
+[completeness contract](docs/design.md#optional-full-content-output). No previous
+content is recovered or backfilled when enabling the feature.
+
 Configuration and the ledger remain at the paths you choose. Diagnostic export
 and upload features are not implemented. If you manually share logs or ledger
 extracts, review them first; metadata may reveal usage patterns.
 
 Material changes will be recorded in [CHANGELOG](CHANGELOG.md).
 
-Updated: 2026-10-16.
+Updated: 2026-10-26.

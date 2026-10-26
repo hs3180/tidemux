@@ -332,6 +332,82 @@ other events add no assistant usage. `event_id` deduplicates copies/replay;
 queries omit credentials, full bodies and raw session IDs. Provider error reasons
 follow the bounded/redacted message policy below.
 
+### Optional full-content output
+
+`content_output` is an independent local JSONL output, absent by default. It
+observes authenticated generation requests after body reading, including read
+errors/oversize prefixes, and never observes authentication headers or management
+endpoints. The `client` view preserves the original request bytes before model
+rewriting, extension removal or protocol conversion, and the response bytes
+accepted by the downstream writer (JSON or SSE, including errors). It does not
+capture a second upstream view, fetch referenced media, infer hidden reasoning,
+or prove delivery to a remote client. Inline media, tool definitions/results and
+visible reasoning are preserved as part of those bytes. A media URL remains a
+reference. Rejected requests can have unknown provider/model/session metadata;
+requests without an allocated request ID cannot produce correlated content.
+
+Content schema 1 is separate from runtime schema 2. Every event includes
+`event_id`, `requestId`, optional pseudonymous `sessionId`, UTC `timestamp`,
+`protocol`, `provider_protocol`, actual routed `provider_ref`/`model`, `view:
+"client"` and zero-based `seq` across both directions. A `content_chunk` has
+`direction: "input"|"output"`, a byte `offset` within that direction (absent means
+zero), base64 `data` and a `text` search convenience. Decode `data` to recover the
+exact bytes; `text` can replace invalid/split UTF-8 and is not authoritative.
+Body JSON is never expanded into indexed fields. Chunks contain at most 8 KiB of
+raw bytes, and serialized events, including their newline and both encodings,
+are limited to 64 KiB. Oversize metadata causes an observable drop, not silent
+body truncation. Input starts before upstream dispatch, once its final request ID
+is known; early failures start when their rejection ID is known. Output is
+incremental and never accumulates an entire response for this feature.
+
+`content_end` supplies `outcome: "success"|"error"|"canceled"`, `complete`,
+`input_bytes`, `output_bytes` (absent counts mean zero), and SHA-256 for all
+observed input/output bytes. Only a successful request without known output loss
+can have `complete: true`; read failures, model/stream errors, cancellation,
+panic and downstream write/flush failures cannot. Consumers deduplicate by
+`event_id`, order by `seq`, check contiguous sequence/offsets, then compare byte
+counts and hashes with the end event. Missing chunks/end events, bad JSON,
+hash mismatches or a false flag mean incomplete, regardless of filename. A true
+flag alone is not a durability receipt: disk/collector/process failure can still
+lose the terminal event or unsynced bytes. Event IDs are `requestId:seq` and
+remain unchanged across file rotation/replay. Input/output can span files and a
+file can contain several requests. Chunk search does not support phrases across
+chunk boundaries; reconstruct externally when whole-request analysis is needed.
+
+One worker owns disk I/O. Producers serialize and attempt a nonblocking enqueue;
+default capacity is 256 events (at most 16 MiB of serialized queued data), with
+`queue_events` in 1..4096. Per-request hashing/chunking uses bounded working
+memory and the gateway's existing request buffer. A full queue or disk write
+failure loses events, marks that capture incomplete when a terminal event can
+still be written, and increments process-local counters. There is no model retry,
+response error, unbounded backlog, full-body SQLite row or network shipper.
+Diagnostics contain only aggregate counters; warnings are rate-limited to one
+per minute. The authenticated status endpoint exposes enabled state and queued,
+written, dropped and failed-event counts; written means local write, not fsync
+or remote acceptance. A shutdown drains the finite queue and closes the writer.
+
+The dedicated directory must be private (0700), nonsymlinked and owned by one
+writer via a private lock file; content files are 0600. Unique `content-*.active`
+files rotate at event boundaries before `file_bytes` (default 8 MiB, minimum
+64 KiB), every minute, and on orderly shutdown. Successful fsync/close renames
+them to `.jsonl`; a close failure leaves `.active`. Restart hands leftover active
+files off as `.interrupted.jsonl`, preserving even a partial final line. Readers
+must reject/retain parse failures and missing terminal records. The default
+`directory_bytes` budget is 256 MiB across active and closed content files.
+The dedicated directory also has a 4096-entry ceiling, including its lock file,
+so repeated short/interrupted files cannot grow scan memory or file counts
+without bound; reaching either limit requires external cleanup.
+Reaching it skips new events until external cleanup releases space; TideMux
+never deletes output or treats a collector cursor as confirmed delivery. The
+collector separately owns persistent cursors, retry/buffering, destination
+credentials, retention, upload/read-back and deletion after confirmation.
+
+Directory/size/queue changes require restart. With a directory already configured,
+`enabled` can reload: new requests use the new view while admitted captures
+finish with their original setting. A configured disabled directory holds its
+writer lock but writes no bodies; an omitted block creates no output resource.
+Disabling does not remove existing files or stop an external collector.
+
 ### Failure metadata and messages
 
 Failed calls carry the same normalized `failure` metadata in the audit JSON,

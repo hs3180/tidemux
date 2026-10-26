@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hs3180/tidemux/internal/adapter"
+	"github.com/hs3180/tidemux/internal/contentlog"
 	"github.com/hs3180/tidemux/internal/ledger"
 )
 
@@ -122,6 +123,7 @@ type SecretLookup interface {
 }
 
 type Config struct {
+	ContentOutput                   contentlog.Config        `json:"content_output,omitempty,omitzero"`
 	HealthDiagnostics               *bool                    `json:"health_diagnostics,omitempty"`
 	Reconciliation                  ReconciliationConfig     `json:"reconciliation,omitempty"`
 	ReportSchedule                  ReportSchedule           `json:"report_schedule,omitempty"`
@@ -185,6 +187,9 @@ func decodeConfig(data []byte) (Config, error) {
 	return c, nil
 }
 func (c Config) Validate() error {
+	if err := c.ContentOutput.Validate(); err != nil {
+		return err
+	}
 	if len(c.Providers) > 0 && c.ForwardErrorMessages != nil {
 		return errors.New("forward_error_messages belongs inside each named provider")
 	}
